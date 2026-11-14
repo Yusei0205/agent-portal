@@ -112,7 +112,7 @@ describe('what a guide run receives', () => {
 
   it('only the chosen roles, matched without regard to case, with the hosts and the roles that no longer exist', async () => {
     await setGuideRun('wf-1', { roles: ['clerk', 'Ghost'], hosts: ['app.example.com'] });
-    assert.deepEqual(await guideRunPayload(projectId, 'wf-1'), { accounts: [{ role: 'Clerk', username: 'c@t.example', password: 'pc' }], hosts: ['app.example.com'], missing: ['Ghost'] });
+    assert.deepEqual(await guideRunPayload(projectId, 'wf-1'), { accounts: [{ role: 'Clerk', username: 'c@t.example', password: 'pc' }], hosts: ['app.example.com'], missing: ['Ghost'], manualSignIn: false });
     assert.equal(await guideRunPayload(projectId, 'wf-without-guide'), null);
   });
 });

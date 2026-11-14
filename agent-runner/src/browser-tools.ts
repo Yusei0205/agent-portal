@@ -414,7 +414,7 @@ export async function waitForPerson(browser: AgentCoreBrowser, args: { message?:
         const p = browser.currentPage();
         if (!p) throw new Error('page closed');
         seen = await Promise.race([
-          p.evaluate(() => ({ pw: [...document.querySelectorAll('input[type=password]')].some((e) => (e as HTMLElement).offsetParent !== null), url: location.href })),
+          p.evaluate("({ pw: [...document.querySelectorAll('input[type=password]')].some((e) => e.offsetParent !== null), url: location.href })") as Promise<{ pw: boolean; url: string }>,
           sleep(waitTuning.answerMs).then(() => { throw new Error('no answer'); }),
         ]);
       } catch {
