@@ -1567,7 +1567,8 @@
       ],
       "tests": [
         "test/runner-files.test.ts",
-        "test/input-file-downloads.test.ts"
+        "test/input-file-downloads.test.ts",
+        "test/zip-attachments.test.ts"
       ],
       "smokeIds": []
     },

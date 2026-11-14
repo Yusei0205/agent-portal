@@ -58,6 +58,7 @@ const ALLOWED: Record<string, { kind: 'image' | 'document' | 'diagram'; mime: st
   '.docx':   { kind: 'document', mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' },
   '.xlsx':   { kind: 'document', mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
   '.pptx':   { kind: 'document', mime: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' },
+  '.zip':    { kind: 'document', mime: 'application/zip' },
   '.md':     { kind: 'document', mime: 'text/markdown' },
   '.txt':    { kind: 'document', mime: 'text/plain' },
   '.csv':    { kind: 'document', mime: 'text/csv' },
@@ -104,6 +105,11 @@ function checkMagicBytes(buf: Buffer, ext: string): { ok: boolean; reason?: stri
       if (buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04)
         return { ok: true };
       return { ok: false, reason: `File does not appear to be a valid ${ext.slice(1).toUpperCase()} document` };
+
+    case '.zip':
+      // A zip starts with a local file header ('PK\x03\x04'), or is empty ('PK\x05\x06').
+      if (buf[0] === 0x50 && buf[1] === 0x4b && (buf[2] === 0x03 || buf[2] === 0x05)) return { ok: true };
+      return { ok: false, reason: 'File does not appear to be a valid zip archive' };
 
     case '.md':
     case '.txt':

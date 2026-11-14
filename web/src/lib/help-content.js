@@ -502,7 +502,8 @@ export const HELP_TOPICS = [
         heading: 'Attachments',
         items: [
           'Attach up to 5 files (10 MB each) for extra context: drag and drop, browse, or paste an image.',
-          'Allowed: PNG, JPG, WEBP, GIF, PDF, DOCX, XLSX, PPTX, MD, TXT, CSV, `.drawio`, `.mmd`, `.svg`.',
+          'Allowed: PNG, JPG, WEBP, GIF, PDF, DOCX, XLSX, PPTX, ZIP, MD, TXT, CSV, `.drawio`, `.mmd`, `.svg`.',
+          'A **zip** is unpacked for the agent, including zips inside it (for example a folder of scan reports): every file is kept, and the agent gets a list of them. In a chat message a zip can be up to 50 MB.',
           'Click **Refresh** (↺) on an item to regenerate it; its earlier attachments are filled in for you.',
         ],
       },

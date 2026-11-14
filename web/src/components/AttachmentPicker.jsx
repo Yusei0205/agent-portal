@@ -31,13 +31,13 @@ import { Icon } from './Icon.jsx';
 
 const ALLOWED_EXTS = [
   '.png', '.jpg', '.jpeg', '.webp', '.gif',
-  '.pdf', '.docx', '.xlsx', '.pptx',
+  '.pdf', '.docx', '.xlsx', '.pptx', '.zip',
   '.md', '.txt', '.csv',
   '.drawio', '.mmd', '.svg',
 ];
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
-const DOC_EXTS   = new Set(['.pdf', '.docx', '.xlsx', '.pptx', '.md', '.txt', '.csv', '.drawio', '.mmd', '.svg']);
+const DOC_EXTS   = new Set(['.pdf', '.docx', '.xlsx', '.pptx', '.zip', '.md', '.txt', '.csv', '.drawio', '.mmd', '.svg']);
 const MAX_FILES      = 5;
 const IMAGE_MAX_MB   = 10;
 const DOC_MAX_MB     = 20;
@@ -63,7 +63,7 @@ function fmtSize(bytes) {
 
 function typeLabel(name) {
   const map = {
-    '.pdf': 'PDF', '.docx': 'Word', '.xlsx': 'Excel', '.pptx': 'PPT',
+    '.pdf': 'PDF', '.zip': 'Zip', '.docx': 'Word', '.xlsx': 'Excel', '.pptx': 'PPT',
     '.md': 'Markdown', '.txt': 'Text', '.csv': 'CSV', '.svg': 'SVG',
     '.drawio': 'Diagram', '.mmd': 'Mermaid',
   };
