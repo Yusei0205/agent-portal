@@ -16,7 +16,9 @@ function fakeBrowser(steps: Array<Seen | 'refused'>, events: string[]) {
     url: () => 'https://app.example.com/login',
     title: async () => 'Home',
     isClosed: () => false,
-    evaluate: async () => {
+    evaluate: async (expression: string) => {
+      // The check after a hand-back asks only "is a password field showing?"; the polling asks for the field and the address.
+      if (!String(expression).includes('location.href')) { const last = steps[Math.min(i, steps.length) - 1]; return typeof last === 'object' ? last.pw : false; }
       const step = steps[Math.min(i++, steps.length - 1)];
       if (step === 'refused') throw new Error('automation stream is disabled');
       return step;
@@ -56,6 +58,16 @@ describe('wait_for_sign_in', () => {
     assert.match(String(r.content[0].type === 'text' && r.content[0].text), /finished signing in/);
     assert.deepEqual(events, ['waiting:Sign in as an administrator', 'done:Signed in.']);
     assert.ok(reattaches() >= 1, 'it reconnects to the same browser session after the pause');
+  });
+
+  it('says so when control comes back but the sign-in page is still showing', async () => {
+    Object.assign(waitTuning, { pollMs: 5, answerMs: 50, reattachMs: 0, settleMs: 0 });
+    const events: string[] = [];
+    const { browser } = fakeBrowser([LOGIN, 'refused', LOGIN], events);
+    const r = await tool(browser).handler({});
+    assert.notEqual(r.isError, true);
+    assert.match(String(r.content[0].type === 'text' && r.content[0].text), /sign-in page is still showing/);
+    assert.equal(events.at(-1), 'done:Control handed back.');
   });
 
   it('notices a person who signs in without pausing the agent', async () => {

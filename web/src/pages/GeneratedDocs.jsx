@@ -235,7 +235,6 @@ function NewDocModal({ projectId, onClose, onCreated }) {
           </div>
         </form>
       </div>
-      {watching && <WatchBrowserModal doc={watching} projectId={projectId} onClose={() => setWatching(null)} />}
       {manage && (
         <GuideAccountsModal
           projectId={projectId}
@@ -653,6 +652,7 @@ export function GeneratedDocs({ projectId }) {
         />
       )}
 
+      {watching && <WatchBrowserModal doc={watching} projectId={projectId} onClose={() => setWatching(null)} />}
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />
     </div>

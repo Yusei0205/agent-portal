@@ -23,13 +23,17 @@ test('a user guide can capture screenshots: the form takes the address and test 
         resolveDir: process.cwd(), loader: 'jsx',
       },
       bundle: true, write: false, outfile: 'guide-fixture.js', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' },
+      // The AgentCore Live View component (reached through the Watch browser panel) imports the NICE DCV client by bare name, as scripts/build.mjs resolves it.
+      alias: { dcv: path.join(process.cwd(), 'web/vendor/agentcore-live-view/nice-dcv-web-client-sdk/dcvjs-esm/dcv.js'), 'dcv-ui': path.join(process.cwd(), 'web/vendor/agentcore-live-view/nice-dcv-web-client-sdk/dcv-ui/dcv-ui.js') },
+      loader: { '.svg': 'dataurl', '.woff2': 'dataurl', '.woff': 'dataurl' },
     });
     const context = await browser.newContext({ viewport: { width: 1280, height: 1100 } });
     const pair = cookie.split(';')[0]; const eq = pair.indexOf('=');
     await context.addCookies([{ name: pair.slice(0, eq), value: pair.slice(eq + 1), url: baseUrl }]);
     const page = await context.newPage();
     const errors: string[] = [];
-    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('pageerror', (error) => { errors.push(error.message); console.log('PAGEERROR', error.message); });
+    page.on('console', (m) => { if (m.type() === 'error') console.log('CONSOLE', m.text().slice(0, 200)); });
     await page.route('**/guide-fixture*', async (route) => {
       const url = route.request().url();
       if (url.endsWith('.js') || url.endsWith('.css')) {
@@ -72,12 +76,13 @@ test('a user guide can capture screenshots: the form takes the address and test 
 
     // The new accounts are offered; submit sends the options, with roles and no password.
     await page.getByLabel(/Clerk/).check();
+    await page.getByLabel('I will sign in myself in the live browser').check();
     const [request] = await Promise.all([
       page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith(`/api/projects/${id}/generated-docs`)),
       page.getByRole('button', { name: 'Create', exact: true }).click(),
     ]);
     const body = JSON.parse(request.postData() || '{}');
-    assert.deepEqual(body.guide, { screenshots: true, url: 'https://93.184.216.34/app', roles: ['Admin', 'Clerk'], hosts: [] });
+    assert.deepEqual(body.guide, { screenshots: true, url: 'https://93.184.216.34/app', roles: ['Admin', 'Clerk'], hosts: [], manualSignIn: true });
     assert.doesNotMatch(request.postData() || '', /S3cret|Clerk-Pw-1/);
     await page.getByText('Clerk guide').first().waitFor();
     await page.getByRole('link', { name: 'Download ZIP' }).count();

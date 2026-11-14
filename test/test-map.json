@@ -541,6 +541,8 @@
         "test/guide-accounts.test.ts",
         "test/user-guide-screenshots.test.ts",
         "test/web-guide-accounts.test.ts",
+        "test/web-guide-watch.test.ts",
+        "test/browser-live-view-waiting.test.ts",
         "test/create-clone-first.test.ts",
         "test/resume-retry.test.ts"
       ],

@@ -594,8 +594,8 @@ export function IdeBrowser({ workflowId, projectId, liveData, onPopOut, onPopIn,
         <div className="idb-control-banner" role="status" aria-live="polite" data-testid="browser-waiting">
           <Icon name="warning" size={13} />
           {controlEnabled
-            ? `The agent is waiting for you. ${waiting.message} When you have signed in, switch Remote control off to hand the browser back.`
-            : `The agent is waiting for you. ${waiting.message} Switch on Remote control, sign in in the browser below, then switch it off.`}
+            ? `The agent is waiting for you. ${waiting.message.replace(/[.\s]+$/, '')}. When you have signed in, switch Remote control off to hand the browser back.`
+            : `The agent is waiting for you. ${waiting.message.replace(/[.\s]+$/, '')}. Switch on Remote control, sign in in the browser below, then switch it off.`}
         </div>
       )}
 

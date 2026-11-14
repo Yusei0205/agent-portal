@@ -435,7 +435,9 @@ export async function waitForPerson(browser: AgentCoreBrowser, args: { message?:
     const page = await browser.getPage();
     await settlePage(page);
     await browser.publishFrame();
-    browser.onWaiting?.({ state: 'done', message: 'Signed in.' });
+    const stillLogin = await page.evaluate("[...document.querySelectorAll('input[type=password]')].some((e) => e.offsetParent !== null)").catch(() => false);
+    browser.onWaiting?.({ state: 'done', message: stillLogin ? 'Control handed back.' : 'Signed in.' });
+    if (stillLogin) return text(`Control is back, but the sign-in page is still showing at ${page.url()}, so the person may not have signed in. Look at the page; call wait_for_sign_in again if it still asks for a sign-in.`);
     return text(`The person finished signing in. Now at ${page.url()}\nTitle: ${await page.title()}. Check the page to see who is signed in.`);
   } catch (e) {
     browser.onWaiting?.({ state: 'done', message: 'Stopped waiting.' });
