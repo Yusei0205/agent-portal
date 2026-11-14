@@ -124,6 +124,28 @@ export async function startRun(workflowId: string, suppliedRunId?: string): Prom
   return runId;
 }
 
+/** The start of the next turn, replaceable in a test. */
+export const queuedDeps = { startRun };
+
+/**
+ * Messages are read when a turn starts, so one sent while the agent is mid-turn waits. When the turn ends normally, a waiting message
+ * from the person starts the next turn at once (without it the message sat unread until they sent another one). Returns whether a
+ * turn was started. Never throws.
+ */
+export async function continueWithQueuedMessages(workflowId: string): Promise<boolean> {
+  try {
+    const repo = getSessionsRepository();
+    const pending = await repo.listUnconsumedWorkflowEvents(workflowId);
+    if (!pending.some((e) => e.kind === 'human' || e.kind === 'command')) return false;
+    if (await repo.getActiveRun(workflowId)) return false;
+    await queuedDeps.startRun(workflowId);
+    return true;
+  } catch (e) {
+    console.error(`[driver] could not start the turn for the queued message of ${workflowId}:`, e);
+    return false;
+  }
+}
+
 /** Runs one agent turn and marks the run failed if it throws. */
 async function runTurn(runId: string, workflowId: string): Promise<void> {
   try {
