@@ -10,10 +10,13 @@ import { badRequest } from './util.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 
 export interface CreateAi {
-  engine: 'kiro' | 'claude-code' | 'demo';
+  engine: 'kiro' | 'claude-code' | 'codex' | 'demo';
   credential_id: string | null;
   model: string;
 }
+
+/** What the model picker sends for the person's own ChatGPT account (Codex has no stored sign-in record). */
+export const CODEX_ACCOUNT_ID = 'codex-account';
 
 const MODEL_RE = /^[A-Za-z0-9._:/@-]{1,120}$/;
 
@@ -33,9 +36,14 @@ export async function resolveCreateAi(userId: string, body: Record<string, unkno
   if (requestedModel && !MODEL_RE.test(requestedModel)) throw badRequest('model is not a valid model id');
 
   const credentialId = typeof body.credentialId === 'string' ? body.credentialId.trim() : '';
+  if (credentialId === CODEX_ACCOUNT_ID) {
+    const { hasCodexLogin } = await import('./codex-auth.ts');
+    if (!(await hasCodexLogin(userId))) throw badRequest('Sign in to Codex first under Agent setup › Sign-ins, or pick another sign-in.');
+    return { engine: 'codex', credential_id: null, model: requestedModel };
+  }
   if (credentialId) {
     const c = await repo.getByIdAndUser(credentialId, userId);
-    if (!c || (c.engine !== 'kiro' && c.engine !== 'claude-code')) throw badRequest('That sign-in was not found. Pick one of your Kiro or Claude sign-ins.');
+    if (!c || (c.engine !== 'kiro' && c.engine !== 'claude-code')) throw badRequest('That sign-in was not found. Pick one of your Kiro, Claude or Codex sign-ins.');
     return { engine: c.engine, credential_id: c.id, model: requestedModel };
   }
 
