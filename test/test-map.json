@@ -872,6 +872,7 @@
       ],
       "tests": [
         "test/scan.test.ts",
+        "test/scan-engine.test.ts",
         "test/scans-repo.test.ts"
       ],
       "smokeIds": [
