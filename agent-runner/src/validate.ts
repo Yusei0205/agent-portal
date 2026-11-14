@@ -120,6 +120,8 @@ export interface InvocationPayload {
   /** Test accounts for sign_in (a user guide run) and the hosts they may be typed on; read in shared/runner-browser-capture.ts. */
   browserAccounts?: unknown[];
   browserHosts?: unknown[];
+  /** The person signs in through Live View (the wait_for_sign_in tool). */
+  browserManualSignIn?: boolean;
   /** Permission rules and trust. Absent: no rules (everything the guard allows runs), untrusted. */
   policy?: PolicyPayload;
   approvals?: ApprovalsPayload;
@@ -144,7 +146,7 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'bedrockEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'portal', 'auth', 'trustTools', 'browser', 'browserAccounts', 'browserHosts', 'policy', 'approvals',
+  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'bedrockEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'portal', 'auth', 'trustTools', 'browser', 'browserAccounts', 'browserHosts', 'browserManualSignIn', 'policy', 'approvals',
   'agents', 'agent', 'delegation',
 ]);
 const AWS_ENV_KEYS = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']);
@@ -422,6 +424,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       auth,
       trustTools: typeof obj.trustTools === 'boolean' ? obj.trustTools : undefined,
       browser: obj.browser === true ? true : undefined,
+      ...(obj.browser === true && obj.browserManualSignIn === true ? { browserManualSignIn: true } : {}),
       ...(obj.browser === true && Array.isArray(obj.browserAccounts) && obj.browserAccounts.length ? { browserAccounts: obj.browserAccounts, browserHosts: Array.isArray(obj.browserHosts) ? obj.browserHosts : [] } : {}),
       policy,
       approvals,

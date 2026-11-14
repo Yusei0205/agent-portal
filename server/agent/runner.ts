@@ -557,6 +557,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       if (agentRun.projectId) {
         const guide = await guideRunPayload(agentRun.projectId, workflowId).catch(() => null);
         if (guide?.accounts.length) { agentRun.runnerBrowserAccounts = guide.accounts; agentRun.runnerBrowserHosts = guide.hosts; }
+        if (guide?.manualSignIn) agentRun.runnerBrowserManual = true;
         if (guide?.missing.length) emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text: `Test account${guide.missing.length === 1 ? '' : 's'} not found in the project (removed since the guide was set up): ${guide.missing.join(', ')}` });
       }
       agentRun.runnerAwsEnv = (await projectAwsEnv(agentRun.projectId).catch((e) => { console.warn('[runner] AWS account skipped:', e); return null; })) ?? undefined;

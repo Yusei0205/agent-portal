@@ -303,9 +303,14 @@ export function registerSessionLifecycleRoutes(): void {
       let info: { browserId?: string; sessionId?: string; width?: number; height?: number } = {};
       try { info = JSON.parse(latest.payload ?? '{}'); } catch { /* none */ }
       if (!info.sessionId) { sendJson(res, 200, { available: false }); return; }
+      // Is the agent waiting for the person to use the browser (sign in)? The latest waiting/done note of this browser session.
+      const waits = await repo.listWorkflowRunEventsByType(String(wf.id), ['browser-waiting'], 200);
+      const lastWait = [...waits].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))).find((e) => String(e.created_at) >= String(latest.created_at));
+      let waiting: { message: string } | null = null;
+      try { const p = JSON.parse(lastWait?.payload ?? '{}'); if (p.state === 'waiting') waiting = { message: String(p.message ?? '').slice(0, 300) }; } catch { /* none */ }
       try {
         const url = await presignLiveViewUrl(info.browserId || 'aws.browser.v1', info.sessionId, 300);
-        sendJson(res, 200, { available: true, url, sessionId: info.sessionId, width: info.width || 1280, height: info.height || 800, expiresIn: 300 });
+        sendJson(res, 200, { available: true, url, sessionId: info.sessionId, width: info.width || 1280, height: info.height || 800, expiresIn: 300, waiting });
       } catch (e: unknown) {
         console.error('[browser] live-view signing failed:', e);
         sendJson(res, 200, { available: false, error: 'Could not sign the live view address' });

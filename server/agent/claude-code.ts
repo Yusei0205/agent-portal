@@ -184,6 +184,7 @@ ${REVIEW_SYSTEM_APPEND}`;
     inputFiles: run.runnerInputFiles,
     browserAccounts: run.runnerBrowserAccounts,
     browserHosts: run.runnerBrowserHosts,
+    browserManualSignIn: run.runnerBrowserManual,
     checks: run.runnerChecks,
   });
 

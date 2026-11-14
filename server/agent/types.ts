@@ -32,6 +32,8 @@ export interface AgentRun {
   /** A user guide run's test accounts (role, username, password) for the browser's sign_in tool, and the hosts they may be typed on. */
   runnerBrowserAccounts?: Array<{ role: string; username: string; password: string }>;
   runnerBrowserHosts?: string[];
+  /** A user guide run where the person signs in through Live View (the runner's wait_for_sign_in tool). */
+  runnerBrowserManual?: boolean;
   /** Set for a loop session's runs on an AgentCore runner: the check steps the runner runs after the agent finishes. */
   runnerChecks?: import('./runner-checks.ts').CheckStep[];
   leadAgent: string | null;

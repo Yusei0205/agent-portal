@@ -118,6 +118,7 @@ export function IdeBrowser({ workflowId, projectId, liveData, onPopOut, onPopIn,
   // ── Cloud mode: the portal cannot hold a WebSocket, so the agent's browser is shown through AgentCore Live View ──
   const [cloudMode, setCloudMode]     = useState(null);      // null = not known yet
   const [live, setLive]               = useState(null);      // { url, sessionId, width, height } while a cloud browser is open
+  const [waiting, setWaiting]         = useState(null);      // { message } while the agent waits for a person to sign in
 
   // ── Browser state (from WS 'state' messages) ────────────────────────────
   const [running, setRunning]           = useState(false);
@@ -300,6 +301,7 @@ export function IdeBrowser({ workflowId, projectId, liveData, onPopOut, onPopIn,
       try {
         const r = await api.get(`/api/workflows/${workflowId}/browser/live-view`);
         if (cancelled) return;
+        setWaiting(r?.available && r.waiting ? r.waiting : null);
         if (r?.available && r.url) {
           // A new address is signed on every call, so keep the first one for as long as it is the same browser session.
           // A new browser session starts with the agent in control, so the switch starts off again.
@@ -587,6 +589,15 @@ export function IdeBrowser({ workflowId, projectId, liveData, onPopOut, onPopIn,
           </button>
         )}
       </div>
+
+      {cloudMode && waiting && (
+        <div className="idb-control-banner" role="status" aria-live="polite" data-testid="browser-waiting">
+          <Icon name="warning" size={13} />
+          {controlEnabled
+            ? `The agent is waiting for you. ${waiting.message} When you have signed in, switch Remote control off to hand the browser back.`
+            : `The agent is waiting for you. ${waiting.message} Switch on Remote control, sign in in the browser below, then switch it off.`}
+        </div>
+      )}
 
       {/* ── Remote-control active banner ────────────────────────────────────── */}
       {controlEnabled && (

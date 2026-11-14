@@ -415,7 +415,7 @@ export async function runKiroRun(
 
   // Only what identifies the setup: credentials and tokens inside these change from message to message.
   const pick = (list: unknown[] | undefined, keys: string[]) => (list ?? []).map((x) => keys.map((k) => String((x as Record<string, unknown>)?.[k] ?? '')));
-  const fingerprint = JSON.stringify({ repos: pick(payload.repos, ['name', 'url', 'branch']), mcp: pick(payload.mcpServers, ['name', 'url']), browser: Boolean(payload.browser), guide: [pick(payload.browserAccounts, ['role']), payload.browserHosts ?? []], aws: payload.awsEnv?.AWS_ACCESS_KEY_ID ?? '', model: payload.model ?? '', agent: payload.agent ?? '', config: payload.kiroConfig?.length ? createHash('sha256').update(JSON.stringify(payload.kiroConfig)).digest('hex') : '' });
+  const fingerprint = JSON.stringify({ repos: pick(payload.repos, ['name', 'url', 'branch']), mcp: pick(payload.mcpServers, ['name', 'url']), browser: Boolean(payload.browser), guide: [pick(payload.browserAccounts, ['role']), payload.browserHosts ?? [], Boolean(payload.browserManualSignIn)], aws: payload.awsEnv?.AWS_ACCESS_KEY_ID ?? '', model: payload.model ?? '', agent: payload.agent ?? '', config: payload.kiroConfig?.length ? createHash('sha256').update(JSON.stringify(payload.kiroConfig)).digest('hex') : '' });
   // A cloud browser session lasts 15 minutes, so a browser session's kiro-cli is restarted after 12.
   const browserExpired = Boolean(payload.browser) && warm !== null && Date.now() - warm.startedAt > 12 * 60_000;
   if (warm && (browserExpired || warm.exited || warm.fingerprint !== fingerprint)) await disposeKiro(warm);
@@ -672,8 +672,9 @@ export async function runKiroRun(
         for (const n of names) {
           const file = path.join(liveDir, n);
           try {
-            const item = JSON.parse(await fsp.readFile(file, 'utf8')) as { url?: string; jpegBase64?: string; session?: Record<string, unknown> };
-            if (item.session) { run.browserSession = item.session; emit({ type: 'browser-session', ...item.session }); }
+            const item = JSON.parse(await fsp.readFile(file, 'utf8')) as { url?: string; jpegBase64?: string; session?: Record<string, unknown>; waiting?: Record<string, unknown> };
+            if (item.waiting) emit({ type: 'browser-waiting', ...item.waiting });
+            else if (item.session) { run.browserSession = item.session; emit({ type: 'browser-session', ...item.session }); }
             else last = item;
           } catch { /* half written */ }
           await fsp.rm(file, { force: true });
@@ -727,7 +728,7 @@ export async function runKiroRun(
               args: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'browser-mcp.mjs')],
               // The run folder (screenshots are saved there) and, for a user guide, the test accounts and the hosts they may be typed on.
               env: [...(liveDir ? [{ name: 'BROWSER_LIVE_DIR', value: liveDir }] : []), ...(workDir ? [{ name: 'BROWSER_WORK_DIR', value: workDir }] : []),
-                ...(payload.browserAccounts?.length ? [{ name: 'BROWSER_ACCOUNTS_JSON', value: JSON.stringify(payload.browserAccounts) }, { name: 'BROWSER_HOSTS_JSON', value: JSON.stringify(payload.browserHosts ?? []) }] : []), ...['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+                ...(payload.browserManualSignIn ? [{ name: 'BROWSER_MANUAL_SIGNIN', value: '1' }] : []), ...(payload.browserAccounts?.length ? [{ name: 'BROWSER_ACCOUNTS_JSON', value: JSON.stringify(payload.browserAccounts) }, { name: 'BROWSER_HOSTS_JSON', value: JSON.stringify(payload.browserHosts ?? []) }] : []), ...['AWS_REGION', 'AWS_DEFAULT_REGION', 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI', 'AWS_CONTAINER_CREDENTIALS_FULL_URI',
                 'AWS_CONTAINER_AUTHORIZATION_TOKEN', 'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN']
                 .filter((k) => process.env[k])
                 .map((k) => ({ name: k, value: process.env[k] as string }))],

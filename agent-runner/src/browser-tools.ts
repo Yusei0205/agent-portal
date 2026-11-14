@@ -10,7 +10,7 @@
  * them as mcp__browser__goto, mcp__browser__snapshot, etc.
  */
 
-import { BedrockAgentCoreClient, StartBrowserSessionCommand, StopBrowserSessionCommand } from '@aws-sdk/client-bedrock-agentcore';
+import { BedrockAgentCoreClient, GetBrowserSessionCommand, StartBrowserSessionCommand, StopBrowserSessionCommand } from '@aws-sdk/client-bedrock-agentcore';
 import { fromNodeProviderChain } from '@aws-sdk/credential-providers';
 import { SignatureV4 } from '@smithy/signature-v4';
 import { HttpRequest } from '@smithy/protocol-http';
@@ -66,6 +66,10 @@ export class AgentCoreBrowser {
   onFrame: ((f: BrowserFrame) => void) | null = null;
   /** Called once the browser session exists (so a person can watch and take over through AgentCore Live View). */
   onSession: ((s: BrowserSessionInfo) => void) | null = null;
+  /** Called when the agent starts or stops waiting for a person to use the browser (sign in) through Live View. */
+  onWaiting: ((w: { state: 'waiting' | 'done'; message: string }) => void) | null = null;
+  /** How long the cloud browser may live. A run that waits for a person to sign in needs more than the default. */
+  sessionTimeoutSeconds = 900;
 
   constructor(private emit: EmitFn, region: string, private browserId = DEFAULT_BROWSER_ID) {
     this.region = region;
@@ -97,7 +101,7 @@ export class AgentCoreBrowser {
     const res = await this.client.send(new StartBrowserSessionCommand({
       browserIdentifier: this.browserId,
       name: 'agent-portal-run',
-      sessionTimeoutSeconds: 900,
+      sessionTimeoutSeconds: this.sessionTimeoutSeconds,
       viewPort: VIEWPORT,
     }));
     this.sessionId = res.sessionId ?? null;
@@ -118,6 +122,29 @@ export class AgentCoreBrowser {
     if (this.page && !this.page.isClosed()) return this.page;
     this.starting ??= this.start().finally(() => { this.starting = null; });
     return this.starting;
+  }
+
+  /** The page of the open session, or null: unlike getPage() this never starts a browser. */
+  currentPage(): Page | null {
+    return this.page && !this.page.isClosed() ? this.page : null;
+  }
+
+  /**
+   * Connects again to the session that is already open (same pages, same sign-in). Needed after a person has used Live View with the
+   * agent's control paused, when the automation connection may have been dropped.
+   */
+  async reattach(): Promise<Page> {
+    if (!this.sessionId) throw new Error('No browser session is open');
+    const res = await this.client.send(new GetBrowserSessionCommand({ browserIdentifier: this.browserId, sessionId: this.sessionId }));
+    const wsUrl = res.streams?.automationStream?.streamEndpoint;
+    if (!wsUrl) throw new Error('The browser session has no automation endpoint');
+    const old = this.browser;
+    this.browser = await (await import('playwright-core')).chromium.connectOverCDP(wsUrl, { headers: await this.signedHeaders(wsUrl) });
+    try { await old?.close(); } catch { /* the old connection is already gone */ }
+    const ctx = this.browser.contexts()[0] ?? await this.browser.newContext();
+    this.page = ctx.pages()[0] ?? await ctx.newPage();
+    this.page.setDefaultTimeout(ACTION_TIMEOUT_MS);
+    return this.page;
   }
 
   /** Sends the live view a picture of the current page. Best effort: a failure here never fails a tool call. */
@@ -189,6 +216,8 @@ export interface BrowserToolOptions {
   workDir?: string;
   accounts?: Array<{ role: string; username: string; password: string }>;
   hosts?: string[];
+  /** Offer `wait_for_sign_in`: the person signs in themselves through Live View while the agent waits. */
+  manualSignIn?: boolean;
   /**
    * The capture and sign-in code (shared/runner-browser-capture.ts), passed in by the runner entry point that has that folder: this
    * file is also type-checked on its own by the portal's tests, where the copy does not exist.
@@ -340,7 +369,78 @@ ${await page.locator('body').ariaSnapshot()}`);
       }),
     });
   }
+  if (options.manualSignIn) {
+    specs.push({
+      name: 'wait_for_sign_in', readOnly: false,
+      description: 'Ask the person to sign in to the system themselves, then wait. Call it when you are on a sign-in page and have no stored account for it (or the sign-in needs a code only the person has). '
+        + 'The person sees the browser in the portal, signs in, and hands control back; the call returns when they have. You never see what they typed. Give a short message saying which system and, if known, which kind of user to sign in as.',
+      shape: {
+        message: z.string().optional().describe('What the person should do, e.g. "Sign in as an administrator"'),
+        minutes: z.number().optional().describe('How long to wait, 1 to 10 (default 10)'),
+      },
+      handler: (args: { message?: string; minutes?: number }) => guarded(() => waitForPerson(browser, args)),
+    });
+  }
   return specs;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Timings of waitForPerson (milliseconds); a test makes them short. */
+export const waitTuning = { pollMs: 2_000, answerMs: 4_000, reattachMs: 6_000, settleMs: 4_000, timeScale: 1 };
+
+/**
+ * Waits until the person has signed in. While they use Live View with the agent paused, the browser refuses the agent's commands; when
+ * they hand control back, the commands work again (after a reconnect if the connection was dropped), and that is the signal. A person
+ * who signs in without pausing the agent is noticed too: the password field has gone, or the page has moved on from the sign-in page.
+ */
+export async function waitForPerson(browser: AgentCoreBrowser, args: { message?: string; minutes?: number }): Promise<ToolResult> {
+  const page0 = await browser.getPage();
+  const minutes = Math.min(10, Math.max(1, Math.round(Number(args.minutes) || 10)));
+  const message = (args.message || 'Sign in to the system in the browser, then hand control back.').slice(0, 300);
+  const startUrl = page0.url();
+  const deadline = Date.now() + minutes * 60_000 * waitTuning.timeScale;
+  const startedAt = Date.now();
+  browser.onWaiting?.({ state: 'waiting', message });
+  let paused = false;
+  let seenPassword = false;
+  let quiet = 0;
+  let lastReattach = 0;
+  try {
+    while (Date.now() < deadline) {
+      await sleep(waitTuning.pollMs);
+      let seen: { pw: boolean; url: string } | null = null;
+      try {
+        const p = browser.currentPage();
+        if (!p) throw new Error('page closed');
+        seen = await Promise.race([
+          p.evaluate(() => ({ pw: [...document.querySelectorAll('input[type=password]')].some((e) => (e as HTMLElement).offsetParent !== null), url: location.href })),
+          sleep(waitTuning.answerMs).then(() => { throw new Error('no answer'); }),
+        ]);
+      } catch {
+        paused = true; // the person has the browser: the agent's commands are refused
+        if (Date.now() - lastReattach > waitTuning.reattachMs) { lastReattach = Date.now(); await browser.reattach().catch(() => undefined); }
+        continue;
+      }
+      if (paused) { quiet = 99; break; }
+      if (seen.pw) { seenPassword = true; quiet = 0; continue; }
+      const moved = seen.url !== startUrl;
+      quiet = (seenPassword || moved) && Date.now() - startedAt > waitTuning.settleMs ? quiet + 1 : 0;
+      if (quiet >= 2) break;
+    }
+    if (quiet < 2) {
+      browser.onWaiting?.({ state: 'done', message: 'Timed out waiting for the person to sign in.' });
+      return { content: [{ type: 'text', text: `The person did not sign in within ${minutes} minutes. Document what can be seen without signing in, and say which parts need a sign-in.` }], isError: true };
+    }
+    const page = await browser.getPage();
+    await settlePage(page);
+    await browser.publishFrame();
+    browser.onWaiting?.({ state: 'done', message: 'Signed in.' });
+    return text(`The person finished signing in. Now at ${page.url()}\nTitle: ${await page.title()}. Check the page to see who is signed in.`);
+  } catch (e) {
+    browser.onWaiting?.({ state: 'done', message: 'Stopped waiting.' });
+    throw e;
+  }
 }
 
 /** Builds the in-process MCP server config for sdk.query({ options: { mcpServers } }). */

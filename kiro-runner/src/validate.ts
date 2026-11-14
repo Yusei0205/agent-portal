@@ -39,6 +39,8 @@ export interface KiroRunPayload {
   /** Test accounts for sign_in (a user guide run) and the hosts they may be typed on (read by browser-mcp). */
   browserAccounts?: unknown[];
   browserHosts?: unknown[];
+  /** The person signs in through Live View (the wait_for_sign_in tool). */
+  browserManualSignIn?: boolean;
   /** The session's repositories to clone under repos/ (checked in run.ts by shared/runner-repos.ts). */
   repos?: unknown[];
   /** Remote MCP integrations (checked in run.ts by shared/runner-mcp.ts). */
@@ -241,6 +243,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       runId: (obj.runId as string).trim(),
       prompt: obj.prompt as string,
       ...(obj.browser === true ? { browser: true } : {}),
+      ...(obj.browser === true && obj.browserManualSignIn === true ? { browserManualSignIn: true } : {}),
       ...(obj.browser === true && Array.isArray(obj.browserAccounts) && obj.browserAccounts.length ? { browserAccounts: obj.browserAccounts, browserHosts: Array.isArray(obj.browserHosts) ? obj.browserHosts : [] } : {}),
       ...(typeof obj.model === 'string' && /^[A-Za-z0-9._:/@+-]{1,120}$/.test(obj.model) ? { model: obj.model } : {}),
       ...(parseKiroConfig(obj.kiroConfig).length ? { kiroConfig: parseKiroConfig(obj.kiroConfig) } : {}),

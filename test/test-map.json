@@ -1285,7 +1285,8 @@
         "test/pricing.test.ts",
         "test/browser-capture.test.ts",
         "test/browser-capture-real.test.ts",
-        "test/browser-tools-guide.test.ts"
+        "test/browser-tools-guide.test.ts",
+        "test/browser-wait-for-sign-in.test.ts"
       ],
       "smokeIds": [],
       "note": "test/engine/agentcore-runner-engine.test.ts (npm run test:engine) runs the real runner server and Claude Code engine against test/mock-anthropic-api.ts."

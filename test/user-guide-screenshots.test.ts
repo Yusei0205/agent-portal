@@ -53,6 +53,14 @@ describe('the prompt for a user guide with screenshots', () => {
     assert.match(composeDocPrompt({ ...base }), /no images\./);
     assert.ok(guideBlock(guideOf()).length > 8);
   });
+
+  it('tells the agent to wait for the person when they sign in themselves', () => {
+    const manual = guideBlock(guideOf({ roles: [], manualSignIn: true })).join(' ');
+    assert.match(manual, /wait_for_sign_in/);
+    assert.match(manual, /Never ask for, type or write down credentials/);
+    assert.doesNotMatch(manual, /none were given/);
+    assert.doesNotMatch(guideBlock(guideOf()).join(' '), /wait_for_sign_in/);
+  });
 });
 
 describe('user guide requests', () => {
@@ -73,6 +81,17 @@ describe('user guide requests', () => {
   });
   after(cleanup);
 
+  it('keeps "I sign in myself" with the run, and needs no stored account for it', async () => {
+    const r = await post({ guide: { screenshots: true, url: 'https://93.184.216.34/app', manualSignIn: true } });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const { doc, workflowId } = r.body as { doc: any; workflowId: string };
+    assert.equal(doc.sources.guide.manualSignIn, true);
+    assert.deepEqual(doc.sources.guide.roles, []);
+    const run = await guideRunPayload(projectId, workflowId);
+    assert.equal(run?.manualSignIn, true);
+    assert.deepEqual(run?.accounts, []);
+  });
+
   it('stores the options without a secret, tells the agent, and gives the run only the chosen accounts', async () => {
     const r = await post({ guide: { screenshots: true, url: 'https://93.184.216.34/app', roles: ['clerk'], hosts: ['login.example.com'] } });
     assert.equal(r.status, 200, JSON.stringify(r.body));
@@ -83,7 +102,7 @@ describe('user guide requests', () => {
     assert.match(String(wf!.goal), /written by using the running system at https:\/\/93\.184\.216\.34\/app/);
     assert.match(String(wf!.goal), /"Clerk"/);
     assert.doesNotMatch(String(wf!.goal), /Clerk-Pw-1|clerk@t\.example/);
-    assert.deepEqual(await guideRunPayload(projectId, workflowId), { accounts: [{ role: 'Clerk', username: 'clerk@t.example', password: 'Clerk-Pw-1' }], hosts: ['93.184.216.34', 'login.example.com'], missing: [] });
+    assert.deepEqual(await guideRunPayload(projectId, workflowId), { accounts: [{ role: 'Clerk', username: 'clerk@t.example', password: 'Clerk-Pw-1' }], hosts: ['93.184.216.34', 'login.example.com'], missing: [], manualSignIn: false });
   });
 
   it('refuses a missing or unusable address, an unknown account, a bad host', async () => {

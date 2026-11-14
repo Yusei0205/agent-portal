@@ -1014,6 +1014,7 @@ async function runKiroViaAgentCoreAdapter(
     inputFiles: run.runnerInputFiles,
     browserAccounts: run.runnerBrowserAccounts,
     browserHosts: run.runnerBrowserHosts,
+    browserManualSignIn: run.runnerBrowserManual,
     checks: run.runnerChecks,
     model: run.model || null,
   });

@@ -48,6 +48,8 @@ export interface ClaudeAgentCoreOpts {
   /** A user guide run's test accounts for the browser's sign_in tool (the runner types them; the model never sees them) and the hosts they may be typed on. */
   browserAccounts?: Array<{ role: string; username: string; password: string }>;
   browserHosts?: string[];
+  /** The person signs in through Live View: the runner offers wait_for_sign_in. */
+  browserManualSignIn?: boolean;
   /** A loop session's check steps, run by the runner after the agent finishes. */
   checks?: import('./runner-checks.ts').CheckStep[];
   /** The owner's and project's Claude agents (the Agent tool can start them by name). */
@@ -163,6 +165,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     auth: opts.auth,
     trustTools: opts.trustTools,
     ...(opts.browser ? { browser: true } : {}),
+    ...(opts.browser && opts.browserManualSignIn ? { browserManualSignIn: true } : {}),
     ...(opts.browser && opts.browserAccounts?.length ? { browserAccounts: opts.browserAccounts, browserHosts: opts.browserHosts ?? [] } : {}),
     ...(opts.repos?.length ? { repos: opts.repos } : {}),
     ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
@@ -220,6 +223,9 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
           break;
         case 'browser-session':
           if (ev.sessionId) emit('browser-session', { browserId: String(ev.browserId ?? 'aws.browser.v1'), sessionId: String(ev.sessionId), width: Number(ev.width) || 1280, height: Number(ev.height) || 800 });
+          break;
+        case 'browser-waiting':
+          emit('browser-waiting', { state: ev.state === 'waiting' ? 'waiting' : 'done', message: String(ev.message ?? '').slice(0, 300) });
           break;
         case 'browser-navigate':
           if (ev.url) emit('browser-navigate', { url: String(ev.url) });

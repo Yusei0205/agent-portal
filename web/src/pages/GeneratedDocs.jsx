@@ -12,6 +12,7 @@ import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 import { GuideAccountsModal } from '../components/GuideAccounts.jsx';
+import { IdeBrowser } from './sessions/IdeBrowser.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ function NewDocModal({ projectId, onClose, onCreated }) {
   const [guideHosts, setGuideHosts] = useState('');
   const [accounts, setAccounts]   = useState([]);
   const [roles, setRoles]         = useState([]);
+  const [manualSignIn, setManualSignIn] = useState(false);
   const [manage, setManage]       = useState(false);
 
   const handleAttachments = (ids, uploading) => {
@@ -97,7 +99,7 @@ function NewDocModal({ projectId, onClose, onCreated }) {
         sources:       ctx,
         attachmentIds: attachmentIds.length ? attachmentIds : undefined,
         guide: isGuide && shots
-          ? { screenshots: true, url: guideUrl.trim(), roles, hosts: guideHosts.split(/[\s,]+/).filter(Boolean) }
+          ? { screenshots: true, url: guideUrl.trim(), roles, hosts: guideHosts.split(/[\s,]+/).filter(Boolean), manualSignIn }
           : undefined,
       });
       onCreated(r);
@@ -170,6 +172,11 @@ function NewDocModal({ projectId, onClose, onCreated }) {
                     )}
                     <button type="button" className="btn btn-sm btn-ghost" onClick={() => setManage(true)} disabled={busy}>Manage test accounts…</button>
                     <p className="field-hint">The agent never sees the passwords: they are typed into the sign-in page for it. Use test accounts only.</p>
+                    <label className="checkbox-row" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                      <input type="checkbox" checked={manualSignIn} onChange={(e) => setManualSignIn(e.target.checked)} disabled={busy} />
+                      I will sign in myself in the live browser
+                    </label>
+                    <p className="field-hint">When the agent reaches the sign-in page it waits, and the guide's row shows <strong>Watch browser</strong>. Open it, switch on Remote control, sign in (or enter a code) and switch control off. Your password never goes through the portal. Waits up to 10 minutes.</p>
                   </div>
                   <div className="field">
                     <label htmlFor="nd-guide-hosts">Other hosts used to sign in (optional)</label>
@@ -228,6 +235,7 @@ function NewDocModal({ projectId, onClose, onCreated }) {
           </div>
         </form>
       </div>
+      {watching && <WatchBrowserModal doc={watching} projectId={projectId} onClose={() => setWatching(null)} />}
       {manage && (
         <GuideAccountsModal
           projectId={projectId}
@@ -359,6 +367,24 @@ function RefreshDocDialog({ projectId, doc, onClose, onRefreshed }) {
  *
  * @param {{ projectId: string }} props
  */
+/** The agent's cloud browser while a guide is being written: watch it, and sign in yourself when the agent asks. */
+function WatchBrowserModal({ doc, projectId, onClose }) {
+  const ref = useFocusTrap();
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="watch-browser-title">
+      <div className="modal" ref={ref} style={{ width: 'min(1100px, 96vw)', maxWidth: 'none' }}>
+        <div className="modal-header">
+          <h2 id="watch-browser-title">Browser for {doc.name}</h2>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose} aria-label="Close">Close</button>
+        </div>
+        <div style={{ height: 'min(70vh, 720px)' }}>
+          <IdeBrowser workflowId={doc.workflow_id} projectId={projectId} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function GeneratedDocs({ projectId }) {
   const [docs, setDocs] = useState([]);
   const { sorted: sortedDocs, sortProps } = useSort(docs, { name: (d) => d.name, type: (d) => d.doc_type, status: (d) => d.status, updated: (d) => d.updated_at ?? d.created_at });
@@ -369,6 +395,7 @@ export function GeneratedDocs({ projectId }) {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [refreshingDoc, setRefreshingDoc] = useState(null);
   const [retryingIds, setRetryingIds] = useState(new Set());
+  const [watching, setWatching] = useState(null);
   const { confirmState, requestConfirm } = useConfirm();
   const { toast, toasts, removeToast } = useToast();
 
@@ -558,6 +585,11 @@ export function GeneratedDocs({ projectId }) {
                             </a>
                           )}
                         </>
+                      )}
+                      {d.status === 'generating' && d.sources?.guide?.screenshots && d.workflow_id && (
+                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => setWatching(d)} title="See the cloud browser and sign in yourself if the agent asks">
+                          Watch browser
+                        </button>
                       )}
                       {d.status === 'failed' && d.retryable && (
                         <button

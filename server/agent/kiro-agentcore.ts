@@ -99,6 +99,7 @@ export type AgentCoreSSEEvent =
   | { type: 'check-result'; ok: boolean; ranAt: string; steps: unknown[] }
   | { type: 'repo-changes'; repo: string; base: string; commits: number; files: number }
   | { type: 'browser-session'; browserId: string; sessionId: string; width: number; height: number }
+  | { type: 'browser-waiting'; state: string; message?: string }
   | { type: 'browser-navigate'; url: string }
   | { type: 'browser-screenshot'; screenshotBase64: string; url?: string }
   | { type: 'status'; text: string }
@@ -589,6 +590,8 @@ export interface AgentCoreRunOpts {
   /** A user guide run's test accounts for the browser's sign_in tool (the runner types them; the model never sees them) and the hosts they may be typed on. */
   browserAccounts?: Array<{ role: string; username: string; password: string }>;
   browserHosts?: string[];
+  /** The person signs in through Live View: the runner offers wait_for_sign_in. */
+  browserManualSignIn?: boolean;
   /** A loop session's check steps, run by the runner after kiro finishes. */
   checks?: import('./runner-checks.ts').CheckStep[];
   /** The model to use (a Kiro model id); kiro's own default when absent. */
@@ -669,6 +672,7 @@ export async function runKiroViaAgentCore(
       prompt: opts.prompt,
       token: opts.token,
       ...(opts.browser ? { browser: true } : {}),
+      ...(opts.browser && opts.browserManualSignIn ? { browserManualSignIn: true } : {}),
       ...(opts.browser && opts.browserAccounts?.length ? { browserAccounts: opts.browserAccounts, browserHosts: opts.browserHosts ?? [] } : {}),
       ...(opts.repos?.length ? { repos: opts.repos } : {}),
       ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
@@ -784,6 +788,12 @@ export async function runKiroViaAgentCore(
           if (typeof rc.repo === 'string' && typeof rc.base === 'string') {
             repoChanges.push({ repo: rc.repo, base: rc.base, commits: Number(rc.commits) || 0, files: Number(rc.files) || 0 });
           }
+          break;
+        }
+
+        case 'browser-waiting': {
+          const w = ev as { state?: string; message?: string };
+          emit('browser-waiting', { state: w.state === 'waiting' ? 'waiting' : 'done', message: String(w.message ?? '').slice(0, 300) });
           break;
         }
 

@@ -90,7 +90,7 @@ export async function parseGuide(raw: unknown, docType: string, projectId: strin
       ? 'Screenshots need the cloud browser, which is not turned on in this portal (deploy with -c agentcoreBrowser=true).'
       : 'Screenshots need a Kiro or Claude model: only those have the cloud browser. Choose one, or turn screenshots off.');
   }
-  return { url: url.href, screenshots: true, roles, hosts };
+  return { url: url.href, screenshots: true, roles, hosts, ...(o.manualSignIn === true ? { manualSignIn: true } : {}) };
 }
 
 async function requireProjectAccess(
@@ -263,7 +263,7 @@ async function startDocRun(
   });
   if (preconfig?.workDir) await sessions.updateWorkflow(workflowId, { work_dir: preconfig.workDir });
   // A user guide with screenshots: which test account roles this run may sign in with (the runner gets the accounts when it starts).
-  if (preconfig?.guide?.screenshots) await setGuideRun(workflowId, { roles: preconfig.guide.roles, hosts: preconfig.guide.hosts });
+  if (preconfig?.guide?.screenshots) await setGuideRun(workflowId, { roles: preconfig.guide.roles, hosts: preconfig.guide.hosts, manualSignIn: preconfig.guide.manualSignIn === true });
 
   // Mark the doc as generating so startup recovery can flip it to failed on crash
   await getGeneratedDocRepository().update(docId, { status: 'generating', error: null, workflow_id: workflowId });

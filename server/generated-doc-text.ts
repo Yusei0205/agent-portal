@@ -51,6 +51,8 @@ export interface DocGuide {
   roles: string[];
   /** The address's host and any others the sign-in uses. */
   hosts: string[];
+  /** The person signs in themselves through the portal's live browser (the wait_for_sign_in tool). */
+  manualSignIn?: boolean;
 }
 
 export const GUIDE_LIMITS = { screenshots: 40, roles: 20, hosts: 10, urlChars: 500 };
@@ -62,11 +64,19 @@ export function guideBlock(g: DocGuide): string[] {
         `Test accounts: you can sign in as ${g.roles.map((r) => `"${r}"`).join(', ')}. Open the system's sign-in page, then call sign_in with the role (the username and password are typed for you; you never see them, and never write them in the guide). Sign in as each role to show what that kind of user sees, and say in the guide which role a task is for.`,
         'sign_in only works on the system\'s own address. Do not follow links to other sites and do not type the credentials with the type tool.',
       ]
-    : ['Test accounts: none were given. Document only what can be opened without signing in (a public site, the sign-in page itself), and say in the guide which parts need a sign-in that you could not show.'];
+    : g.manualSignIn
+      ? []
+      : ['Test accounts: none were given. Document only what can be opened without signing in (a public site, the sign-in page itself), and say in the guide which parts need a sign-in that you could not show.'];
+  const manual = g.manualSignIn
+    ? [
+        'Sign-in by the person: they will sign in themselves, watching the browser in the portal. When you reach the system\'s sign-in page' + (g.roles.length ? ' and no stored account fits' : '') + ', call wait_for_sign_in once with a short message (which system, which kind of user), and wait: the call returns when they have signed in. Then check the page to see who is signed in and carry on.',
+        'Never ask for, type or write down credentials, and do not take a screenshot of the sign-in page while someone is typing. If wait_for_sign_in reports that nobody signed in, document what you can see without signing in and say which parts need one.',
+      ]
+    : [];
   return [
     `Screenshots: this guide is written by using the running system at ${g.url}.`,
-    `You have a browser (tools: goto, snapshot, get_text, click, type, screenshot, capture${g.roles.length ? ', sign_in' : ''}). ${accounts[0]}`,
-    ...accounts.slice(1),
+    `You have a browser (tools: goto, snapshot, get_text, click, type, screenshot, capture${g.roles.length ? ', sign_in' : ''}${g.manualSignIn ? ', wait_for_sign_in' : ''}). ${accounts[0] ?? manual[0]}`,
+    ...(accounts.length ? [...accounts.slice(1), ...manual] : manual.slice(1)),
     'How to capture:',
     `- Plan first: list the tasks a user does (from the project documents and repositories if given, and from what you see in the system), then do each task yourself in the browser, step by step. At most ${GUIDE_LIMITS.screenshots} screenshots in all; one per screen, not one per click.`,
     '- Before a step that needs a click or typing, call capture with highlights: each highlight is the CSS selector (or the visible text) of an element the reader must use on that screen, with a short label. Each gets a red box and a number: 1, 2, 3 in the order given, so give them in the order of the steps. Use snapshot or get_text to find the selectors and labels. Capture again after the page changes.',

@@ -23,7 +23,9 @@ const readJson = (name: string): unknown => { try { return JSON.parse(process.en
 const guide = parseAccounts(readJson('BROWSER_ACCOUNTS_JSON'), readJson('BROWSER_HOSTS_JSON'));
 delete process.env.BROWSER_ACCOUNTS_JSON;
 delete process.env.BROWSER_HOSTS_JSON;
-const tools = browserToolSpecs(browser, { workDir: process.env.BROWSER_WORK_DIR || undefined, ...guide, kit: { capture, summary: captureSummary, signIn } });
+const manualSignIn = process.env.BROWSER_MANUAL_SIGNIN === '1';
+if (manualSignIn) browser.sessionTimeoutSeconds = 1800;
+const tools = browserToolSpecs(browser, { workDir: process.env.BROWSER_WORK_DIR || undefined, manualSignIn, ...guide, kit: { capture, summary: captureSummary, signIn } });
 
 // Live view: the runner (parent of kiro-cli) watches this folder and forwards each frame to the portal.
 const liveDir = process.env.BROWSER_LIVE_DIR;
@@ -39,6 +41,7 @@ if (liveDir) {
   };
   browser.onFrame = (f) => drop(f);
   browser.onSession = (s) => drop({ session: s });
+  browser.onWaiting = (w) => drop({ waiting: w });
 }
 
 function send(msg: Record<string, unknown>): void {

@@ -415,6 +415,8 @@ export async function runInvocation(
   // ── AgentCore Browser (optional, started on first use, always stopped in finally) ──
   const browser = payload.browser ? new AgentCoreBrowser(emit, region) : null;
   if (browser) {
+    if (payload.browserManualSignIn) browser.sessionTimeoutSeconds = 1800;
+    browser.onWaiting = (w) => emit({ type: 'browser-waiting', ...w });
     browser.onSession = (s) => emit({ type: 'browser-session', ...s });
     // Live Browser view in the portal (a small picture after each action; never shown to the model).
     browser.onFrame = (f) => {
@@ -556,7 +558,7 @@ export async function runInvocation(
         // The session's lead agent runs the main conversation (its prompt, tools and preloaded skills).
         ...(payload.agent ? { agent: payload.agent } : {}),
         // Browser tools, project integrations and (when the portal allows child sessions) delegate_session.
-        ...(browser || integrations.length || mcpServers ? { mcpServers: { ...(browser ? { [BROWSER_SERVER_NAME]: createBrowserMcpServer(sdk, browser, { workDir, ...parseAccounts(payload.browserAccounts, payload.browserHosts), kit: { capture, summary: captureSummary, signIn } }) } : {}), ...integrationServers, ...(mcpServers ?? {}) } } : {}),
+        ...(browser || integrations.length || mcpServers ? { mcpServers: { ...(browser ? { [BROWSER_SERVER_NAME]: createBrowserMcpServer(sdk, browser, { workDir, manualSignIn: payload.browserManualSignIn === true, ...parseAccounts(payload.browserAccounts, payload.browserHosts), kit: { capture, summary: captureSummary, signIn } }) } : {}), ...integrationServers, ...(mcpServers ?? {}) } } : {}),
         // After a tool call during which the memory guard (or the kernel) stopped a command, tell the agent why it
         // ended, so it uses less memory instead of running the same command again.
         ...(memoryNote ? { hooks: claudeCodeMemoryHooks(memoryNote) } : {}),

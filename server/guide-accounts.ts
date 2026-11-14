@@ -137,7 +137,7 @@ function checkList(list: GuideAccountRecord[]): GuideAccountRecord[] {
 
 // ── What one guide run uses ─────────────────────────────────────────────────────────────────────────────
 
-export interface GuideRunConfig { roles: string[]; hosts: string[] }
+export interface GuideRunConfig { roles: string[]; hosts: string[]; /** The person signs in through Live View. */ manualSignIn?: boolean }
 
 /** Remembers which roles and hosts a guide run may use (no passwords: those are read from the project's list when the run starts). */
 export async function setGuideRun(workflowId: string, cfg: GuideRunConfig): Promise<void> {
@@ -145,7 +145,7 @@ export async function setGuideRun(workflowId: string, cfg: GuideRunConfig): Prom
 }
 
 /** The accounts of a guide run, as the runner's payload carries them, with the hosts they may be typed on. */
-export async function guideRunPayload(projectId: string, workflowId: string): Promise<{ accounts: Array<{ role: string; username: string; password: string }>; hosts: string[]; missing: string[] } | null> {
+export async function guideRunPayload(projectId: string, workflowId: string): Promise<{ accounts: Array<{ role: string; username: string; password: string }>; hosts: string[]; missing: string[]; manualSignIn: boolean } | null> {
   const raw = await getSecret(runKey(workflowId));
   if (!raw) return null;
   let cfg: GuideRunConfig;
@@ -154,7 +154,7 @@ export async function guideRunPayload(projectId: string, workflowId: string): Pr
   const wanted = (cfg.roles ?? []).map((r) => r.toLowerCase());
   const picked = all.filter((a) => wanted.includes(a.role.toLowerCase()));
   const missing = (cfg.roles ?? []).filter((r) => !all.some((a) => a.role.toLowerCase() === r.toLowerCase()));
-  return { accounts: picked.map(({ role, username, password }) => ({ role, username, password })), hosts: cfg.hosts ?? [], missing };
+  return { accounts: picked.map(({ role, username, password }) => ({ role, username, password })), hosts: cfg.hosts ?? [], missing, manualSignIn: cfg.manualSignIn === true };
 }
 
 // ── Routes ──────────────────────────────────────────────────────────────────────────────────────────────
