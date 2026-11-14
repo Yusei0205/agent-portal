@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { createTestDb, cleanup, createTestServer, fetchJson } from './fixtures.ts';
 import { getSessionsRepository } from '../server/repositories/sessions.ts';
 import { continueWithQueuedMessages, queuedDeps } from '../server/workflows/driver.ts';
+import { one } from '../server/db.ts';
 import { buildConversationRecap } from '../server/agent/recap.ts';
 
 describe('messages that arrive during a turn', () => {
@@ -103,7 +104,9 @@ describe('messages that arrive during a turn', () => {
     const runX = `run-int-${Date.now()}`;
     await repo.createRun({ id: runX, workflow_id: wid, status: 'running', started_at: t, finished_at: null, cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: t });
     const base = `/api/projects/${projectId}/workflows/${wid}`;
-    assert.equal((await fetchJson(baseUrl, `${base}/cancel`, { method: 'POST', cookie, body: {} })).status, 200);
+    assert.equal((await fetchJson(baseUrl, `${base}/cancel`, { method: 'POST', cookie, body: { source: 'shortcut' } })).status, 200);
+    const audited = one<{ details: string }>(`SELECT detail AS details FROM audit_log WHERE action = 'session.interrupt' AND target = ? ORDER BY rowid DESC LIMIT 1`, `workflow:${wid}`);
+    assert.match(String(audited?.details), /"source":"shortcut"/, 'the stop is recorded with where it came from');
     // The turn ends (the runner records it as cancelled).
     await repo.updateRun(runX, { status: 'cancelled', finished_at: new Date().toISOString() });
     const view = ((await fetchJson(baseUrl, base, { cookie })).body as any).workflow;

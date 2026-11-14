@@ -797,6 +797,11 @@ export function registerWorkflowRoutes(): void {
 
     const activeRun = await repo.getActiveRun(w.id);
     if (activeRun) cancelRun(activeRun.id);
+    // Who stopped it, and from where (the page says: the Esc or Ctrl+C shortcut, the Stop button, or Stop and send now): a turn that
+    // ends without the person remembering stopping it can be traced.
+    const rawSource = (req.body as Record<string, unknown> | undefined)?.source;
+    const source = typeof rawSource === 'string' && /^[a-z-]{1,24}$/.test(rawSource) ? rawSource : 'unknown';
+    try { appendAudit(getDb(), req.user?.id ?? null, 'session.interrupt', `workflow:${w.id}`, { source, runId: activeRun?.id ?? null, viaToken: Boolean(req.authViaToken) }, null); } catch { /* the stop itself must not fail */ }
 
     const ts = now();
     // 'interrupted': the person ended this turn (Esc, Ctrl+C, Stop). The conversation is kept as it is and the next message carries on.

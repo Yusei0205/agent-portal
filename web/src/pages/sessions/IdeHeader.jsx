@@ -254,7 +254,7 @@ export function IdeHeader({
     setStopping(true);
     setMenuOpen(false);
     try {
-      await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/cancel`);
+      await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/cancel`, { source: 'header-stop' });
       if (onStopped) onStopped();
     } catch { /* ignore */ }
     finally { setStopping(false); }

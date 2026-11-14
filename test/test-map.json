@@ -314,6 +314,7 @@
         "test/web-session-agents.test.ts",
         "test/output-file-utils.test.ts",
         "test/web-pull-request-session.test.ts",
+        "test/kiro-runner-interrupt.test.ts",
         "test/queued-messages.test.ts",
         "test/web-stop-shortcut.test.ts",
         "test/web-pull-request-card.test.ts",

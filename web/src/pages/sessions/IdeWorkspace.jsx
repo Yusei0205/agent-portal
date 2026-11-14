@@ -264,7 +264,7 @@ export function ComposerBar({
   const stopTurn = useCallback(async () => {
     if (!workflow?.id) return;
     setStopHint('Stopping…');
-    try { await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/cancel`); setStopHint('Stopped'); }
+    try { await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/cancel`, { source: 'shortcut' }); setStopHint('Stopped'); }
     catch (e) { setStopHint(''); setResumeError(e?.message || 'Could not stop the current turn.'); }
   }, [projectId, workflow?.id]);
   useStopShortcut(isRunning, stopTurn);
@@ -649,7 +649,7 @@ export function ComposerBar({
             onClick={async () => {
               setStoppingNow(true);
               try {
-                await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/cancel`);
+                await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/cancel`, { source: 'send-now' });
                 // Stopped: the saved message starts the next turn.
                 await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/start`).catch(() => undefined);
               } catch (e) { setResumeError(e?.message || 'Could not stop the current turn.'); } finally { setStoppingNow(false); }
