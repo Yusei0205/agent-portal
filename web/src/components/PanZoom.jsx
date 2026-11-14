@@ -42,14 +42,21 @@ export function PanZoom({ children, className = '', height = '70vh', label = 'Di
     return () => el.removeEventListener('wheel', onWheel);
   }, [zoomAt]);
 
+  // The pointer is only captured once it has moved a few pixels (a drag). Capturing on press would send the click to this frame
+  // instead of the item under the pointer, so nothing inside the picture (a card in the Code map) could be clicked.
   const onPointerDown = (e) => {
     if (e.button !== 0 || e.target.closest('.panzoom-bar')) return;
-    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y };
-    e.currentTarget.setPointerCapture?.(e.pointerId);
+    drag.current = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y, dragging: false };
   };
   const onPointerMove = (e) => {
     const d = drag.current;
     if (!d) return;
+    if (e.buttons === 0) { drag.current = null; return; }
+    if (!d.dragging) {
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 5) return;
+      d.dragging = true;
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    }
     setView((v) => ({ ...v, x: d.vx + (e.clientX - d.x), y: d.vy + (e.clientY - d.y) }));
   };
   const onPointerUp = () => { drag.current = null; };

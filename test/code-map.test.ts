@@ -93,23 +93,6 @@ describe('takeRunnerEvent', () => {
   });
 });
 
-describe('forceLayout', () => {
-  it('puts the chosen item in the middle and keeps every item inside the frame without overlapping', async () => {
-    // @ts-ignore: a plain JS module of the web app, which has no declaration file
-    const { forceLayout } = await import('../web/src/lib/forceLayout.js');
-    const nodes = Array.from({ length: 40 }, (_, i) => ({ id: `n${i}` }));
-    const links = nodes.slice(1).map((n) => ({ s: 'n0', t: n.id }));
-    const p = forceLayout(nodes, links, 'n0', { width: 900, height: 560 });
-    assert.deepEqual(p.get('n0'), { x: 450, y: 280 });
-    const pts = [...p.values()];
-    assert.ok(pts.every((q) => Number.isFinite(q.x) && Number.isFinite(q.y) && q.x >= 40 && q.x <= 860 && q.y >= 30 && q.y <= 530));
-    let closest = Infinity;
-    for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) closest = Math.min(closest, Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y));
-    assert.ok(closest > 8, `closest pair ${closest}`);
-    assert.deepEqual(forceLayout(nodes, links, 'n0'), forceLayout(nodes, links, 'n0'));
-  });
-});
-
 describe('code map routes', () => {
   it('stores a graph sent by a runner and answers list, overview, search and node', async () => {
     const { createTestServer, cleanup, fetchJson } = await import('./fixtures.ts');
@@ -144,6 +127,7 @@ describe('code map routes', () => {
       const nd = (await fetchJson(ts.baseUrl, `/api/projects/${projectId}/code-map/${repoId}/node?id=a_pay`, { cookie })).body as any;
       assert.equal(nd.centerId, 'a_pay');
       assert.ok(nd.nodes.length >= 4 && nd.links.length >= 3);
+      assert.equal(typeof nd.children, 'object', 'each main neighbour comes with its own small items');
       assert.equal((await fetchJson(ts.baseUrl, `/api/projects/${projectId}/code-map/${repoId}/node?id=nope`, { cookie })).status, 404);
       assert.equal((await fetchJson(ts.baseUrl, `/api/projects/${projectId}/code-map/${repoId}/search?q=`, { cookie })).status, 400);
     } finally { await cleanup(); }
@@ -204,31 +188,99 @@ describe('graphify progress', () => {
   });
 });
 
-describe('radialLayout', () => {
-  it('keeps every item apart and inside the frame at any size, and grows the canvas instead of cramming', async () => {
-    // @ts-ignore: a plain JS module of the web app, which has no declaration file
-    const { radialLayout } = await import('../web/src/lib/forceLayout.js');
-    let lastWidth = 0;
-    for (const n of [1, 6, 24, 60]) {
-      const nodes = [{ id: 'c', d: 40 }, ...Array.from({ length: n }, (_: unknown, i: number) => ({ id: `n${i}`, c: i % 5, d: (i * 7) % 30 }))];
-      const { pos, width, height } = radialLayout(nodes, 'c');
-      assert.deepEqual(pos.get('c'), { x: width / 2, y: height / 2 }, 'the chosen item is in the middle');
-      const pts = [...pos.values()] as { x: number; y: number }[];
-      assert.ok(pts.every((p) => p.x >= 0 && p.x <= width && p.y >= 0 && p.y <= height), `all inside at ${n}`);
-      let closest = Infinity;
-      for (let i = 0; i < pts.length; i++) for (let j = i + 1; j < pts.length; j++) closest = Math.min(closest, Math.hypot(pts[i].x - pts[j].x, pts[i].y - pts[j].y));
-      if (pts.length > 1) assert.ok(closest >= 70, `closest pair ${closest.toFixed(1)} at ${n}`);
-      assert.ok(width >= lastWidth, 'more items never make the canvas smaller');
-      lastWidth = width;
+describe('neighbourhood: the small items beside each main neighbour', () => {
+  // c uses a and b. a has four neighbours of its own (x, y, z, w), b has x and q. m is a neighbour of c as well as of a.
+  const nodes = ['c', 'a', 'b', 'm', 'x', 'y', 'z', 'w', 'q', 'ext'].map((i) => ({ i, l: i, f: `${i}.ts`, n: 1, c: 0, k: i === 'ext' ? 'external' : 'function' }));
+  const link = (s: string, t2: string, r = 'calls') => ({ s, t: t2, r });
+  const links = [link('c', 'a'), link('c', 'b'), link('c', 'm'), link('a', 'x'), link('a', 'y'), link('a', 'z'), link('a', 'w'), link('a', 'm'), link('b', 'x'), link('b', 'q'), link('b', 'ext'), link('y', 'z')];
+  const byId = new Map(nodes.map((n) => [n.i, n]));
+  const adj = new Map<string, { other: string; r: string; dir: 'out' | 'in' }[]>();
+  const degree = new Map<string, number>();
+  const add = (a: string, v: { other: string; r: string; dir: 'out' | 'in' }) => { (adj.get(a) ?? adj.set(a, []).get(a)!).push(v); degree.set(a, (degree.get(a) ?? 0) + 1); };
+  for (const e of links) { add(e.s, { other: e.t, r: e.r, dir: 'out' }); add(e.t, { other: e.s, r: e.r, dir: 'in' }); }
+  const hood = neighbourhood({ byId, adj, degree, links } as never, 'c')!;
+
+  it('gives each main neighbour up to three of its own neighbours and says how many more there are', () => {
+    assert.equal(hood.children.a.nodes.length, 3);
+    assert.equal(hood.children.a.more, 1);
+  });
+  it('never repeats the middle item or another main neighbour as somebody\'s small item, and skips external items', () => {
+    for (const [owner, kids] of Object.entries(hood.children)) {
+      for (const k of kids.nodes) {
+        assert.ok(!['c', 'a', 'b', 'm'].includes(k.i), `${owner} shows ${k.i}`);
+        assert.notEqual(k.k, 'external');
+      }
     }
   });
-  it('is deterministic, and puts the best connected items on the inner ring', async () => {
+  it('lets different neighbours show different small items when there is a choice, and keeps the direction and relation', () => {
+    const aIds = hood.children.a.nodes.map((k) => k.i);
+    const bIds = hood.children.b.nodes.map((k) => k.i);
+    // x is already a's small item, so b lists its other neighbour q first.
+    assert.ok(aIds.includes('x'));
+    assert.deepEqual(bIds, ['q', 'x']);
+    assert.deepEqual(hood.children.a.nodes[0].r, 'calls');
+    assert.equal(hood.children.a.nodes[0].dir, 'out');
+  });
+  it('has an entry for every main neighbour, even one with nothing beyond it', () => {
+    assert.deepEqual(hood.children.m, { nodes: [], more: 0 });
+  });
+});
+
+describe('mindmapLayout', () => {
+  type Box = { id: string; x: number; y: number; w: number; h: number };
+  const boxes = (r: any): Box[] => {
+    const out: Box[] = [{ id: 'core', x: r.center.x - r.center.size / 2, y: r.center.y - r.center.size / 2, w: r.center.size, h: r.center.size }];
+    for (const [id, m] of r.mains) out.push({ id, x: m.x - m.w / 2, y: m.y - m.h / 2, w: m.w, h: m.h });
+    for (const [id, list] of r.kids) (list as any[]).forEach((k, j) => out.push({ id: `${id}/k${j}`, x: k.x - k.size / 2, y: k.y - k.size / 2, w: k.size, h: k.size }));
+    return out;
+  };
+
+  it('puts every card, small item and the middle card apart and inside the canvas, at any number of neighbours', async () => {
+    // @ts-ignore: a plain JS module of the web app, which has no declaration file
+    const { mindmapLayout } = await import('../web/src/lib/mindmapLayout.js');
+    for (const n of [0, 1, 5, 7, 12, 24, 36]) {
+      const mains = Array.from({ length: n }, (_: unknown, i: number) => ({ id: `m${i}`, w: 112 + ((i * 23) % 80), kids: i % 4 }));
+      const r = mindmapLayout(mains);
+      const all = boxes(r);
+      for (let i = 0; i < all.length; i++) {
+        const a = all[i];
+        assert.ok(a.x >= 0 && a.y >= 0 && a.x + a.w <= r.width && a.y + a.h <= r.height, `${a.id} inside at ${n}`);
+        for (let j = i + 1; j < all.length; j++) {
+          const b = all[j];
+          assert.ok(!(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h), `${a.id} overlaps ${b.id} at ${n}`);
+        }
+      }
+    }
+  });
+
+  it('puts the middle card in the middle, the best connected one above, the next below, and the rest on both sides', async () => {
     // @ts-ignore
-    const { radialLayout } = await import('../web/src/lib/forceLayout.js');
-    const nodes = [{ id: 'c' }, ...Array.from({ length: 30 }, (_: unknown, i: number) => ({ id: `n${i}`, c: i % 3, d: i }))];
-    const a = radialLayout(nodes, 'c');
-    assert.deepEqual([...a.pos.entries()], [...radialLayout(nodes, 'c').pos.entries()]);
-    const dist = (id: string) => Math.hypot((a.pos.get(id).x - a.width / 2) / 1.45, a.pos.get(id).y - a.height / 2);
-    assert.ok(dist('n29') < dist('n0'), 'a well connected item sits closer to the middle than a poorly connected one');
+    const { mindmapLayout } = await import('../web/src/lib/mindmapLayout.js');
+    const mains = Array.from({ length: 11 }, (_: unknown, i: number) => ({ id: `m${i}`, w: 130, kids: 3 }));
+    const r = mindmapLayout(mains);
+    assert.equal(r.mains.get('m0').side, 'top');
+    assert.equal(r.mains.get('m1').side, 'bottom');
+    assert.equal(r.mains.get('m0').x, r.center.x);
+    assert.ok(r.mains.get('m0').y < r.center.y && r.mains.get('m1').y > r.center.y);
+    const sides = [...r.mains.values()].map((m: any) => m.side);
+    assert.equal(sides.filter((s: string) => s === 'left').length, 4);
+    assert.equal(sides.filter((s: string) => s === 'right').length, 5);
+    for (const [id, m] of r.mains) {
+      const kids = r.kids.get(id);
+      assert.equal(kids.length, 3);
+      for (const k of kids) {
+        if (m.side === 'right') assert.ok(k.x > m.x + m.w / 2);
+        if (m.side === 'left') assert.ok(k.x < m.x - m.w / 2);
+      }
+    }
+  });
+
+  it('keeps few neighbours simple: no card above or below until there are enough, and is deterministic', async () => {
+    // @ts-ignore
+    const { mindmapLayout } = await import('../web/src/lib/mindmapLayout.js');
+    const mains = Array.from({ length: 4 }, (_: unknown, i: number) => ({ id: `m${i}`, w: 120, kids: 2 }));
+    const r = mindmapLayout(mains);
+    assert.deepEqual([...r.mains.values()].map((m: any) => m.side).sort(), ['left', 'left', 'right', 'right']);
+    assert.deepEqual([...r.mains.entries()], [...mindmapLayout(mains).mains.entries()]);
   });
 });

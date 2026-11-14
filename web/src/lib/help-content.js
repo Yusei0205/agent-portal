@@ -333,7 +333,8 @@ export const HELP_TOPICS = [
       ] },
       { heading: 'Read the graph', rows: [
         ['Search', 'Matches names and file paths. Results show the kind, the file and the line.'],
-        ['Graph view', 'Shows the chosen item in the middle with what it calls, what calls it and what it imports. Click a neighbour to move to it (**Back** and **Overview** in the side panel return); drag to move, scroll to zoom.'],
+        ['Graph view', 'A mind map: the chosen item in a glowing card in the middle, its main neighbours as cards around it, and the neighbours of each of those as small squares beyond it (**+N** says how many more). A dot travels along each line from the item that calls to the item it uses. Click any card or square to move the map to it (**Back** and **Overview** in the side panel return); drag to move, scroll to zoom. Hover a card to light its path and dim the rest.'],
+        ['Show and Names', '**Show** chooses how many main neighbours are drawn (12, 24 or up to 36; the side list always has every one). **Names** adds a name to every small square. **Wide view** hides the side list so the map gets the full width.'],
         ['Colours', 'One colour per community, so files that work together share a colour.'],
         ['Details', 'The side panel lists the connections of the selected item (calls, imports, contains) and the file and line to open.'],
       ] },
