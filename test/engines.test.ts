@@ -205,6 +205,46 @@ describe('Claude Code engine — event mapping', () => {
   });
 });
 
+describe('Claude Code engine — terse replies (caveman)', () => {
+  let t: TestData;
+
+  before(() => {
+    createTestDb();
+    t = makeTestData();
+    process.env.PORTAL_SDK_MODULE = `file://${FAKE_SDK}`;
+    process.env.PORTAL_FAKE_SDK_SCENARIO = 'echo-prompt';
+  });
+
+  after(async () => {
+    delete process.env.PORTAL_SDK_MODULE;
+    delete process.env.PORTAL_FAKE_SDK_SCENARIO;
+    await cleanup();
+  });
+
+  const promptSent = async (opts: Parameters<typeof makeRunContext>[1]): Promise<string> => {
+    const { ctx, events } = await makeRunContext(t, opts);
+    await runClaudeCode(ctx);
+    const text = events.filter((e) => e.type === 'assistant-text').map((e) => String(e.payload.text ?? '')).join('');
+    return /PROMPT<<([\s\S]*)>>/.exec(text)?.[1] ?? '';
+  };
+
+  it('sends the prompt unchanged when the session did not ask for terse replies', async () => {
+    const { setCavemanMode } = await import('../server/agent/caveman-guidance.ts');
+    await setCavemanMode(t.workflowId, false);
+    assert.doesNotMatch(await promptSent({}), /caveman/i);
+  });
+
+  it('adds the full instructions on the first turn and the short reminder on a continued session', async () => {
+    const { setCavemanMode, CAVEMAN_REMINDER } = await import('../server/agent/caveman-guidance.ts');
+    await setCavemanMode(t.workflowId, true);
+    const first = await promptSent({});
+    assert.match(first, /Respond terse like smart caveman/);
+    const continued = await promptSent({ engineSessionId: 'prev-session' });
+    assert.ok(continued.includes(CAVEMAN_REMINDER));
+    assert.doesNotMatch(continued, /Respond terse like smart caveman/);
+  });
+});
+
 describe('Claude Code engine — usage and cost', () => {
   let t: TestData;
 

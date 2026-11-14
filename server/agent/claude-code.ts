@@ -47,6 +47,7 @@ import { loadRunAgents, leadAgentFor, anthropicAgentModel } from './run-agents.t
 import { resolveAnthropicModel } from './anthropic-models.ts';
 import { withBrowserGuidance } from './browser-guidance.ts';
 import { withSkillsGuidance } from './skills-guidance.ts';
+import { cavemanMode, withCavemanGuidance } from './caveman-guidance.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
 
@@ -157,6 +158,8 @@ ${REVIEW_SYSTEM_APPEND}`;
   prompt = withBrowserGuidance(prompt, browserOn);
   // A repository's agent skills (agent/skills/) are the way in to its code: read the index, not everything.
   prompt = withSkillsGuidance(prompt, Boolean(run.runnerRepos?.length));
+  // Terse replies, when the session was started with that option. Every cloud turn starts a fresh Claude session (earlier turns come as a recap), so each carries the full instructions.
+  prompt = withCavemanGuidance(prompt, cavemanMode(run.workflowId), true);
 
   const agents = loadRunAgents(run, anthropicAgentModel);
   const lead = leadAgentFor(run, agents);
@@ -521,6 +524,10 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   if (leadAgent) emit('status', { text: `Lead agent: ${leadAgent}` });
   else if (run.leadAgent) emit('status', { text: `Lead agent "${run.leadAgent}" was not found in your Claude agents; using the default.` });
 
+  // Terse replies, when the session was started with that option: the full instructions when this turn starts a new Claude session,
+  // a one-line reminder when it continues one (the mode stays on until the person says "normal mode").
+  prompt = withCavemanGuidance(prompt, cavemanMode(run.workflowId), !run.engineSessionId);
+
   // Active prompt may be rebuilt on retry (recap prepended)
   let activePrompt = prompt;
   let resumeId: string | null = run.engineSessionId;
@@ -726,7 +733,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
       const reason = String((e as Error)?.message ?? e).slice(0, 200);
       const recap = await buildConversationRecap(run.workflowId, run.runId);
       const basePrompt = run.kind === 'review' ? `${run.goal}\n\n${REVIEW_SYSTEM_APPEND}` : run.goal;
-      activePrompt = recap ? recap + basePrompt : basePrompt;
+      activePrompt = withCavemanGuidance(recap ? recap + basePrompt : basePrompt, cavemanMode(run.workflowId), true);
       emit('status', {
         text: `Started a new session with a recap of earlier turns (could not resume: ${reason})`,
       });

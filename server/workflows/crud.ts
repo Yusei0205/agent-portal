@@ -29,6 +29,7 @@ import { startRun } from './driver.ts';
 import { runPortalCommand, PORTAL_COMMANDS } from './slash-commands.ts';
 import { parseSlashCommand, resolveSessionCommand, sessionCommands, unknownCommandText } from './session-commands.ts';
 import { requestRepoPrep, getRepoPrep } from '../agent/repo-prep.ts';
+import { setCavemanMode } from '../agent/caveman-guidance.ts';
 import { resolveApproval } from '../agent/approvals.ts';
 import { inputFingerprint, emitRunEvent } from '../agent/runner.ts';
 import { appendAudit } from '../audit.ts';
@@ -494,6 +495,9 @@ export function registerWorkflowRoutes(): void {
       await repo.updateWorkflow(id, { loop_state: loopState, updated_at: ts });
       wfRecord.loop_state = loopState;
     }
+
+    // Terse replies (caveman) for a Claude session that asked for them.
+    if (body.caveman === true && engine === 'claude-code') await setCavemanMode(id, true);
 
     // createWorkflow owns the child-count increment internally (both backends).
     emit(projectId, { type: 'workflow.created', workflowId: id });

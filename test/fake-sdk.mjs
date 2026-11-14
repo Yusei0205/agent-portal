@@ -34,6 +34,19 @@ export async function* query({ prompt, options }) {
     return;
   }
 
+  if (scenario === 'echo-prompt') {
+    // Hands the prompt the engine sent back as the reply, so a test can see exactly what the model would have read.
+    yield {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: `PROMPT<<${typeof prompt === 'string' ? prompt : JSON.stringify(prompt)}>>` }],
+        usage: { input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    };
+    yield { type: 'result', subtype: 'success', total_cost_usd: 0.001, num_turns: 1, is_error: false, result: 'done', stop_reason: 'end_turn' };
+    return;
+  }
+
   if (scenario === 'abort') {
     // Simulate a slow run so the abort can fire.
     // The abortController is not passed to the fake SDK but the options.abortController is.

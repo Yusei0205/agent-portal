@@ -272,6 +272,8 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
   );
   const [engine, setEngine] = useState('demo');
   const [trustTools, setTrustTools] = useState(false);
+  // Terse (caveman) replies for a Claude session; the choice is remembered on this browser.
+  const [caveman, setCaveman] = useState(() => { try { return localStorage.getItem('portal.newSession.caveman') === '1'; } catch { return false; } });
   const [leadAgent, setLeadAgent] = useState('');
   const [model, setModel] = useState('');
   const [credentialId, setCredentialId] = useState('');
@@ -446,6 +448,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
         goal: draft ? '' : goal.trim(),
         engine,
         trustTools: engine !== 'demo' ? trustTools : false,
+        ...(engine === 'claude-code' && caveman ? { caveman: true } : {}),
         leadAgent: leadAgent.trim() || undefined,
         maxIterations: Number(maxIterations),
         repoIds: [...selectedRepos],
@@ -669,6 +672,28 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                   <strong>Trust all tools</strong>{' '}
                   <span className="muted">
                     Agent may run shell commands and write files without asking first.
+                  </span>
+                </span>
+              </label>
+            </div>
+          )}
+
+          {/* Terse replies: Claude only */}
+          {engine === 'claude-code' && (
+            <div className="field">
+              <label className="choice" style={{ cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={caveman}
+                  onChange={(e) => {
+                    setCaveman(e.target.checked);
+                    try { localStorage.setItem('portal.newSession.caveman', e.target.checked ? '1' : '0'); } catch { /* not remembered */ }
+                  }}
+                />
+                <span>
+                  <strong>Terse replies (caveman)</strong>{' '}
+                  <span className="muted">
+                    Short answers with no filler, code and commands unchanged. Say &ldquo;normal mode&rdquo; in the chat to switch it off.
                   </span>
                 </span>
               </label>
