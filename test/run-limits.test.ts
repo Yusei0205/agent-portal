@@ -87,7 +87,7 @@ describe('Agent limits settings', () => {
     assert.ok(agents, 'Expected agents section in settings');
     assert.equal(typeof agents.approvalExpiryMinutes, 'number', 'approvalExpiryMinutes should be a number');
     assert.equal(agents.maxBudgetUsdPerRun, 5, 'default maxBudgetUsdPerRun should be 5');
-    assert.equal(agents.runTimeoutMinutes, 60, 'default runTimeoutMinutes should be 60');
+    assert.equal(agents.runTimeoutMinutes, 120, 'default runTimeoutMinutes should be 120 (two hours)');
   });
 
   it('PUT /api/settings updates agent limits', async () => {
