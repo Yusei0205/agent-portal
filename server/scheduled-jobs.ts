@@ -149,6 +149,8 @@ export async function handleJobInvocation(
   const timer = realtimeEnabled() ? setInterval(() => { void flushRealtime().catch(() => undefined); }, 1000) : null;
   timer?.unref();
   const started = Date.now();
+  // A start line to go with the "finished" one, so a job that never finishes shows in the log from its first minute.
+  console.log(`[job-runner] ${job} started${typeof args.runId === 'string' ? ` (run ${args.runId})` : ''}`);
   void runBackgroundJobNow(job, args)
     .then(() => console.log(`[job-runner] ${job} finished in ${Math.round((Date.now() - started) / 1000)}s`))
     .catch((e) => console.error(`[job-runner] ${job} failed:`, e instanceof Error ? e.message : e))

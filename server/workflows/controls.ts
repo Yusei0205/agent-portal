@@ -2,9 +2,33 @@
  * In-memory run lifecycle controls: cancel and abort-signal tracking.
  */
 
+import { getSessionsRepository } from '../repositories/sessions.ts';
+import { HEARTBEAT_MS } from './lost-runs.ts';
+import { now } from '../util.ts';
+
 // ── Active run registry ───────────────────────────────────────────────────────
 
 const controllers = new Map<string, AbortController>();
+/** While a run is registered, its process says it is alive (see lost-runs.ts). */
+const heartbeats = new Map<string, ReturnType<typeof setInterval>>();
+
+function startHeartbeat(runId: string): void {
+  const beat = (): void => {
+    void Promise.resolve()
+      .then(() => getSessionsRepository().updateRun(runId, { heartbeat_at: now() }))
+      .catch(() => { /* a missed beat is fine: five minutes of them are needed to call a run lost */ });
+  };
+  beat();
+  const timer = setInterval(beat, HEARTBEAT_MS);
+  timer.unref?.();
+  heartbeats.set(runId, timer);
+}
+
+function stopHeartbeat(runId: string): void {
+  const timer = heartbeats.get(runId);
+  if (timer) clearInterval(timer);
+  heartbeats.delete(runId);
+}
 
 /**
  * Register a new AbortController for a run.
@@ -13,6 +37,7 @@ const controllers = new Map<string, AbortController>();
 export function registerRun(runId: string): AbortController {
   const ctrl = new AbortController();
   controllers.set(runId, ctrl);
+  startHeartbeat(runId);
   return ctrl;
 }
 
@@ -32,6 +57,7 @@ export function isRunCancelled(runId: string): boolean {
 
 /** Remove a run from the registry (called when the run finishes). */
 export function deregisterRun(runId: string): void {
+  stopHeartbeat(runId);
   controllers.delete(runId);
 }
 
@@ -60,4 +86,5 @@ export function abortAllRuns(): void {
     try { ctrl.abort(PORTAL_SHUTDOWN); } catch { /* ignore */ }
   }
   controllers.clear();
+  for (const id of [...heartbeats.keys()]) stopHeartbeat(id);
 }

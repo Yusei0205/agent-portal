@@ -26,6 +26,7 @@ import { getSessionBrowserState, shutdownSessionBrowser } from './agent/browser-
 import { getSetting } from './settings.ts';
 import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
+import { sweepLostRuns } from './workflows/driver.ts';
 import { sessionSignIn } from './session-sign-in.ts';
 import { getSessionLimits } from './engine-limits.ts';
 import { presignLiveViewUrl, setAutomationStream } from './browser-live-view.ts';
@@ -60,6 +61,8 @@ function getIdleTimeoutMinutes(): number {
  * Survives server restarts because last_turn_at is persisted in the DB.
  */
 export async function checkIdleSessions(): Promise<void> {
+  // Every minute, from here on both the local timer and the cloud schedule: turns whose process was lost are closed first.
+  await sweepLostRuns();
   try {
     const timeoutMinutes = getIdleTimeoutMinutes();
     const cutoff = new Date(Date.now() - timeoutMinutes * 60_000).toISOString();

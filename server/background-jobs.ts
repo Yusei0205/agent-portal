@@ -95,8 +95,8 @@ export async function runInBackground(name: string, args: Record<string, unknown
       return;
     } catch (e) {
       const why = e instanceof Error ? e.message : String(e);
-      if (!jobRuntimeFallsBackToLambda()) {
-        console.error(`[background-jobs] job runtime did not take ${name} and PORTAL_JOB_RUNTIME_FALLBACK=none:`, why);
+      if (!jobRuntimeFallsBackToLambda(name)) {
+        console.error(`[background-jobs] job runtime did not take ${name} and PORTAL_JOB_RUNTIME_FALLBACK forbids Lambda for it:`, why);
         throw new Error(`The long-job runtime could not start ${name}: ${why}`);
       }
       console.error(`[background-jobs] job runtime did not take ${name}, using Lambda (15 minute limit applies):`, why);

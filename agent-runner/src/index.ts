@@ -23,6 +23,7 @@
 import http from 'node:http';
 import { runInvocation } from './run.js';
 import { validatePayload } from './validate.js';
+import { startKeepalive } from './sse-keepalive.js';
 import { runFinalize, validateFinalizeRequest } from './finalize.js';
 import { parseSnapshot, snapshotBusy, cancelSnapshot, saveWorkspaceInBackground, restoreWorkspace, flushWorkspace } from '../shared/runner-snapshot.js';
 import { inspectWorkspace, hasWorkspaceContent } from '../shared/runner-inspect.js';
@@ -254,6 +255,8 @@ const server = http.createServer(async (req, res) => {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
+    // A line every 20 s, so a quiet stretch is not mistaken for a dropped connection (see sse-keepalive.ts).
+    startKeepalive(res);
 
     const emit = (event: Record<string, unknown>): void => {
       // Each SSE event is: data: <json>\n\n

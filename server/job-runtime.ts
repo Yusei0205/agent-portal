@@ -47,10 +47,15 @@ export function jobRuntimeJobs(): Set<string> {
 /**
  * What to do when a job cannot be started on the runtime. `lambda` (default) runs it as a Lambda invocation instead, so
  * it is not lost but is limited to 15 minutes again. `none` makes runInBackground throw, so the caller can fail it at
- * once instead of letting a long job die at 15 minutes with no obvious cause (PORTAL_JOB_RUNTIME_FALLBACK=none).
+ * once instead of letting a long job die at 15 minutes with no obvious cause (PORTAL_JOB_RUNTIME_FALLBACK=none). A list of job names
+ * (PORTAL_JOB_RUNTIME_FALLBACK=execute-run) does that for those jobs only, so agent turns never run on Lambda while the other jobs keep it.
  */
-export function jobRuntimeFallsBackToLambda(): boolean {
-  return (process.env.PORTAL_JOB_RUNTIME_FALLBACK ?? 'lambda').trim().toLowerCase() !== 'none';
+export function jobRuntimeFallsBackToLambda(name?: string): boolean {
+  const raw = (process.env.PORTAL_JOB_RUNTIME_FALLBACK ?? 'lambda').trim().toLowerCase();
+  if (raw === 'none') return false;
+  // Job names (for example "execute-run"): those jobs never fall back to Lambda, the others still do.
+  const noFallback = raw === 'lambda' ? [] : raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return !(name && noFallback.includes(name.toLowerCase()));
 }
 
 /** True when this job should be started on the job runtime rather than here. Never true inside the runtime itself. */

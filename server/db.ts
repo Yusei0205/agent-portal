@@ -2329,6 +2329,9 @@ UPDATE p6_workflows SET initial_goal = goal;
 // A workspace can start its sessions with "Trust all tools" already ticked.
 MIGRATIONS.push(`ALTER TABLE workspaces_v2 ADD COLUMN default_trust_tools INTEGER NOT NULL DEFAULT 0;`);
 
+// A run says it is alive while it works, so a run whose process was lost can be told from one that is only quiet.
+MIGRATIONS.push(`ALTER TABLE p6_runs ADD COLUMN heartbeat_at TEXT;`);
+
 export const SCHEMA_VERSION = MIGRATIONS.length; // = 42
 
 // ── Database singleton ─────────────────────────────────────────────────────────

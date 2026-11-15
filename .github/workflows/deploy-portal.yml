@@ -114,6 +114,9 @@ jobs:
       # that left them out did exactly that), so they are on by default; a repository variable turns them off on purpose.
       JOB_RUNTIME: ${{ vars.JOB_RUNTIME || 'true' }}
       JOB_RUNTIME_AGENT_RUNS: ${{ vars.JOB_RUNTIME_AGENT_RUNS || 'true' }}
+      # Agent turns never fall back to a Lambda invocation (15-minute cap, and a turn there dies without a trace) when the job runtime cannot take them:
+      # the turn fails at once with the reason. Other background jobs keep the fallback. Set the variable to `lambda` to allow it again.
+      JOB_RUNTIME_FALLBACK: ${{ vars.JOB_RUNTIME_FALLBACK || 'execute-run' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -213,6 +216,7 @@ jobs:
             -c "codexOAuthRedirectUri=$CODEX_OAUTH_REDIRECT_URI"
             -c "jobRuntime=$JOB_RUNTIME"
             -c "jobRuntimeAgentRuns=$JOB_RUNTIME_AGENT_RUNS"
+            -c "jobRuntimeFallback=$JOB_RUNTIME_FALLBACK"
           )
           if [[ -n "$CODEX_OAUTH_CLIENT_SECRET_ARN" ]]; then
             args+=(-c "codexOAuthSecretArn=$CODEX_OAUTH_CLIENT_SECRET_ARN")

@@ -98,6 +98,8 @@ export interface RunRecord {
   created_at: string;
   stop_reason: string | null;
   time_limit_at: string | null;
+  /** Last time the process running this turn said it was alive (every 30 s while it runs). Null: never, or a run from before this existed. */
+  heartbeat_at: string | null;
   model: string | null;
   error: string | null;
 }

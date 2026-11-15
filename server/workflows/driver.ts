@@ -11,6 +11,7 @@ import { activeRunCount, abortAllRuns } from './controls.ts';
 import { executeRun } from '../agent/runner.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import type { RunFinalizeStats } from '../repositories/sessions.ts';
+import { lostRunReason, closeLostRun } from './lost-runs.ts';
 
 // ── Before-close hook ─────────────────────────────────────────────────────────
 // Abort all active runs when the database is closed so background executeRun
@@ -32,13 +33,17 @@ const MAX_CONCURRENT_RUNS = 5;
  */
 export async function startRun(workflowId: string, suppliedRunId?: string): Promise<string> {
   const repo = getSessionsRepository();
-  const workflow = await repo.getWorkflowById(workflowId);
+  let workflow = await repo.getWorkflowById(workflowId);
   if (!workflow) throw badRequest('Workflow not found');
 
-  // Idempotency: if a run is already active for this workflow, return it.
+  // Idempotency: if a run is already active for this workflow, return it. A run whose process was lost (see lost-runs.ts) is not
+  // active: it is closed here, so a message is never left waiting behind a turn that will never end.
   const activeRun = await repo.getActiveRun(workflowId);
   if (activeRun) {
-    return activeRun.id;
+    const lost = lostRunReason(activeRun);
+    if (!lost || !(await closeLostRun(activeRun.id, lost))) return activeRun.id;
+    workflow = await repo.getWorkflowById(workflowId);
+    if (!workflow) throw badRequest('Workflow not found');
   }
 
   // max_iterations enforcement
@@ -144,6 +149,31 @@ export async function continueWithQueuedMessages(workflowId: string): Promise<bo
     console.error(`[driver] could not start the turn for the queued message of ${workflowId}:`, e);
     return false;
   }
+}
+
+/**
+ * Close every run whose process was lost (see lost-runs.ts), and carry on with a message that was waiting behind it. Runs every minute
+ * with the idle-stop job. Returns how many runs were closed. Never throws.
+ */
+export async function sweepLostRuns(): Promise<number> {
+  let closed = 0;
+  try {
+    const repo = getSessionsRepository();
+    for (const w of await repo.listRunningWorkflows()) {
+      try {
+        const run = await repo.getActiveRun(w.id);
+        const reason = run ? lostRunReason(run) : null;
+        if (!run || !reason || !(await closeLostRun(run.id, reason))) continue;
+        closed++;
+        await continueWithQueuedMessages(w.id);
+      } catch (e) {
+        console.error(`[lost-run] could not check ${w.id}:`, e);
+      }
+    }
+  } catch (e) {
+    console.error('[lost-run] sweep failed:', e);
+  }
+  return closed;
 }
 
 /** Runs one agent turn and marks the run failed if it throws. */

@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { startKeepalive } from './sse-keepalive.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -121,6 +122,8 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
     const controller = new AbortController();
     active = { runId: body.runId || body.mode, controller };
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'x-accel-buffering': 'no' });
+    // A line every 20 s, so a quiet stretch is not mistaken for a dropped connection (see sse-keepalive.ts).
+    startKeepalive(res);
     const secrets = [body.accessToken, body.chatgptAuthTokens?.accessToken, ...parseMcpServers(body.mcpServers).flatMap(s => Object.values(s.headers))].filter((s): s is string => typeof s === 'string' && s.length > 0);
     const send = (event: Event) => {
       let text = JSON.stringify(event);

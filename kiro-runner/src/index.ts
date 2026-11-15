@@ -18,6 +18,7 @@
 import http from 'node:http';
 import { createRunnerTerminal } from '../shared/runner-terminal.js';
 import { validatePayload } from './validate.js';
+import { startKeepalive } from './sse-keepalive.js';
 import { ApprovalBroker, parseApprovalAnswer } from '../shared/agent/agentcore-approvals.ts';
 import { runKiroRun, kiroWorkspaceRoot } from './run.js';
 import { runKiroLogin } from './login.js';
@@ -253,6 +254,8 @@ const server = http.createServer(async (req, res) => {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
+    // A line every 20 s, so a quiet stretch is not mistaken for a dropped connection (see sse-keepalive.ts).
+    startKeepalive(res);
 
     const emit = (event: Record<string, unknown>): void => {
       if (!res.writableEnded) {

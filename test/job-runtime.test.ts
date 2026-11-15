@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { registerBackgroundJob, runInBackground, _setLambdaInvoker, runningJobCount, useLambdaInvoke } from '../server/background-jobs.ts';
-import { _setJobRuntimeInvoker, runsOnJobRuntime, jobRuntimeJobs, jobSessionId, DEFAULT_JOB_RUNTIME_JOBS } from '../server/job-runtime.ts';
+import { _setJobRuntimeInvoker, runsOnJobRuntime, jobRuntimeJobs, jobSessionId, jobRuntimeFallsBackToLambda, DEFAULT_JOB_RUNTIME_JOBS } from '../server/job-runtime.ts';
 import { handleJobInvocation, handleJobRunnerPing } from '../server/scheduled-jobs.ts';
 
 const ARN = 'arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/agentPortalJobRunner-abc';
@@ -121,6 +121,40 @@ describe('runInBackground with a job runtime', () => {
     _setJobRuntimeInvoker(async () => { throw new Error('HTTP 503'); });
     _setLambdaInvoker(async () => { assert.fail('must not fall back to Lambda'); });
     await assert.rejects(runInBackground('scan-run', { id: 'q' }), /could not start scan-run.*HTTP 503/);
+  });
+
+  it('PORTAL_JOB_RUNTIME_FALLBACK can name the jobs that never fall back to Lambda, and only those', async () => {
+    const was = process.env.PORTAL_JOB_RUNTIME_FALLBACK;
+    try {
+      delete process.env.PORTAL_JOB_RUNTIME_FALLBACK;
+      assert.equal(jobRuntimeFallsBackToLambda('execute-run'), true, 'the default: every job may');
+      process.env.PORTAL_JOB_RUNTIME_FALLBACK = 'lambda';
+      assert.equal(jobRuntimeFallsBackToLambda('execute-run'), true);
+      process.env.PORTAL_JOB_RUNTIME_FALLBACK = 'none';
+      assert.equal(jobRuntimeFallsBackToLambda('execute-run'), false, 'none: no job may');
+      assert.equal(jobRuntimeFallsBackToLambda(), false);
+      process.env.PORTAL_JOB_RUNTIME_FALLBACK = ' Execute-Run , test-run ';
+      assert.equal(jobRuntimeFallsBackToLambda('execute-run'), false, 'a named job may not (case and spaces do not matter)');
+      assert.equal(jobRuntimeFallsBackToLambda('test-run'), false);
+      assert.equal(jobRuntimeFallsBackToLambda('scan-run'), true, 'an unnamed job still may');
+      assert.equal(jobRuntimeFallsBackToLambda(), true, 'with no job named, a list does not forbid it');
+    } finally { if (was === undefined) delete process.env.PORTAL_JOB_RUNTIME_FALLBACK; else process.env.PORTAL_JOB_RUNTIME_FALLBACK = was; }
+  });
+
+  it('with a list, a named job fails at once when the runtime cannot take it, and an unnamed one still falls back to Lambda', async () => {
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'agent-portal';
+    process.env.PORTAL_ORIGIN_SECRET = 's3cret';
+    process.env.PORTAL_JOB_RUNTIME_ARN = ARN;
+    process.env.PORTAL_JOB_RUNTIME_FALLBACK = 'scan-run';
+    registerBackgroundJob('scan-estimate', async () => undefined);
+    _setJobRuntimeInvoker(async () => { throw new Error('HTTP 503'); });
+    const lambdaSent: Array<Record<string, unknown>> = [];
+    _setLambdaInvoker(async (p) => { lambdaSent.push(p); });
+    await assert.rejects(runInBackground('scan-run', { id: 'a' }), /could not start scan-run.*HTTP 503/);
+    assert.equal(lambdaSent.length, 0, 'the named job did not go to Lambda');
+    await runInBackground('scan-estimate', { id: 'b' });
+    assert.equal(lambdaSent.length, 1, 'the other job did');
+    assert.equal(lambdaSent[0].job, 'scan-estimate');
   });
 
   it('inside the runtime a job started by a job runs in that process', async () => {

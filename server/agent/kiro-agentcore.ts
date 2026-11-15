@@ -302,6 +302,27 @@ export function parseRuntimeArn(arn: string): { region: string; runtimeId: strin
 // ── AgentCore HTTP invocation ─────────────────────────────────────────────────
 
 /**
+ * The runner's response stopped coming. A runner (from this version on) writes a comment line every 20 seconds while a run is going, so
+ * silence for a minute and a half means the connection was dropped without a word (a NAT gateway forgets a quiet connection after 350
+ * seconds, and neither end is told). Without this the portal waited for bytes that could never arrive until the run's own time limit.
+ */
+export class AgentCoreStallError extends Error {
+  constructor(public readonly seconds: number) {
+    super(`Lost contact with the runner: nothing came back for ${seconds} seconds, so the connection was probably dropped. The turn was ended; send a message to carry on.`);
+    this.name = 'AgentCoreStallError';
+  }
+}
+
+/** How long the stream may be silent, once the runner has shown it sends keepalives. */
+function stallMs(): number {
+  return Number(process.env.PORTAL_AGENTCORE_STALL_MS) || 90_000;
+}
+
+/** Tests point the stream at a local server that plays the runner (http://127.0.0.1:port). */
+let _endpointOverride: string | null = null;
+export function _setAgentCoreEndpointOverride(url: string | null): void { _endpointOverride = url; }
+
+/**
  * Invoke the AgentCore runtime and stream back SSE events.
  * Resolves the endpoint from the ARN, signs the request, and parses SSE lines.
  */
@@ -321,7 +342,7 @@ async function* invokeAgentCoreReal(
 
   // Build the URL — ARN goes in the path as a URI label (percent-encoded)
   const encodedArn = encodeURIComponent(runtimeArn);
-  const baseUrl = `https://bedrock-agentcore.${effectiveRegion}.amazonaws.com`;
+  const baseUrl = _endpointOverride ?? `https://bedrock-agentcore.${effectiveRegion}.amazonaws.com`;
   const path = `/runtimes/${encodedArn}/invocations`;
   const url = new URL(`${baseUrl}${path}`);
 
@@ -354,6 +375,10 @@ async function* invokeAgentCoreReal(
   {
     let lineBuf = '';
     let aborted = false;
+    // Silence detection: only once the runner has sent a keepalive (an older runner image sends none, and a long quiet tool is normal there).
+    let lastByteAt = Date.now();
+    let sawKeepalive = false;
+    let stallTimer: ReturnType<typeof setInterval> | null = null;
 
     const onAbort = (): void => {
       aborted = true;
@@ -363,15 +388,18 @@ async function* invokeAgentCoreReal(
     signal?.addEventListener('abort', onAbort, { once: true });
 
     const finish = (err: unknown): void => {
+      if (done) return; // the first ending wins (destroying the request after a stall would otherwise replace its reason)
       signal?.removeEventListener('abort', onAbort);
+      if (stallTimer) clearInterval(stallTimer);
       if (err) failure = aborted ? new DOMException('Aborted', 'AbortError') : err;
       done = true;
       notify();
     };
 
-    const req = https.request(
+    const req = (url.protocol === 'http:' ? http : https).request(
       {
         hostname: url.hostname,
+        ...(url.port ? { port: Number(url.port) } : {}),
         path: url.pathname + url.search,
         method: 'POST',
         headers: signedHeaders,
@@ -390,11 +418,13 @@ async function* invokeAgentCoreReal(
 
         res.setEncoding('utf8');
         res.on('data', (chunk: string) => {
+          lastByteAt = Date.now();
           lineBuf += chunk;
           let nl: number;
           while ((nl = lineBuf.indexOf('\n')) >= 0) {
             const line = lineBuf.slice(0, nl).trimEnd();
             lineBuf = lineBuf.slice(nl + 1);
+            if (line.startsWith(':')) sawKeepalive = true; // an SSE comment: the runner's "still here"
             if (line.startsWith('data:')) {
               const jsonStr = line.slice(5).trim();
               if (jsonStr) {
@@ -412,6 +442,15 @@ async function* invokeAgentCoreReal(
     );
 
     req.on('error', (err: Error) => finish(err));
+    // TCP keepalive probes keep the connection from looking idle to the network and find out when the other end is gone.
+    req.on('socket', (sock) => { try { sock.setKeepAlive(true, 30_000); } catch { /* not every socket supports it */ } });
+    stallTimer = setInterval(() => {
+      const quietMs = Date.now() - lastByteAt;
+      if (!sawKeepalive || quietMs <= stallMs()) return;
+      finish(new AgentCoreStallError(Math.round(quietMs / 1000)));
+      req.destroy();
+    }, Math.max(20, Math.min(5_000, Math.floor(stallMs() / 3))));
+    stallTimer.unref?.();
     req.write(bodyStr);
     req.end();
   }
@@ -657,6 +696,7 @@ export async function runKiroViaAgentCore(
   const merged = signal ? mergeAbortSignals([signal, ac.signal]) : ac.signal;
 
   let timedOut = false;
+  let stalled = false;
   const timeoutTimer = setTimeout(() => {
     timedOut = true;
     // Record why first: the abort below reaches the run as an error that would otherwise read as "Cancelled".
@@ -855,10 +895,14 @@ export async function runKiroViaAgentCore(
           break;
       }
     }
+    } catch (e) {
+      if (e instanceof AgentCoreStallError) stalled = true;
+      throw e;
     } finally {
       signal?.removeEventListener('abort', onCancel);
-      // The portal's time limit ended the stream: tell the runner to stop too, so it does not keep working unseen.
-      if (timedOut) void send({ mode: 'cancel', runId: opts.runId }).catch(() => { /* the stream is closing anyway */ });
+      // The portal's time limit (or a dropped connection) ended the stream: tell the runner to stop too, so it does not keep working unseen
+      // and keep the session's machine busy for the next message.
+      if (timedOut || stalled) void send({ mode: 'cancel', runId: opts.runId }).catch(() => { /* the stream is closing anyway */ });
     }
   } finally {
     clearTimeout(timeoutTimer);

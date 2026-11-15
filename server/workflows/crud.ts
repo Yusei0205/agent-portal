@@ -27,6 +27,7 @@ import { shutdownSessionBrowser } from '../agent/browser-manager.ts';
 import { cancelRun } from './controls.ts';
 import { startRun } from './driver.ts';
 import { runPortalCommand, PORTAL_COMMANDS } from './slash-commands.ts';
+import { lostRunReason, closeLostRun } from './lost-runs.ts';
 import { parseSlashCommand, resolveSessionCommand, sessionCommands, unknownCommandText } from './session-commands.ts';
 import { requestRepoPrep, getRepoPrep } from '../agent/repo-prep.ts';
 import { setCavemanMode } from '../agent/caveman-guidance.ts';
@@ -797,6 +798,9 @@ export function registerWorkflowRoutes(): void {
 
     const activeRun = await repo.getActiveRun(w.id);
     if (activeRun) cancelRun(activeRun.id);
+    // A turn whose process was lost never ends by itself, so Stop ends it here (a live one stops itself: it sees the session paused).
+    const lostReason = activeRun ? lostRunReason(activeRun) : null;
+    if (activeRun && lostReason) await closeLostRun(activeRun.id, lostReason);
     // Who stopped it, and from where (the page says: the Esc or Ctrl+C shortcut, the Stop button, or Stop and send now): a turn that
     // ends without the person remembering stopping it can be traced.
     const rawSource = (req.body as Record<string, unknown> | undefined)?.source;

@@ -158,6 +158,7 @@ function itemToRun(item: Record<string, AttributeValue>): RunRecord {
     created_at: getString(item, 'created_at') ?? '',
     stop_reason: getString(item, 'stop_reason'),
     time_limit_at: getString(item, 'time_limit_at'),
+    heartbeat_at: getString(item, 'heartbeat_at'),
     model: getString(item, 'model'),
     error: getString(item, 'error'),
   };
@@ -1098,6 +1099,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       created_at: input.created_at,
       stop_reason: null,
       time_limit_at: null,
+      heartbeat_at: null,
       model: null,
       error: null,
     };
@@ -1110,7 +1112,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     const allowed: (keyof RunRecord)[] = [
       'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
-      'stop_reason', 'time_limit_at', 'model', 'error',
+      'stop_reason', 'time_limit_at', 'heartbeat_at', 'model', 'error',
     ];
     const setExprs: string[] = [];
     const names: Record<string, string> = {};
@@ -1149,7 +1151,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     const allowed: (keyof RunRecord)[] = [
       'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
-      'stop_reason', 'time_limit_at', 'model', 'error',
+      'stop_reason', 'time_limit_at', 'heartbeat_at', 'model', 'error',
     ];
     const setExprs: string[] = [];
     const names: Record<string, string> = { '#curSt': 'status' };
@@ -2066,7 +2068,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     const allowed: (keyof RunRecord)[] = [
       'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
-      'stop_reason', 'time_limit_at', 'model', 'error',
+      'stop_reason', 'time_limit_at', 'heartbeat_at', 'model', 'error',
     ];
     const setExprs: string[] = [];
     const names: Record<string, import('@aws-sdk/client-dynamodb').AttributeValue> = {};

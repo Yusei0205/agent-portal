@@ -94,6 +94,7 @@ function toRun(row: Row): RunRecord {
     created_at: String(row.created_at ?? ''),
     stop_reason: row.stop_reason != null ? String(row.stop_reason) : null,
     time_limit_at: row.time_limit_at != null ? String(row.time_limit_at) : null,
+    heartbeat_at: row.heartbeat_at != null ? String(row.heartbeat_at) : null,
     model: row.model != null ? String(row.model) : null,
     error: row.error != null ? String(row.error) : null,
   };
@@ -435,7 +436,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     const allowed: (keyof RunRecord)[] = [
       'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
-      'stop_reason', 'time_limit_at', 'model', 'error',
+      'stop_reason', 'time_limit_at', 'heartbeat_at', 'model', 'error',
     ];
     const clean: Record<string, unknown> = {};
     for (const k of allowed) {
@@ -454,7 +455,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
     const allowed: (keyof RunRecord)[] = [
       'status', 'started_at', 'finished_at', 'cost_usd', 'credits', 'input_tokens',
       'output_tokens', 'cache_write_tokens', 'cache_read_tokens',
-      'stop_reason', 'time_limit_at', 'model', 'error',
+      'stop_reason', 'time_limit_at', 'heartbeat_at', 'model', 'error',
     ];
     const clean: Record<string, unknown> = {};
     for (const k of allowed) {
