@@ -560,6 +560,10 @@ export function ComposerBar({
         return;
       }
       if (isSlash && onOptimisticSend) onOptimisticSend(clientId, text);
+      // The agent has the files, but a copy could not be kept in the Vault: say so instead of leaving it unnoticed.
+      if (res?.vaultNotSaved?.length) {
+        setResumeError(`Sent, but not kept in the Vault: ${res.vaultNotSaved.map((f) => f.name).join(', ')}. The agent still has the files.`);
+      }
       // Always ask the server to start: it does nothing when a run is already going. The page's own idea of
       // "running" can be out of date right after a run ends, and skipping the start left the message unanswered.
       if (!res?.resumed) {

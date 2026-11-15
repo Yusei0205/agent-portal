@@ -880,7 +880,7 @@ export function registerWorkflowRoutes(): void {
     }
     const attachments = await saveChatAttachments(req.params.id, w.id, body.attachmentIds);
     // A copy stays in the project Vault, in this session's "User uploads" folder.
-    if (attachments.length) await saveUploadsToVault(w, attachments, req.user?.id ?? null);
+    const vaultCopy = attachments.length ? await saveUploadsToVault(w, attachments, req.user?.id ?? null) : { saved: [], failed: [] };
     if (!message && attachments.length) message = 'Please read the attached files.';
     if (!message) { sendJson(res, 400, { error: 'Message must not be empty' }); return; }
 
@@ -1006,7 +1006,7 @@ ${answer}`,
       }
     }
 
-    sendJson(res, 200, { ok: true, kind, resumed });
+    sendJson(res, 200, { ok: true, kind, resumed, ...(vaultCopy.failed.length ? { vaultNotSaved: vaultCopy.failed } : {}) });
   });
 
   // GET /api/slash-commands — the commands the portal answers itself

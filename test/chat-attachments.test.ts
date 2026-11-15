@@ -77,7 +77,7 @@ describe('chat attachment delivery', () => {
   it('a message with a file is still saved when the Vault copy cannot be made', async () => {
     const { setVaultFilesRepository, getVaultFilesRepository } = await import('../server/repositories/vault-files.ts');
     const real = getVaultFilesRepository();
-    setVaultFilesRepository({ ...real, create: async () => { throw new Error('vault is full'); } } as typeof real);
+    setVaultFilesRepository(Object.assign(Object.create(real), { create: async () => { throw new Error('vault is full'); } }) as typeof real);
     try {
       const made = await fetchJson(baseUrl, '/api/projects/' + projectId + '/workflows', { method: 'POST', cookie, body: { goal: 'Vault broken check', engine: 'demo' } });
       const wf = (made.body as { workflow: { id: string } }).workflow.id;
@@ -86,7 +86,26 @@ describe('chat attachment delivery', () => {
       assert.equal(sent.status, 200, JSON.stringify(sent.body));
       const event = one<{ data: string }>("SELECT data FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'human' ORDER BY id DESC LIMIT 1", wf)!;
       assert.equal(JSON.parse(event.data).attachments[0].name, 'plain.txt');
+      // ...and the person is told the copy was not kept (the message above still went through).
+      assert.deepEqual(sent.body, { ok: true, kind: 'human', resumed: false, vaultNotSaved: [{ name: 'plain.txt', reason: 'vault is full' }] });
     } finally { setVaultFilesRepository(real); }
+  });
+  it('keeps a file bigger than the Vault page upload limit (a 47 MB scan zip was silently skipped before)', async () => {
+    const { saveUploadsToVault } = await import('../server/session-attachments.ts');
+    const made = await fetchJson(baseUrl, '/api/projects/' + projectId + '/workflows', { method: 'POST', cookie, body: { goal: 'Big upload check', engine: 'demo' } });
+    const wf = (made.body as { workflow: { id: string } }).workflow;
+    const slug = ((await fetchJson(baseUrl, '/api/projects/' + projectId, { cookie })).body as { project: { slug: string } }).project.slug;
+    const dir = path.join(config.dataDir, 'projects', slug, 'uploads', wf.id, 'chat');
+    await fs.mkdir(dir, { recursive: true });
+    const size = 47 * 1024 * 1024;
+    await fs.writeFile(path.join(dir, 'big.zip'), Buffer.alloc(size, 7));
+    const result = await saveUploadsToVault({ id: wf.id, project_id: projectId, title: null, goal: 'Big upload check' }, [{ path: 'big.zip', name: 'sonarscan_20261112.zip', size }], null);
+    assert.deepEqual(result, { saved: ['sonarscan_20261112.zip'], failed: [] });
+    const row = one<{ size_bytes: number; folder: string; mime_type: string; path: string }>("SELECT size_bytes, folder, mime_type, path FROM vault_files WHERE source_workflow_id = ?", wf.id)!;
+    assert.equal(row.size_bytes, size);
+    assert.equal(row.mime_type, 'application/zip');
+    assert.match(row.folder, /\/User uploads$/);
+    assert.equal((await fs.stat(path.join(config.dataDir, ...row.path.split('/')))).size, size, 'the whole file was copied');
   });
   it('rejects malformed, foreign-project, oversized attachments and slash commands before saving a message', async () => {
     const count = () => all('SELECT id FROM p6_workflow_events WHERE workflow_id = ?', workflowId).length;

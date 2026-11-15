@@ -127,30 +127,29 @@ const VAULT_MIME: Record<string, string> = {
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 };
-/** The biggest file a Vault takes (the Vault page's own limit). */
-const VAULT_FILE_MAX = 25 * 1024 * 1024;
-
 /**
  * Keep a copy of the files a person attached in the chat in the project Vault, under the session's "User uploads" folder with
  * their own names, so they stay with the project after the message (and can be opened, downloaded and shared from the Vault page).
- * Best effort: a file that cannot be copied is skipped and never stops the message. The agent still gets the files as before, in
- * its attachments/ folder. Returns the Vault names that were saved.
+ * Best effort: a file that cannot be copied is never allowed to stop the message (the agent still gets the files as before, in its
+ * attachments/ folder), but it is reported back so the person is told. There is no size cap of its own: the chat already limits what
+ * can be attached, and the Vault page's 25 MB limit is for its upload form, not for this server-side copy.
  */
 export async function saveUploadsToVault(
   wf: { id: string; project_id: string | null; title?: string | null; goal?: string | null },
   saved: ChatAttachment[],
   uploadedBy: string | null,
-): Promise<string[]> {
-  if (!wf.project_id || !saved.length) return [];
+): Promise<{ saved: string[]; failed: Array<{ name: string; reason: string }> }> {
+  const out = { saved: [] as string[], failed: [] as Array<{ name: string; reason: string }> };
+  if (!wf.project_id || !saved.length) return out;
   const projectId = String(wf.project_id);
   const repo = getVaultFilesRepository();
   const folder = `${sessionVaultFolder(wf)}/${USER_UPLOADS_FOLDER}`;
-  const names: string[] = [];
   let dir: string;
-  try { dir = await storageDir(projectId, wf.id); } catch { return []; }
+  try { dir = await storageDir(projectId, wf.id); } catch (e) {
+    return { saved: [], failed: saved.map((a) => ({ name: a.name, reason: (e as Error).message })) };
+  }
   for (const a of saved) {
     try {
-      if (a.size > VAULT_FILE_MAX) continue;
       const src = path.join(dir, a.path);
       const ext = path.extname(a.name);
       const stem = path.basename(a.name, ext).replace(/[\\/:*?"<>|]/g, '_').replace(/\p{Cc}/gu, '_').trim().slice(0, 150) || 'file';
@@ -168,10 +167,11 @@ export async function saveUploadsToVault(
         id, project_id: projectId, user_id: null, name, path: rel, size_bytes: a.size, mime_type: mime,
         uploaded_by: uploadedBy, folder, source_workflow_id: wf.id, created_at: now(),
       });
-      names.push(name);
+      out.saved.push(name);
     } catch (e) {
       console.warn(`[session-attachments] could not copy ${a.name} to the Vault: ${(e as Error).message}`);
+      out.failed.push({ name: a.name, reason: (e as Error).message });
     }
   }
-  return names;
+  return out;
 }
