@@ -22,13 +22,24 @@ export const RECOVERY_PREFIX = '↻';
 /** Automatic recoveries in a row, without a message from the person in between. */
 export const MAX_AUTO_RECOVERIES = 2;
 
-export type InterruptionKind = 'connection-lost' | 'timed-out' | 'turn-lost';
+export type InterruptionKind = 'connection-lost' | 'timed-out' | 'turn-lost' | 'engine-connection';
+
+/** A short wait before an automatic turn after the engine's own service had a connection problem, so the retry does not hit the same hiccup. */
+export function engineRetryDelayMs(): number {
+  const n = Number(process.env.PORTAL_ENGINE_RETRY_DELAY_MS);
+  return Number.isFinite(n) && n >= 0 && process.env.PORTAL_ENGINE_RETRY_DELAY_MS !== undefined ? n : 30_000;
+}
 
 /** Whether an error that ended a turn is an interruption (not the agent's own failure, not the person's Stop), and how to say it. */
 export function interruptionOf(e: unknown): { kind: InterruptionKind; why: string } | null {
   const err = e as { name?: string; status?: number; message?: string } | null;
   if (err?.name === 'AgentCoreStallError') return { kind: 'connection-lost', why: 'the connection to the runner was lost' };
   if (err?.status === 504 && /timed out/i.test(String(err.message ?? ''))) return { kind: 'timed-out', why: "the runner's time limit for one turn was reached" };
+  // kiro-cli could not reach (or lost its connection to) Kiro's service and gave up after its own retries: "ACP error -32603: Internal error
+  // (Encountered an error in the response stream: ... dispatch failure)". The turn did not fail on its own merits.
+  if (/-32603|dispatch failure|error in the response stream/i.test(String(err?.message ?? ''))) {
+    return { kind: 'engine-connection', why: "the engine's service had a connection problem (it was retried and still failed)" };
+  }
   return null;
 }
 
@@ -88,7 +99,7 @@ export async function recoverAfterInterruption(
   workflowId: string,
   runId: string,
   why: string,
-  opts: { auto?: boolean } = {},
+  opts: { auto?: boolean; delayMs?: number } = {},
 ): Promise<RecoveryOutcome> {
   const out: RecoveryOutcome = { notified: false, continued: false };
   try {
@@ -99,6 +110,7 @@ export async function recoverAfterInterruption(
     if (opts.auto !== false) {
       const bodies = (await repo.listHumanWorkflowEvents(workflowId, null, null, null)).map((m) => String(m.body));
       if (trailingRecoveries(bodies) < MAX_AUTO_RECOVERIES) {
+        if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
         const driver = await import('./driver.ts');
         // A message the person sent while the turn was going is the next instruction: it starts the turn instead.
         out.continued = await driver.continueWithQueuedMessages(workflowId);

@@ -62,7 +62,7 @@ import { buildRunnerMcpServers, parseSessionIntegrations, pendingMcpSignIns } fr
 import { mcpSignedIn, mcpSkippedForRun } from '../mcp-oauth.ts';
 import { readLoopState, loopPrompt, afterRun as loopAfterRun } from '../workflows/loop.ts';
 import { eventPrompt, goalPrompt } from '../workflows/session-commands.ts';
-import { interruptionOf, recoverAfterInterruption } from '../workflows/recovery.ts';
+import { interruptionOf, recoverAfterInterruption, engineRetryDelayMs } from '../workflows/recovery.ts';
 import { runCheckSteps } from './runner-checks.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
@@ -297,7 +297,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
   const repo = getSessionsRepository();
   // Set when the turn was cut off by something that is not the person (a dropped connection, the runner's time limit): once the run is
   // closed and cleaned up, the person is told and the leftover task goes on (see workflows/recovery.ts).
-  let interruption: { why: string } | null = null;
+  let interruption: { why: string; delayMs: number } | null = null;
   const workflow = await repo.getWorkflowById(workflowId);
   if (!workflow) {
     // Workflow was deleted between createRun and executeRun.
@@ -796,7 +796,7 @@ ${agentRun.goal}`;
 
     if (!aborted) {
       const cutOff = interruptionOf(e);
-      if (cutOff) interruption = { why: cutOff.why };
+      if (cutOff) interruption = { why: cutOff.why, delayMs: cutOff.kind === 'engine-connection' ? engineRetryDelayMs() : 0 };
       console.error(`[runner] Run ${runId} failed:`, e);
       if (loopState) {
         try { await loopAfterRun(workflowId, { result: msg, failed: true }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
@@ -828,7 +828,7 @@ ${agentRun.goal}`;
     // Clean up per-run event chain (DynamoDB mode).
     cleanupRunEventChain(runId);
     // Last, so the new turn does not start while this one is still being cleaned up. Never throws.
-    if (interruption) await recoverAfterInterruption(workflowId, runId, interruption.why, { auto: true });
+    if (interruption) await recoverAfterInterruption(workflowId, runId, interruption.why, { auto: true, delayMs: interruption.delayMs });
   }
 }
 

@@ -27,6 +27,16 @@ describe('what counts as an interruption', () => {
     assert.equal(interruptionOf(null), null);
   });
 
+  it("Kiro's own service dropping the connection counts too (the error a real session showed), but an ordinary Kiro failure does not", () => {
+    const real = new Error('AgentCore kiro-run error: ACP error: ACP error -32603: Internal error (Encountered an error in the response stream: An unknown error occurred: dispatch failure) [session/prompt]');
+    const hit = interruptionOf(real);
+    assert.equal(hit?.kind, 'engine-connection');
+    assert.match(hit!.why, /engine's service had a connection problem/);
+    assert.equal(interruptionOf(new Error('kiro-cli exited with code 1')), null);
+    assert.equal(interruptionOf(new Error('Kiro credential has no API key stored')), null);
+    assert.equal(interruptionOf(new Error('ACP error -32602: Invalid params')), null, 'a different ACP error is the agent or the request, not the connection');
+  });
+
   it('counts the recoveries sent in a row since the person last wrote', () => {
     assert.equal(trailingRecoveries([]), 0);
     assert.equal(trailingRecoveries(['check the scan']), 0);
@@ -260,6 +270,48 @@ describe('recovering a session', () => {
     assert.equal(item.run_id, first);
     assert.match(prompts[1], /Scanning the code for secrets/, 'the second turn was given what the first had done');
     assert.match(prompts[1], /grep -rn secret/);
+  });
+
+  it('waits the given time before an automatic turn, so a retry does not hit the same hiccup', async () => {
+    const wid = await session();
+    await asked(wid, 'Check the scan');
+    const rid = await cutOffTurn(wid, ['Running: ls'], ['hi']);
+    let startedAt = 0;
+    queuedDeps.startRun = (async () => { startedAt = Date.now(); return 'next-run'; }) as typeof realStart;
+    const t0 = Date.now();
+    const out = await recoverAfterInterruption(wid, rid, 'it was cut off', { delayMs: 250 });
+    assert.equal(out.continued, true);
+    assert.ok(startedAt - t0 >= 240, `started after ${startedAt - t0} ms`);
+  });
+
+  it('end to end: the engine service drops the connection mid-turn (the real error text), the person is told and the turn is carried on after the short wait', async () => {
+    const was = process.env.PORTAL_ENGINE_RETRY_DELAY_MS;
+    process.env.PORTAL_ENGINE_RETRY_DELAY_MS = '150';
+    try {
+      const wid = await session('Capture the console pages');
+      let turns = 0;
+      _setEngineOverride(async (ctx) => {
+        turns++;
+        if (turns === 1) {
+          ctx.emit('tool-start', { toolName: 'Running: @browser/capture', toolInput: '{}', toolCallId: 't1' });
+          throw new Error('AgentCore kiro-run error: ACP error: ACP error -32603: Internal error (Encountered an error in the response stream: An unknown error occurred: dispatch failure) [session/prompt]');
+        }
+        return 'Captured the pages.';
+      });
+      const { startRun } = await import('../server/workflows/driver.ts');
+      await startRun(wid);
+      for (let i = 0; i < 200; i++) {
+        const runs = all<{ status: string }>('SELECT status FROM p6_runs WHERE workflow_id = ? ORDER BY created_at', wid);
+        if (runs.length >= 2 && runs[1].status === 'done') break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      assert.equal(turns, 2);
+      const [item] = inboxOf(wid);
+      assert.equal(item.payload.kind, 'turn-interrupted');
+      assert.match(String(item.payload.reason), /engine's service had a connection problem/);
+      assert.equal(item.payload.continued, true);
+      assert.ok((await humans(wid)).some((b) => b.startsWith(RECOVERY_PREFIX)));
+    } finally { if (was === undefined) delete process.env.PORTAL_ENGINE_RETRY_DELAY_MS; else process.env.PORTAL_ENGINE_RETRY_DELAY_MS = was; }
   });
 
   it('a turn that keeps getting cut off is retried twice and then left for the person, with the inbox item to say so', async () => {
