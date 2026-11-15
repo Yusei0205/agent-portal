@@ -37,6 +37,14 @@ describe('what counts as an interruption', () => {
     assert.equal(interruptionOf(new Error('ACP error -32602: Invalid params')), null, 'a different ACP error is the agent or the request, not the connection');
   });
 
+  it("the engine's process stopping mid-turn counts (the runner's 29-minute turn limit shows up only as this text), a start-up failure does not", () => {
+    const real = new Error('AgentCore kiro-run error: ACP error: kiro-cli process exited');
+    const hit = interruptionOf(real);
+    assert.equal(hit?.kind, 'engine-stopped');
+    assert.match(hit!.why, /process stopped before the turn finished/);
+    assert.equal(interruptionOf(new Error('kiro-cli exited with code 1')), null, 'it never started: an ordinary failure');
+  });
+
   it('counts the recoveries sent in a row since the person last wrote', () => {
     assert.equal(trailingRecoveries([]), 0);
     assert.equal(trailingRecoveries(['check the scan']), 0);
@@ -105,6 +113,8 @@ describe('recovering a session', () => {
     assert.match(brief, /What you had said last:\nI found that 12 of the 20 findings/);
     assert.match(brief, /Do not start over and do not repeat what is finished/);
     assert.match(brief, /check the state of the work/);
+    assert.match(brief, /kept in \/tmp .* is gone when a turn is cut off/, 'told that /tmp does not survive, so it keeps work in the work folder');
+    assert.match(brief, /inside the work folder, not in \/tmp/);
   });
 
   it('the brief asks about the person\'s own message, not a recovery the portal sent', async () => {
@@ -312,6 +322,33 @@ describe('recovering a session', () => {
       assert.equal(item.payload.continued, true);
       assert.ok((await humans(wid)).some((b) => b.startsWith(RECOVERY_PREFIX)));
     } finally { if (was === undefined) delete process.env.PORTAL_ENGINE_RETRY_DELAY_MS; else process.env.PORTAL_ENGINE_RETRY_DELAY_MS = was; }
+  });
+
+  it('end to end: the runner stops a long turn at its limit ("kiro-cli process exited"): the person is told and the next turn carries on, with the /tmp warning in its prompt', async () => {
+    const wid = await session('Generate the Excel of findings');
+    const prompts: string[] = [];
+    _setEngineOverride(async (ctx) => {
+      prompts.push(ctx.run.goal);
+      if (prompts.length === 1) {
+        ctx.emit('tool-start', { toolName: 'Running: python3 build_report.py', toolInput: '{}', toolCallId: 't1' });
+        throw new Error('AgentCore kiro-run error: ACP error: kiro-cli process exited');
+      }
+      return 'Wrote the Excel file.';
+    });
+    const { startRun } = await import('../server/workflows/driver.ts');
+    await startRun(wid);
+    for (let i = 0; i < 200; i++) {
+      const runs = all<{ status: string }>('SELECT status FROM p6_runs WHERE workflow_id = ? ORDER BY created_at', wid);
+      if (runs.length >= 2 && runs[1].status === 'done') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(prompts.length, 2, 'the portal ran the next turn by itself');
+    const [item] = inboxOf(wid);
+    assert.equal(item.payload.kind, 'turn-interrupted');
+    assert.match(String(item.payload.reason), /process stopped before the turn finished/);
+    assert.equal(item.payload.continued, true);
+    assert.match(prompts[1], /Running: python3 build_report\.py/, 'what it had been doing');
+    assert.match(prompts[1], /inside the work folder, not in \/tmp/);
   });
 
   it('a turn that keeps getting cut off is retried twice and then left for the person, with the inbox item to say so', async () => {

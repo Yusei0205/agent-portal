@@ -22,7 +22,7 @@ export const RECOVERY_PREFIX = '↻';
 /** Automatic recoveries in a row, without a message from the person in between. */
 export const MAX_AUTO_RECOVERIES = 2;
 
-export type InterruptionKind = 'connection-lost' | 'timed-out' | 'turn-lost' | 'engine-connection';
+export type InterruptionKind = 'connection-lost' | 'timed-out' | 'turn-lost' | 'engine-connection' | 'engine-stopped';
 
 /** A short wait before an automatic turn after the engine's own service had a connection problem, so the retry does not hit the same hiccup. */
 export function engineRetryDelayMs(): number {
@@ -39,6 +39,11 @@ export function interruptionOf(e: unknown): { kind: InterruptionKind; why: strin
   // (Encountered an error in the response stream: ... dispatch failure)". The turn did not fail on its own merits.
   if (/-32603|dispatch failure|error in the response stream/i.test(String(err?.message ?? ''))) {
     return { kind: 'engine-connection', why: "the engine's service had a connection problem (it was retried and still failed)" };
+  }
+  // The engine's process went away in the middle of the turn: the runner stops it at its own turn limit (29 minutes), and it can also be
+  // killed. The runner reports that only as "ACP error: kiro-cli process exited". (A start-up failure is "exited with code N": not this.)
+  if (/kiro-cli process exited/i.test(String(err?.message ?? ''))) {
+    return { kind: 'engine-stopped', why: "the engine's process stopped before the turn finished (the runner's 29-minute limit for one turn, or it was killed)" };
   }
   return null;
 }
@@ -76,7 +81,9 @@ export async function buildRecoveryBrief(workflowId: string, runId: string | nul
   }
   if (said) lines.push(`What you had said last:\n${clip(said, 1200)}`);
   lines.push(
-    'Carry on with the task from where you stopped. Do not start over and do not repeat what is finished: first check the state of the work '
+    'Anything you kept in /tmp or another machine-local folder is gone when a turn is cut off: look in the work folder (the current directory) and '
+    + 'its files first, and from now on keep notes, partial results and files you will need again inside the work folder, not in /tmp. '
+    + 'Carry on with the task from where you stopped. Do not start over and do not repeat what is finished: first check the state of the work '
     + '(the files, git status, anything you had produced) and continue with what is left. If something you needed is gone, redo only that. '
     + 'If the task was already complete, say so briefly.',
   );
