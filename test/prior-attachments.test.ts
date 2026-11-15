@@ -24,7 +24,9 @@ before(async () => {
 });
 after(async () => { _setEngineOverride(null); await cleanup(); });
 
-const realZip = async (): Promise<Buffer> => { const z = new JSZip(); z.file('findings.csv', 'a,b,1,2'); return z.generateAsync({ type: 'nodebuffer' }); };
+// Built once: a zip carries the time it was made (to the second), so two builds can differ.
+let zipBytes: Buffer | null = null;
+const realZip = async (): Promise<Buffer> => zipBytes ??= await (async () => { const z = new JSZip(); z.file('findings.csv', 'a,b,1,2'); return z.generateAsync({ type: 'nodebuffer' }); })();
 const upload = async (name: string, data: string | Buffer): Promise<string> => {
   const form = new FormData();
   form.append('file', new Blob([typeof data === 'string' ? data : new Uint8Array(data)]), name);
