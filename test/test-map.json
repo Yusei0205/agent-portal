@@ -1153,7 +1153,8 @@
         "test/direct-upload.test.ts",
         "test/direct-upload-web.test.ts",
         "test/ai-attachments-repo.test.ts",
-        "test/chat-attachments.test.ts"
+        "test/chat-attachments.test.ts",
+        "test/prior-attachments.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for attachments yet."

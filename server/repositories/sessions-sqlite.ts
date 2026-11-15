@@ -683,14 +683,14 @@ export class SqliteSessionsRepository implements SessionsRepository {
     afterDate?: string | null,
     maxExcludeId?: number | null,
     beforeOrAtDate?: string | null,
-  ): Promise<Array<{ id: number; body: string; created_at: string }>> {
+  ): Promise<Array<{ id: number; body: string; created_at: string; data?: string | null }>> {
     const args: (string | number)[] = [workflowId];
     const clauses: string[] = ["workflow_id = ? AND kind = 'human'"];
     if (afterDate) { clauses.push('created_at > ?'); args.push(afterDate); }
     if (maxExcludeId != null) { clauses.push('id < ?'); args.push(maxExcludeId); }
     if (beforeOrAtDate != null) { clauses.push('created_at <= ?'); args.push(beforeOrAtDate); }
-    return all<{ id: number; body: string; created_at: string }>(
-      `SELECT id, body, created_at FROM p6_workflow_events WHERE ${clauses.join(' AND ')} ORDER BY id ASC`,
+    return all<{ id: number; body: string; created_at: string; data: string | null }>(
+      `SELECT id, body, created_at, data FROM p6_workflow_events WHERE ${clauses.join(' AND ')} ORDER BY id ASC`,
       ...args,
     );
   }

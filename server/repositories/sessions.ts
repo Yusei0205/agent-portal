@@ -572,7 +572,7 @@ export interface SessionsRepository {
     afterDate?: string | null,
     maxExcludeId?: number | null,
     beforeOrAtDate?: string | null,
-  ): Promise<Array<{ id: number; body: string; created_at: string }>>;
+  ): Promise<Array<{ id: number; body: string; created_at: string; data?: string | null }>>;
 
   /**
    * Get the MAX(created_at) of workflow events with a given kind and body.

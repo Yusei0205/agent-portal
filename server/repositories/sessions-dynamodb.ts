@@ -1571,7 +1571,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     afterDate?: string | null,
     maxExcludeId?: number | null,
     beforeOrAtDate?: string | null,
-  ): Promise<Array<{ id: number; body: string; created_at: string }>> {
+  ): Promise<Array<{ id: number; body: string; created_at: string; data?: string | null }>> {
     const items = await paginateQuery(this.client, {
       TableName: runsTable(),
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
@@ -1588,6 +1588,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       id: getNumber(item, 'evtId'),
       body: getString(item, 'body') ?? '',
       created_at: getString(item, 'created_at') ?? '',
+      data: getString(item, 'data') ?? null,
     }));
     if (afterDate) results = results.filter((e) => e.created_at > afterDate);
     if (maxExcludeId != null) results = results.filter((e) => e.id < maxExcludeId);

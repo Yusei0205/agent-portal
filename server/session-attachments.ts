@@ -8,6 +8,7 @@ import { validateAttachmentIds } from './ai-attachments.ts';
 import { persistFile, restoreFile } from './durable-files.ts';
 import { INPUT_FILE_EXTS, INPUT_FILE_LIMITS } from './agent/runner-files.ts';
 import { attachmentLimits } from './agent/input-file-urls.ts';
+import { getSessionsRepository } from './repositories/sessions.ts';
 import { getVaultFilesRepository } from './repositories/vault-files.ts';
 import { sessionVaultFolder, USER_UPLOADS_FOLDER } from './session-vault-folder.ts';
 import { now } from './util.ts';
@@ -118,6 +119,71 @@ export async function stageChatAttachments(projectId: string, workflowId: string
     await persistFile(dest);
   }
   return attachments;
+}
+
+/**
+ * The files the person attached to earlier messages in this session, put back in the work folder (attachments/) for this turn.
+ *
+ * The agent is only handed the files of the message it is answering. Every later turn runs on a fresh machine, so a file attached
+ * two messages ago (a scan, a spec) was gone and the agent searched the disk for it in vain. This puts the earlier ones back, newest
+ * first, one copy of each (the same name and size attached again is one file), only those after the last /clear, and only as many
+ * as the runner accepts next to the current message's files: what does not fit is returned in `skipped` so the agent can say so.
+ * A file that can no longer be restored is skipped, never an error: the turn must not fail because of an old file.
+ */
+export async function stagePriorAttachments(
+  projectId: string,
+  workflowId: string,
+  current: ChatAttachment[],
+  workDir: string,
+): Promise<{ staged: ChatAttachment[]; skipped: ChatAttachment[] }> {
+  const out = { staged: [] as ChatAttachment[], skipped: [] as ChatAttachment[] };
+  const repo = getSessionsRepository();
+  const clearedAt = await repo.getLastWorkflowEventTime(workflowId, 'command', '/clear');
+  const events = await repo.listHumanWorkflowEvents(workflowId, clearedAt, null, null);
+  const here = new Set(current.map((a) => a.path));
+  const seen = new Set(current.map((a) => `${a.name}|${a.size}`));
+  const earlier: ChatAttachment[] = [];
+  for (const e of [...events].reverse()) {
+    let list: unknown;
+    try { list = (JSON.parse(e.data || '{}') as { attachments?: unknown }).attachments; } catch { continue; }
+    if (!Array.isArray(list)) continue;
+    for (const a of list as ChatAttachment[]) {
+      if (typeof a?.path !== 'string' || !/^[a-zA-Z0-9_-]+\.[a-zA-Z0-9]+$/.test(a.path) || typeof a.name !== 'string' || !(a.size > 0)) continue;
+      const key = `${a.name}|${a.size}`;
+      if (here.has(a.path) || seen.has(key)) continue;
+      seen.add(key);
+      earlier.push({ path: a.path, name: a.name, size: a.size });
+    }
+  }
+  if (!earlier.length) return out;
+
+  const limits = attachmentLimits();
+  let room = limits.totalBytes - current.reduce((n, a) => n + a.size, 0);
+  let slots = Math.min(limits.files, INPUT_FILE_LIMITS.files) - current.length;
+  const dir = await storageDir(projectId, workflowId);
+  const target = path.join(workDir, 'attachments');
+  await fs.mkdir(target, { recursive: true });
+  if ((await fs.lstat(target)).isSymbolicLink()) return out;
+  for (const a of earlier) {
+    if (slots <= 0 || a.size > limits.fileBytes || a.size > room) { out.skipped.push(a); continue; }
+    try {
+      const source = path.join(dir, a.path);
+      if (!await restoreFile(source) || !(await fs.lstat(source)).isFile()) { out.skipped.push(a); continue; }
+      const dest = path.join(target, a.path);
+      const existing = await fs.lstat(dest).catch(() => null);
+      if (existing && !existing.isFile()) { out.skipped.push(a); continue; }
+      if (existing) await fs.unlink(dest);
+      await fs.copyFile(source, dest, constants.COPYFILE_EXCL);
+      await persistFile(dest);
+      out.staged.push(a);
+      slots--;
+      room -= a.size;
+    } catch (e) {
+      console.warn(`[session-attachments] could not bring back ${a.name}: ${(e as Error).message}`);
+      out.skipped.push(a);
+    }
+  }
+  return out;
 }
 
 const VAULT_MIME: Record<string, string> = {
