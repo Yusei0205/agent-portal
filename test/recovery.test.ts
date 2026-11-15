@@ -351,6 +351,32 @@ describe('recovering a session', () => {
     assert.match(prompts[1], /inside the work folder, not in \/tmp/);
   });
 
+  it('the exact case from the live session: a message is sent while the long turn runs ("saved"), the runner stops the turn at its limit, and that message becomes the next turn', async () => {
+    const wid = await session('Triage the scan');
+    const prompts: string[] = [];
+    _setEngineOverride(async (ctx) => {
+      prompts.push(ctx.run.goal);
+      if (prompts.length === 1) {
+        ctx.emit('tool-start', { toolName: 'Running: python3 triage.py', toolInput: '{}', toolCallId: 't1' });
+        // The person writes while the turn is going: it is saved and waits.
+        await say(wid, 'can you generate in excel file');
+        throw new Error('AgentCore kiro-run error: ACP error: kiro-cli process exited');
+      }
+      return 'Wrote the Excel file.';
+    });
+    const { startRun } = await import('../server/workflows/driver.ts');
+    await startRun(wid);
+    for (let i = 0; i < 200; i++) {
+      const runs = all<{ status: string }>('SELECT status FROM p6_runs WHERE workflow_id = ? ORDER BY created_at', wid);
+      if (runs.length >= 2 && runs[1].status === 'done') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.equal(prompts.length, 2, 'the next turn started by itself; the saved message did not sit there');
+    assert.match(prompts[1], /can you generate in excel file/, 'it is what the next turn works on');
+    assert.ok(!(await humans(wid)).some((b) => b.startsWith(RECOVERY_PREFIX)), 'no extra continue message: the person own message is the instruction');
+    assert.equal(inboxOf(wid)[0].payload.continued, true);
+  });
+
   it('a turn that keeps getting cut off is retried twice and then left for the person, with the inbox item to say so', async () => {
     const wid = await session('Check the scan');
     let turns = 0;
