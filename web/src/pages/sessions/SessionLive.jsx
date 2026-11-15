@@ -6,6 +6,7 @@ import { formatCost, formatCredits } from '../../lib/util.js';
 import { Icon } from '../../components/Icon.jsx';
 import { sanitizeMarkdown } from '../../lib/sanitize.js';
 import { mergeConsecutiveAssistantText, collectThoughtParagraphs, mergeEventLists, placeRunNotes } from '../../lib/mergeEvents.js';
+import { lastClearAt, afterClear } from '../../lib/clearBoundary.js';
 import { findOutputFileMentions } from '../../lib/outputFileMatch.js';
 import { linkConversationFiles } from '../../lib/conversationFiles.js';
 import { OutputFilePreview } from './OutputFilePreview.jsx';
@@ -1102,6 +1103,8 @@ export function SessionLive({
   // True once we have loaded the oldest page (nextCursor became null).
   // The goal bubble is only shown when we know there is no earlier history.
   const [reachedStart, setReachedStart]               = useState(false);
+  // After /clear: show the messages from before it too.
+  const [showBeforeClear, setShowBeforeClear]         = useState(false);
 
   // Ref that always mirrors current `events` — readable inside effects on runId
   // change before useRunStream resets its state.
@@ -1135,7 +1138,7 @@ export function SessionLive({
   // Show the goal bubble only once we know there is no earlier history (i.e.
   // the oldest page has been loaded).  This prevents the bubble from
   // disappearing or flickering when a session has more than one page of events.
-  const showGoal = Boolean(goalText) && loadedInitialTranscript && reachedStart;
+  const showGoal = Boolean(goalText) && loadedInitialTranscript && reachedStart && (!lastClearAt(earlierEvents) || showBeforeClear);
 
   // Reasoning paragraphs from the current stream (streamed chunks joined as sent)
   const agentThoughts = collectThoughtParagraphs(events);
@@ -1194,8 +1197,16 @@ export function SessionLive({
   // A message typed while the agent works, a /command's answer or an engine switch made during or after the current
   // run sits at its place in time within that run, not among the earlier history above it.
   const placed = placeRunNotes(displayEarlierEventsAll, dedupedAll);
-  const displayEarlierEvents = placed.earlier.filter(dropStaleFailure);
-  const dedupedDisplayEvents = placed.current.filter(dropStaleFailure);
+  const allEarlier = placed.earlier.filter(dropStaleFailure);
+  const allCurrent = placed.current.filter(dropStaleFailure);
+  // After /clear the chat starts again: what came before is hidden until asked for.
+  const clearAt = lastClearAt([...allEarlier, ...allCurrent]);
+  const cleared = Boolean(clearAt) && !showBeforeClear;
+  const displayEarlierEvents = cleared ? afterClear(allEarlier, clearAt) : allEarlier;
+  const dedupedDisplayEvents = cleared ? afterClear(allCurrent, clearAt) : allCurrent;
+  const hiddenByClear = cleared
+    ? [...allEarlier, ...allCurrent].filter((e) => !(String(e.created_at || '') >= clearAt) && (e.type === 'human' || e.type === 'assistant-text')).length
+    : 0;
 
   // ── New-run handling: when runId changes, persist current events ─────────
 
@@ -1531,8 +1542,18 @@ export function SessionLive({
         aria-atomic="false"
         aria-relevant="additions"
       >
+        {/* After /clear: what came before is hidden */}
+        {cleared && hiddenByClear > 0 && (
+          <div className="ide-load-more">
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowBeforeClear(true)}>
+              <Icon name="chevron-up" size={13} />
+              Show {hiddenByClear} earlier message{hiddenByClear === 1 ? '' : 's'} (before /clear)
+            </button>
+          </div>
+        )}
+
         {/* Load earlier turns */}
-        {nextCursor && (
+        {nextCursor && !cleared && (
           <div className="ide-load-more">
             <button
               type="button"

@@ -118,9 +118,21 @@ describe('slash commands in each engine', () => {
         assert.match(r.answer, /definitely-not-a-command/);
       });
 
-      it('/clear is accepted', async () => {
-        const r = await run(wfId, '/clear');
-        assert.equal(r.status, 200, JSON.stringify(r.body));
+      it('/clear is answered by the portal: the conversation restarts and no run starts', async () => {
+        const { all, one, run: dbRun } = await import('../server/db.ts');
+        dbRun("UPDATE p6_workflows SET engine_session_id = 'sess-1', engine_session_engine = ? WHERE id = ?", engine, wfId);
+        // The typed forms that all mean /clear: case, spaces and trailing words.
+        for (const typed of ['/clear', '/CLEAR', '  /clear  ', '/clear now please']) {
+          const r = await run(wfId, typed);
+          assert.equal(r.status, 200, `${typed}: ${JSON.stringify(r.body)}`);
+          assert.equal(r.body.handled, true, `${typed} must be answered by the portal`);
+          assert.match(r.answer, /cleared/i, typed);
+        }
+        assert.equal(await field('engine_session_id'), null, 'the engine conversation is dropped');
+        const marks = all<{ id: number; consumed: number }>("SELECT id, consumed FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'command' AND body = '/clear'", wfId);
+        assert.equal(marks.length, 4, 'each /clear leaves the marker the recap looks for');
+        assert.ok(marks.every((m) => m.consumed === 1), 'the marker is not waiting to be sent to the agent');
+        assert.equal(one<{ n: number }>("SELECT COUNT(*) AS n FROM p6_workflow_events WHERE workflow_id = ? AND consumed = 0 AND kind IN ('human','command')", wfId)?.n, 0);
       });
 
       it('no command became a message to the agent, and no run started', async () => {

@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStopShortcut } from '../../lib/useStopShortcut.js';
+import { addToHistory, idleHistory, stepHistory } from '../../lib/messageHistory.js';
 import { api } from '../../lib/api.js';
 import { subscribeProject } from '../../lib/events.js';
 import { navigate } from '../../lib/router.js';
@@ -250,6 +251,9 @@ export function ComposerBar({
   // null = auto-grow with content; number = manually set height in pixels
   const [composerH, setComposerH] = useState(() => loadComposerH());
   const textareaRef = useRef(null);
+  // Up arrow brings back what was sent before, as in a terminal. The list comes from the session's saved messages
+  // and grows with what is sent here.
+  const historyRef = useRef({ items: [], nav: { index: 0, draft: '' } });
   const composerRef = useRef(null);
   const rowRef      = useRef(null); // the input row: the height the person drags is this row's, not the whole box
   const isDragging  = useRef(false);
@@ -372,6 +376,20 @@ export function ComposerBar({
     : [];
   const showArgMenu = !showMenu && argItems.length > 0 && !argItems.some((o) => o.value.toLowerCase() === argQuery);
   const showSlashHint = isSlashCommand(message) && !showMenu && !showArgMenu;
+
+  useEffect(() => {
+    if (!workflow?.id) return undefined;
+    let live = true;
+    historyRef.current = { items: [], nav: idleHistory([]) };
+    api.get(`/api/projects/${projectId}/workflows/${workflow.id}/message-history`)
+      .then((d) => {
+        if (!live) return;
+        const items = (d.messages ?? []).reduce((list, m) => addToHistory(list, m), historyRef.current.items);
+        historyRef.current = { items, nav: idleHistory(items) };
+      })
+      .catch(() => { /* the arrow keys then recall only what is sent from this page */ });
+    return () => { live = false; };
+  }, [projectId, workflow?.id]);
 
   // The session's commands: the portal's, /init and /review, and the owner's own commands and skills.
   useEffect(() => { setCommands(null); }, [workflow?.id, workflow?.engine]);
@@ -515,6 +533,10 @@ export function ComposerBar({
       return;
     }
     const clientId = `pending-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    {
+      const items = addToHistory(historyRef.current.items, text);
+      historyRef.current = { items, nav: idleHistory(items) };
+    }
 
     // Optimistic: show bubble immediately + clear composer (commands show their answer instead)
     if (!isSlash && onOptimisticSend) onOptimisticSend(clientId, text, sentAttachments);
@@ -580,6 +602,20 @@ export function ComposerBar({
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
         e.preventDefault();
         send(`/${argCmd} ${argItems[Math.min(menuIdx, argItems.length - 1)].value}`);
+        return;
+      }
+    }
+    // Up and Down walk through the messages sent before (when no menu is using the arrows).
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const el = e.currentTarget;
+      const step = stepHistory(historyRef.current.items, historyRef.current.nav, e.key, {
+        value: el.value, selStart: el.selectionStart, selEnd: el.selectionEnd,
+      });
+      if (step) {
+        e.preventDefault();
+        historyRef.current.nav = step.state;
+        setMessage(step.value);
+        setTimeout(() => { const t = textareaRef.current; if (t) t.setSelectionRange(step.value.length, step.value.length); }, 0);
         return;
       }
     }
@@ -802,7 +838,7 @@ export function ComposerBar({
           className="ws-composer-input"
           placeholder={cloning ? 'Cloning the repositories…' : enginePlaceholder}
           value={message}
-          onChange={(e) => setMessage(e.target.value)}
+          onChange={(e) => { historyRef.current.nav = idleHistory(historyRef.current.items); setMessage(e.target.value); }}
           onKeyDown={handleKeyDown}
           disabled={!workflow || cloning}
           data-paste-files="true"

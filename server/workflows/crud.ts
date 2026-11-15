@@ -883,9 +883,32 @@ export function registerWorkflowRoutes(): void {
     let commandPrompt: { name: string; source: string; prompt: string } | null = null;
     const ts = now();
 
+    // /clear: the portal does it all, nothing is sent to the engine and no run starts. The saved "/clear" marks where the
+    // conversation starts again (recaps look for it), the engine's own conversation is dropped, and the answer is shown.
+    if (isCommand && w.engine !== 'demo' && parseSlashCommand(message)?.name === 'clear') {
+      await repo.appendWorkflowEvent({
+        workflow_id: w.id, kind: 'command', body: '/clear', data: JSON.stringify({ by: req.user!.id }), created_at: ts,
+      });
+      await repo.markAllWorkflowEventsConsumed(w.id);
+      await repo.updateWorkflow(w.id, { engine_session_id: null, engine_session_engine: null, last_turn_at: ts, stop_reason: '', updated_at: ts });
+      const answer = 'Conversation cleared. Your earlier messages are no longer sent to the agent; the next message starts fresh.';
+      await repo.appendWorkflowEvent({
+        workflow_id: w.id, kind: 'command-result', body: `/clear
+---
+${answer}`,
+        data: JSON.stringify({ command: '/clear', by: req.user!.id }), created_at: now(),
+      });
+      if (w.project_id) {
+        emit(w.project_id, { type: 'workflow.command-result', workflowId: w.id, command: '/clear', result: answer });
+        emit(w.project_id, { type: 'workflow.updated', workflowId: w.id });
+      }
+      sendJson(res, 200, { ok: true, kind: 'command', resumed: false, handled: true });
+      return;
+    }
+
     // Commands the portal answers itself (/model, /agent, /cost, ...) and commands this session does not have.
     // The command and its answer are saved as one event and nothing is sent to the engine.
-    if (isCommand && w.engine !== 'demo' && message.toLowerCase().trim() !== '/clear') {
+    if (isCommand && w.engine !== 'demo') {
       let answer = await runPortalCommand(w, message, req.user!.id);
       if (answer === null) {
         const resolved = await resolveSessionCommand(w, message);
@@ -942,12 +965,6 @@ export function registerWorkflowRoutes(): void {
       }
     }
 
-    // For kiro/claude-code engines, /clear is handled server-side
-    if (isCommand && message.toLowerCase().trim() === '/clear' && w.engine !== 'demo') {
-      await repo.markAllWorkflowEventsConsumed(w.id);
-      await repo.updateWorkflow(w.id, { engine_session_id: null, engine_session_engine: null, updated_at: ts });
-    }
-
     // Track last user interaction (resets idle timer)
     await repo.updateWorkflow(w.id, { last_turn_at: ts, stop_reason: '', updated_at: ts });
 
@@ -999,6 +1016,17 @@ export function registerWorkflowRoutes(): void {
     const w = await getSessionsRepository().getWorkflowByProjectId(req.params.id, req.params.wid);
     if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
     sendJson(res, 200, { commands: await sessionCommands(w) });
+  });
+
+  // GET /api/projects/:id/workflows/:wid/message-history — what was typed in this chat, oldest first: the chat box's Up arrow
+  router.get('/api/projects/:id/workflows/:wid/message-history', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const project = await requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    const rows = await repo.listHumanWorkflowEvents(w.id, null, null, null);
+    sendJson(res, 200, { messages: rows.map((r) => String(r.body).trim()).filter(Boolean).slice(-100) });
   });
 
   // PATCH /api/projects/:id/workflows/:wid — update session settings
