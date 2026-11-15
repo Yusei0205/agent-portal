@@ -216,7 +216,7 @@ function dragEvent(type: string, files: File[], withFiles = true): Event {
   return e;
 }
 
-it('a file dropped on the real session message box is attached, and a dragged piece of text is left alone', async () => {
+it('a file dropped on the real session message box or the conversation above it is attached, and a dragged piece of text is left alone', async () => {
   handler = null;
   calls.length = 0;
   await freshComposer();
@@ -236,6 +236,33 @@ it('a file dropped on the real session message box is attached, and a dragged pi
   assert.ok(!box.classList.contains('is-drop-target'));
   assert.ok(calls.some((c) => c.url.includes('/ai-attachments')), 'the dropped file was uploaded');
   assert.match(dom.window.document.body.textContent ?? '', /sonarscan\.zip/, 'and shows as attached');
+
+  // The conversation above the box takes a drop too; the rest of the page does not (the browser would open the file there).
+  calls.length = 0;
+  const doc = dom.window.document;
+  const panel = doc.createElement('div'); panel.className = 'ide-agent-panel';
+  const line = doc.createElement('p'); line.textContent = 'an earlier reply'; panel.appendChild(line);
+  const elsewhere = doc.createElement('nav');
+  doc.body.append(panel, elsewhere);
+  try {
+    const png = new File(['png'], 'shot.png', { type: 'image/png' });
+    const overChat = dragEvent('dragover', [png]);
+    await act(async () => { line.dispatchEvent(dragEvent('dragenter', [png])); line.dispatchEvent(overChat); });
+    assert.equal(overChat.defaultPrevented, true, 'the conversation takes the file');
+    assert.ok(panel.classList.contains('is-drop-target') && box.classList.contains('is-drop-target'), 'the conversation and the box both show it');
+    const dropOnChat = dragEvent('drop', [png]);
+    await act(async () => { line.dispatchEvent(dropOnChat); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    assert.equal(dropOnChat.defaultPrevented, true);
+    assert.ok(!panel.classList.contains('is-drop-target') && !box.classList.contains('is-drop-target'));
+    assert.equal(calls.filter((c) => c.url.includes('/ai-attachments')).length >= 1, true, 'a file dropped on the conversation is uploaded');
+
+    calls.length = 0;
+    const away = dragEvent('drop', [png]);
+    await act(async () => { elsewhere.dispatchEvent(away); });
+    assert.equal(away.defaultPrevented, false, 'elsewhere on the page is left to the browser');
+    assert.equal(calls.filter((c) => c.url.includes('/ai-attachments')).length, 0);
+  } finally { panel.remove(); elsewhere.remove(); }
 
   calls.length = 0;
   const text = dragEvent('drop', [], false);

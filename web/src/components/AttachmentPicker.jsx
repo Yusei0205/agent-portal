@@ -91,6 +91,7 @@ export function AttachmentPicker({
   maxTotalBytes = null,
   purpose = 'default',
   dropTargetRef = null,
+  dropAreas = '',
 }) {
   const [items, setItems] = useState(() =>
     initialAttachments.map((att) => ({
@@ -123,32 +124,44 @@ export function AttachmentPicker({
     onAttachmentsChange(readyIds, busy);
   }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Dropping files anywhere on a larger area (the chat's message box), not only on the drop zone: the area is given as dropTargetRef.
+  // Dropping files anywhere on a larger area (the chat's message box and, with dropAreas, the conversation above it), not only on the
+  // drop zone. The listeners sit on the document, so an area that appears later (a panel opened after this mounted) works too.
+  // The box given as dropTargetRef shows the "Drop files" cue whichever area the files are over; dropAreas is a CSS selector.
   useEffect(() => {
-    const el = dropTargetRef?.current;
-    if (!el || disabled) return undefined;
+    const box = dropTargetRef?.current;
+    if (!box || disabled) return undefined;
     let depth = 0;
+    let lit = [];
+    const areaOf = (e) => {
+      const t = e.target && e.target.nodeType === 1 ? e.target : null;
+      if (!t) return null;
+      if (box.contains(t)) return box;
+      return dropAreas ? t.closest(dropAreas) : null;
+    };
     const hasFiles = (e) => Array.from(e.dataTransfer?.types ?? []).includes('Files');
-    const clear = () => { depth = 0; el.classList.remove('is-drop-target'); };
-    const onEnter = (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; el.classList.add('is-drop-target'); };
-    const onOver = (e) => { if (!hasFiles(e)) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; };
-    const onLeave = (e) => { if (!hasFiles(e)) return; depth = Math.max(0, depth - 1); if (depth === 0) clear(); };
+    const clear = () => { depth = 0; lit.forEach((el) => el.classList.remove('is-drop-target')); lit = []; };
+    const light = (area) => {
+      for (const el of new Set([box, area])) if (!lit.includes(el)) { el.classList.add('is-drop-target'); lit.push(el); }
+    };
+    const onEnter = (e) => { if (!hasFiles(e)) return; const area = areaOf(e); if (!area) return; e.preventDefault(); depth++; light(area); };
+    const onOver = (e) => { if (!hasFiles(e)) return; const area = areaOf(e); if (!area) return; e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; };
+    const onLeave = (e) => { if (!hasFiles(e) || !areaOf(e)) return; depth = Math.max(0, depth - 1); if (depth === 0) clear(); };
     const onDrop = (e) => {
-      if (!hasFiles(e)) return;
+      if (!hasFiles(e) || !areaOf(e)) return;
       e.preventDefault();
       clear();
       if (e.dataTransfer?.files?.length && processRef.current) processRef.current(e.dataTransfer.files);
     };
-    el.addEventListener('dragenter', onEnter);
-    el.addEventListener('dragover', onOver);
-    el.addEventListener('dragleave', onLeave);
-    el.addEventListener('drop', onDrop);
+    document.addEventListener('dragenter', onEnter);
+    document.addEventListener('dragover', onOver);
+    document.addEventListener('dragleave', onLeave);
+    document.addEventListener('drop', onDrop);
     return () => {
-      el.removeEventListener('dragenter', onEnter); el.removeEventListener('dragover', onOver);
-      el.removeEventListener('dragleave', onLeave); el.removeEventListener('drop', onDrop);
+      document.removeEventListener('dragenter', onEnter); document.removeEventListener('dragover', onOver);
+      document.removeEventListener('dragleave', onLeave); document.removeEventListener('drop', onDrop);
       clear();
     };
-  }, [disabled, dropTargetRef]);
+  }, [disabled, dropTargetRef, dropAreas]);
 
   // Clipboard paste — images only; never intercept paste in text inputs/textareas
   useEffect(() => {
