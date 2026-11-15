@@ -87,7 +87,8 @@ createRoot(document.getElementById('root')).render(<App />);`;
 
     // A type the portal does not take is refused, not uploaded.
     await dragFiles('drop', ['setup.exe']);
-    await page.getByText(/setup\.exe: file type not allowed/).waitFor();
+    // The message is in the visible alert and again in a screen-reader live region: wait for the visible one only.
+    await page.getByRole('alert').filter({ hasText: /setup\.exe: file type not allowed/ }).waitFor();
     assert.equal(uploaded.length, before + 1);
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
