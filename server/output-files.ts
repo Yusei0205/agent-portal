@@ -29,6 +29,7 @@ import { persistFile, restoreFile } from './durable-files.ts';
 import { RUNNER_CODE_EXTS, isCodeOutputFile } from './agent/runner-files.ts';
 
 import { isInsideOrSame } from './storage-path.ts';
+import { sessionVaultFolder } from './session-vault-folder.ts';
 // ── Extension allow-list ──────────────────────────────────────────────────────
 
 const ALLOWED_EXTS = new Set([
@@ -191,15 +192,7 @@ function collectFromWorkDir(workDir: string, cutoffMs: number): string[] {
 
 // ── Vault helpers ─────────────────────────────────────────────────────────────
 
-function computeVaultFolder(wf: { id: string; title?: string | null; goal?: string | null }): string {
-  const raw = String(wf.title || wf.goal || '').trim();
-  const sanitised = raw
-    .replace(/[^\w\s.\-]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, 80);
-  return `Sessions/${sanitised || 'Session'} (${wf.id.slice(0, 8)})`;
-}
+const computeVaultFolder = sessionVaultFolder;
 
 function vaultDisplayNames(relPaths: string[]): Map<string, string> {
   const sorted = [...relPaths].sort();

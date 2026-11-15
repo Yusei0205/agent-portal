@@ -50,6 +50,44 @@ describe('chat attachment delivery', () => {
     assert.equal(Buffer.from((files[0] as { data: string }).data, 'base64').toString(), 'Requirements for the agent');
     assert.equal(one<{ n: number }>('SELECT COUNT(*) AS n FROM p6_runs WHERE workflow_id = ?', workflowId)!.n, 0, 'saving attachments must not invoke the AI');
   });
+  it('keeps a copy of each uploaded file in the Vault, in the User uploads folder of the session, under its own name', async () => {
+    const vault = () => all<{ name: string; folder: string; path: string; size_bytes: number; source_workflow_id: string; uploaded_by: string | null }>(
+      "SELECT name, folder, path, size_bytes, source_workflow_id, uploaded_by FROM vault_files WHERE project_id = ? AND folder LIKE '%/User uploads' ORDER BY created_at, name", projectId);
+    const before = vault().length;
+    // A session of its own, so the files of the other tests here are not counted in it.
+    const made = await fetchJson(baseUrl, '/api/projects/' + projectId + '/workflows', { method: 'POST', cookie, body: { goal: 'Vault uploads check', engine: 'demo' } });
+    const vaultWf = (made.body as { workflow: { id: string } }).workflow.id;
+    const messageTo = (body: object) => fetchJson(baseUrl, '/api/projects/' + projectId + '/workflows/' + vaultWf + '/message', { method: 'POST', cookie, body });
+    const first = await upload('Sonar Scan 2026.txt', 'PK-first');
+    assert.equal((await messageTo({ message: 'Use this scan', attachmentIds: [first] })).status, 200);
+    const again = await upload('Sonar Scan 2026.txt', 'PK-second');
+    assert.equal((await messageTo({ message: 'And this newer one', attachmentIds: [again] })).status, 200);
+    const added = vault().slice(before);
+    assert.deepEqual(added.map((f) => f.name), ['Sonar Scan 2026.txt', 'Sonar Scan 2026 (2).txt'], 'the same name twice keeps both');
+    for (const f of added) {
+      assert.equal(f.folder, `Sessions/Vault uploads check (${vaultWf.slice(0, 8)})/User uploads`);
+      assert.equal(f.source_workflow_id, vaultWf);
+      assert.ok(f.uploaded_by, 'who uploaded it');
+    }
+    assert.equal(await fs.readFile(path.join(config.dataDir, ...added[0].path.split('/')), 'utf8'), 'PK-first');
+    assert.equal(await fs.readFile(path.join(config.dataDir, ...added[1].path.split('/')), 'utf8'), 'PK-second');
+    // The agent still gets the file the usual way, and nothing started a run.
+    assert.equal(one<{ n: number }>('SELECT COUNT(*) AS n FROM p6_runs WHERE workflow_id = ?', vaultWf)!.n, 0);
+  });
+  it('a message with a file is still saved when the Vault copy cannot be made', async () => {
+    const { setVaultFilesRepository, getVaultFilesRepository } = await import('../server/repositories/vault-files.ts');
+    const real = getVaultFilesRepository();
+    setVaultFilesRepository({ ...real, create: async () => { throw new Error('vault is full'); } } as typeof real);
+    try {
+      const made = await fetchJson(baseUrl, '/api/projects/' + projectId + '/workflows', { method: 'POST', cookie, body: { goal: 'Vault broken check', engine: 'demo' } });
+      const wf = (made.body as { workflow: { id: string } }).workflow.id;
+      const id = await upload('plain.txt', 'still delivered');
+      const sent = await fetchJson(baseUrl, '/api/projects/' + projectId + '/workflows/' + wf + '/message', { method: 'POST', cookie, body: { message: 'Read this one', attachmentIds: [id] } });
+      assert.equal(sent.status, 200, JSON.stringify(sent.body));
+      const event = one<{ data: string }>("SELECT data FROM p6_workflow_events WHERE workflow_id = ? AND kind = 'human' ORDER BY id DESC LIMIT 1", wf)!;
+      assert.equal(JSON.parse(event.data).attachments[0].name, 'plain.txt');
+    } finally { setVaultFilesRepository(real); }
+  });
   it('rejects malformed, foreign-project, oversized attachments and slash commands before saving a message', async () => {
     const count = () => all('SELECT id FROM p6_workflow_events WHERE workflow_id = ?', workflowId).length;
     const before = count();

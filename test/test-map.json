@@ -1124,6 +1124,7 @@
       "sources": [
         "server/ai-attachments.ts",
         "server/session-attachments.ts",
+        "server/session-vault-folder.ts",
         "server/repositories/ai-attachments.ts",
         "server/repositories/ai-attachments-sqlite.ts",
         "server/repositories/ai-attachments-dynamodb.ts",

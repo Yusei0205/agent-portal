@@ -15,7 +15,7 @@
  *   POST   /api/projects/:id/workflows/:wid/message         — send follow-up message
  */
 
-import { saveChatAttachments } from '../session-attachments.ts';
+import { saveChatAttachments, saveUploadsToVault } from '../session-attachments.ts';
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { one, all, getDb } from '../db.ts';
@@ -875,6 +875,8 @@ export function registerWorkflowRoutes(): void {
       sendJson(res, 400, { error: 'Send attachments with a message, not a slash command' }); return;
     }
     const attachments = await saveChatAttachments(req.params.id, w.id, body.attachmentIds);
+    // A copy stays in the project Vault, in this session's "User uploads" folder.
+    if (attachments.length) await saveUploadsToVault(w, attachments, req.user?.id ?? null);
     if (!message && attachments.length) message = 'Please read the attached files.';
     if (!message) { sendJson(res, 400, { error: 'Message must not be empty' }); return; }
 

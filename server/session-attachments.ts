@@ -8,6 +8,9 @@ import { validateAttachmentIds } from './ai-attachments.ts';
 import { persistFile, restoreFile } from './durable-files.ts';
 import { INPUT_FILE_EXTS, INPUT_FILE_LIMITS } from './agent/runner-files.ts';
 import { attachmentLimits } from './agent/input-file-urls.ts';
+import { getVaultFilesRepository } from './repositories/vault-files.ts';
+import { sessionVaultFolder, USER_UPLOADS_FOLDER } from './session-vault-folder.ts';
+import { now } from './util.ts';
 
 const mb = (bytes: number): string => `${bytes / 1024 / 1024} MB`;
 
@@ -115,4 +118,60 @@ export async function stageChatAttachments(projectId: string, workflowId: string
     await persistFile(dest);
   }
   return attachments;
+}
+
+const VAULT_MIME: Record<string, string> = {
+  '.zip': 'application/zip', '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.txt': 'text/plain', '.md': 'text/markdown', '.csv': 'text/csv', '.json': 'application/json', '.html': 'text/html',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+};
+/** The biggest file a Vault takes (the Vault page's own limit). */
+const VAULT_FILE_MAX = 25 * 1024 * 1024;
+
+/**
+ * Keep a copy of the files a person attached in the chat in the project Vault, under the session's "User uploads" folder with
+ * their own names, so they stay with the project after the message (and can be opened, downloaded and shared from the Vault page).
+ * Best effort: a file that cannot be copied is skipped and never stops the message. The agent still gets the files as before, in
+ * its attachments/ folder. Returns the Vault names that were saved.
+ */
+export async function saveUploadsToVault(
+  wf: { id: string; project_id: string | null; title?: string | null; goal?: string | null },
+  saved: ChatAttachment[],
+  uploadedBy: string | null,
+): Promise<string[]> {
+  if (!wf.project_id || !saved.length) return [];
+  const projectId = String(wf.project_id);
+  const repo = getVaultFilesRepository();
+  const folder = `${sessionVaultFolder(wf)}/${USER_UPLOADS_FOLDER}`;
+  const names: string[] = [];
+  let dir: string;
+  try { dir = await storageDir(projectId, wf.id); } catch { return []; }
+  for (const a of saved) {
+    try {
+      if (a.size > VAULT_FILE_MAX) continue;
+      const src = path.join(dir, a.path);
+      const ext = path.extname(a.name);
+      const stem = path.basename(a.name, ext).replace(/[\\/:*?"<>|]/g, '_').replace(/\p{Cc}/gu, '_').trim().slice(0, 150) || 'file';
+      // The same name uploaded again keeps both: "report.pdf", "report (2).pdf", ...
+      let name = `${stem}${ext}`;
+      for (let n = 2; n < 100 && await repo.findByWorkflowFolderName(projectId, folder, name, wf.id); n++) name = `${stem} (${n})${ext}`;
+      const id = generateId();
+      const rel = path.posix.join('vault', 'projects', projectId, 'project', `${id}-${name}`);
+      const abs = path.join(config.dataDir, ...rel.split('/'));
+      await fs.mkdir(path.dirname(abs), { recursive: true });
+      await fs.copyFile(src, abs);
+      const mime = VAULT_MIME[ext.toLowerCase()] ?? 'application/octet-stream';
+      await persistFile(abs, mime);
+      await repo.create({
+        id, project_id: projectId, user_id: null, name, path: rel, size_bytes: a.size, mime_type: mime,
+        uploaded_by: uploadedBy, folder, source_workflow_id: wf.id, created_at: now(),
+      });
+      names.push(name);
+    } catch (e) {
+      console.warn(`[session-attachments] could not copy ${a.name} to the Vault: ${(e as Error).message}`);
+    }
+  }
+  return names;
 }
