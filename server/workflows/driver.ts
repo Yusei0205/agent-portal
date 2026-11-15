@@ -12,6 +12,7 @@ import { executeRun } from '../agent/runner.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import type { RunFinalizeStats } from '../repositories/sessions.ts';
 import { lostRunReason, closeLostRun } from './lost-runs.ts';
+import { recoverAfterInterruption } from './recovery.ts';
 
 // ── Before-close hook ─────────────────────────────────────────────────────────
 // Abort all active runs when the database is closed so background executeRun
@@ -165,7 +166,8 @@ export async function sweepLostRuns(): Promise<number> {
         const reason = run ? lostRunReason(run) : null;
         if (!run || !reason || !(await closeLostRun(run.id, reason))) continue;
         closed++;
-        await continueWithQueuedMessages(w.id);
+        // Tell the person, and carry on with the leftover task (or with the message that was waiting behind the lost turn).
+        await recoverAfterInterruption(w.id, run.id, 'the process running it was lost', { auto: true });
       } catch (e) {
         console.error(`[lost-run] could not check ${w.id}:`, e);
       }

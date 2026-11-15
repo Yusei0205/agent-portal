@@ -215,6 +215,24 @@ function GenericItem({ item, onResolved }) {
   const [resolved, setResolved] = useState(false);
   const { toast, toasts, removeToast } = useToast();
   const summary = payloadSummary(item);
+  // A turn the portal's runner lost (dropped connection, time limit, lost process): carry on from where it stopped.
+  const canContinue = item.payload?.kind === 'turn-interrupted' && item.payload.canContinue === true && Boolean(item.project_id && item.workflow_id);
+  const [continuing, setContinuing] = useState(false);
+  const carryOn = async () => {
+    setContinuing(true);
+    try {
+      const base = `/api/projects/${item.project_id}/workflows/${item.workflow_id}`;
+      const res = await api.post(`${base}/message`, { message: '/continue' });
+      // A paused session starts by itself on a message; any other state needs the start.
+      if (!res?.resumed) await api.post(`${base}/start`).catch((e) => { if (e?.status !== 409) throw e; });
+      await api.post(`/api/inbox/${item.id}/resolve`, { response: 'dismissed' });
+      setResolved(true);
+      if (onResolved) onResolved();
+    } catch (e) {
+      toast(e.message, 'error');
+      setContinuing(false);
+    }
+  };
 
   const dismiss = async () => {
     setBusy(true);
@@ -250,11 +268,19 @@ function GenericItem({ item, onResolved }) {
         </div>
       ) : (
         <div className="inbox-item-actions">
+          {canContinue && (
+            <button type="button" className="btn btn-sm btn-primary" onClick={carryOn} disabled={continuing || busy}>
+              {continuing ? 'Continuing…' : 'Continue'}
+            </button>
+          )}
+          {item.payload?.kind === 'turn-interrupted' && item.project_id && item.workflow_id && (
+            <a className="btn btn-sm btn-ghost" href={href(item.project_id, 'sessions', item.workflow_id)}>Open session</a>
+          )}
           <button
             type="button"
             className="btn btn-sm btn-ghost"
             onClick={dismiss}
-            disabled={busy}
+            disabled={busy || continuing}
           >
             Dismiss
           </button>

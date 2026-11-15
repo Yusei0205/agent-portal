@@ -15,6 +15,7 @@ import { parseFrontMatter, SKILL_NAME } from '../agent/agent-defs.ts';
 import { readOwnerConfigFiles } from '../user-config.ts';
 import type { WorkflowRecord } from '../repositories/sessions.ts';
 import { PORTAL_COMMANDS } from './slash-commands.ts';
+import { buildRecoveryBrief } from './recovery.ts';
 
 export type CommandSource = 'portal' | 'prompt' | 'command' | 'skill';
 
@@ -50,6 +51,14 @@ function guideFile(engine: string): string {
 
 /** Prompts the portal provides in every engine session, under the names people know from Claude Code. */
 const PROMPTS: Array<SessionCommand & { prompt: (args: string, engine: string) => string }> = [
+  {
+    name: 'continue',
+    usage: '/continue',
+    description: 'Carry on with the task the last turn was cut off from',
+    source: 'prompt',
+    // The real prompt is built in resolveSessionCommand, from what the cut-off turn had done (recovery.ts).
+    prompt: () => 'Carry on with the task from where the last turn stopped. Do not start over; check the state of the work first.',
+  },
   {
     name: 'init',
     usage: '/init [notes]',
@@ -196,6 +205,11 @@ export async function resolveSessionCommand(w: WorkflowRecord, message: string):
   const parsed = parseSlashCommand(message);
   if (!parsed || PORTAL_COMMANDS.some((c) => c.name === parsed.name)) return null;
   const engine = String(w.engine);
+  // /continue: from the cut-off turn's own steps, so the agent knows how far it got (the conversation recap comes with it).
+  if (parsed.name === 'continue') {
+    const brief = await buildRecoveryBrief(w.id, null, 'it did not finish');
+    return { type: 'prompt', name: 'continue', source: 'prompt', prompt: parsed.args ? `${brief}\n\nAlso: ${parsed.args}` : brief };
+  }
   const builtIn = PROMPTS.find((p) => p.name === parsed.name);
   if (builtIn) return { type: 'prompt', name: parsed.name, source: 'prompt', prompt: builtIn.prompt(parsed.args, engine) };
   const own = (await ownCommands(w)).find((c) => c.name === parsed.name);

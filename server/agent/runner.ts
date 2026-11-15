@@ -62,6 +62,7 @@ import { buildRunnerMcpServers, parseSessionIntegrations, pendingMcpSignIns } fr
 import { mcpSignedIn, mcpSkippedForRun } from '../mcp-oauth.ts';
 import { readLoopState, loopPrompt, afterRun as loopAfterRun } from '../workflows/loop.ts';
 import { eventPrompt, goalPrompt } from '../workflows/session-commands.ts';
+import { interruptionOf, recoverAfterInterruption } from '../workflows/recovery.ts';
 import { runCheckSteps } from './runner-checks.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
@@ -287,9 +288,16 @@ function zipNote(attachmentPath: string): string {
     'Use scripts (grep, awk, python) on large CSV or JSON files instead of reading them whole. A PDF often repeats the CSV or text files it was made from: read it only when those do not have what you need)';
 }
 
+/** Tests replace the engine of every run (to make a turn fail the way a dropped connection does); null puts it back. */
+let _engineOverride: ((ctx: RunContext) => Promise<string>) | null = null;
+export function _setEngineOverride(fn: ((ctx: RunContext) => Promise<string>) | null): void { _engineOverride = fn; }
+
 export async function executeRun(runId: string, workflowId: string): Promise<void> {
   // Load workflow and project
   const repo = getSessionsRepository();
+  // Set when the turn was cut off by something that is not the person (a dropped connection, the runner's time limit): once the run is
+  // closed and cleaned up, the person is told and the leftover task goes on (see workflows/recovery.ts).
+  let interruption: { why: string } | null = null;
   const workflow = await repo.getWorkflowById(workflowId);
   if (!workflow) {
     // Workflow was deleted between createRun and executeRun.
@@ -630,7 +638,9 @@ ${agentRun.goal}`;
     // Run the appropriate engine
     let result: string;
     try {
-      if (agentRun.engine === 'demo') {
+      if (_engineOverride) {
+        result = await _engineOverride(runContext);
+      } else if (agentRun.engine === 'demo') {
         result = await runDemo(runContext);
       } else if (agentRun.engine === 'claude-code') {
         result = await runClaudeCode(runContext);
@@ -785,6 +795,8 @@ ${agentRun.goal}`;
     }
 
     if (!aborted) {
+      const cutOff = interruptionOf(e);
+      if (cutOff) interruption = { why: cutOff.why };
       console.error(`[runner] Run ${runId} failed:`, e);
       if (loopState) {
         try { await loopAfterRun(workflowId, { result: msg, failed: true }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
@@ -815,6 +827,8 @@ ${agentRun.goal}`;
     await cleanupRunHome(runId);
     // Clean up per-run event chain (DynamoDB mode).
     cleanupRunEventChain(runId);
+    // Last, so the new turn does not start while this one is still being cleaned up. Never throws.
+    if (interruption) await recoverAfterInterruption(workflowId, runId, interruption.why, { auto: true });
   }
 }
 
