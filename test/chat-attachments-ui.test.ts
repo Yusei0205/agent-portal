@@ -208,3 +208,38 @@ it('a refused upload says why and does not attach the file', async () => {
     (globalThis as { XMLHttpRequest?: unknown }).XMLHttpRequest = previousXhr;
   }
 });
+
+/** A drag event as a browser makes it: jsdom has no DataTransfer, so the part the page reads is given by hand. */
+function dragEvent(type: string, files: File[], withFiles = true): Event {
+  const e = new dom.window.Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(e, 'dataTransfer', { value: { types: withFiles ? ['Files'] : ['text/plain'], files, dropEffect: 'none' } });
+  return e;
+}
+
+it('a file dropped on the real session message box is attached, and a dragged piece of text is left alone', async () => {
+  handler = null;
+  calls.length = 0;
+  await freshComposer();
+  const box = dom.window.document.querySelector('.ws-composer') as HTMLElement;
+  assert.ok(box, 'the session message box');
+  const zip = new File(['PK'], 'sonarscan.zip', { type: 'application/zip' });
+
+  const over = dragEvent('dragover', [zip]);
+  await act(async () => { box.dispatchEvent(dragEvent('dragenter', [zip])); box.dispatchEvent(over); });
+  assert.equal(over.defaultPrevented, true, 'the browser is told the box takes the file (otherwise it would open the file instead)');
+  assert.ok(box.classList.contains('is-drop-target'), 'the box shows it will take the drop');
+
+  const drop = dragEvent('drop', [zip]);
+  await act(async () => { box.dispatchEvent(drop); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+  assert.equal(drop.defaultPrevented, true);
+  assert.ok(!box.classList.contains('is-drop-target'));
+  assert.ok(calls.some((c) => c.url.includes('/ai-attachments')), 'the dropped file was uploaded');
+  assert.match(dom.window.document.body.textContent ?? '', /sonarscan\.zip/, 'and shows as attached');
+
+  calls.length = 0;
+  const text = dragEvent('drop', [], false);
+  await act(async () => { box.dispatchEvent(text); });
+  assert.equal(text.defaultPrevented, false, 'dragged text is not taken over');
+  assert.equal(calls.filter((c) => c.url.includes('/ai-attachments')).length, 0);
+});
