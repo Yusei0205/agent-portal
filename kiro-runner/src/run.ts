@@ -42,6 +42,9 @@ import { writeKiroConfig } from './kiro-config.js';
 import { createHash } from 'node:crypto';
 import { createSubagentTracker } from './subagents.js';
 
+/** How long one turn may run before the runner stops it. Keep it well under the runtime's maxLifetime. */
+const TURN_LIMIT_MS = Number(process.env.KIRO_TURN_LIMIT_MS) || 120 * 60_000; // (the variable is for tests)
+
 export type EmitFn = (event: Record<string, unknown>) => void;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -659,7 +662,7 @@ export async function runKiroRun(
     }
 
     const run = w;
-    const TIMEOUT_MS = 29 * 60_000; // just under the AgentCore maxLifetime (30 min)
+    const TIMEOUT_MS = TURN_LIMIT_MS; // two hours; the runtime's maxLifetime is 4 hours (infra/lib/harness-stack.ts)
     let timedOut = false;
     const timeoutTimer = setTimeout(() => {
       timedOut = true;
@@ -849,7 +852,10 @@ export async function runKiroRun(
     // A sub-agent still open when the turn ends is done (or failed, if the turn did not go well): never leave a node running.
     for (const ev of run.subagents.finishOpen(!acpError && !timedOut && !cancelled)) emit({ ...ev });
 
-    if (acpError) {
+    if (timedOut) {
+      // kiro-cli was stopped by the timer above, which makes every waiting request fail with "kiro-cli process exited": say what happened.
+      emit({ type: 'error', message: `ACP error: the turn reached the runner's time limit of ${Math.round(TURN_LIMIT_MS / 60_000)} minutes and was stopped (kiro-cli process exited)` });
+    } else if (acpError) {
       emit({ type: 'error', message: `ACP error: ${acpError.message.slice(0, 500)}` });
     }
 

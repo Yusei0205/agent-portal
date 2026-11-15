@@ -374,7 +374,7 @@ describe('Claude on AgentCore — harness parity', () => {
       const ids = makeRun('claude-code');
       const rt = fakeRuntime({});
       await runClaudeViaAgentCore(makeCtx(ids, { engine: 'claude-code' }).ctx, ARN);
-      assert.equal(rt.calls.find((c) => c.payload.mode === 'run')?.payload.maxMinutes, 60);
+      assert.equal(rt.calls.find((c) => c.payload.mode === 'run')?.payload.maxMinutes, 120);
     } finally {
       if (saved !== undefined) process.env.PORTAL_RUN_TIMEOUT_MS = saved;
     }

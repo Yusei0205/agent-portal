@@ -108,7 +108,7 @@ const DEFAULTS: Settings = {
   agents: {
     approvalExpiryMinutes: 60,
     maxBudgetUsdPerRun: 5,
-    runTimeoutMinutes: 60,
+    runTimeoutMinutes: 120,
     effort: '',
     mcpToolTimeoutMinutes: 10,
   },

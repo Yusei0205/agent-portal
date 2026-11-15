@@ -187,8 +187,9 @@ export class AgentPortalHarnessStack extends cdk.Stack {
         lifecycleConfiguration: {
           // A run waiting for a person reports HealthyBusy, so idle time only counts between runs.
           idleRuntimeSessionTimeout: 900,
-          // Long enough for the portal's default 60-minute run limit plus approval waits.
-          maxLifetime: 7200,
+          // Counted from when the session starts, busy or not. A turn may run two hours (server/agent/turn-limit.ts), so this is
+          // twice that: a turn that begins late in a long conversation is still not cut by the platform.
+          maxLifetime: 14400,
         },
         environmentVariables: { AWS_DEFAULT_REGION: this.region, AWS_REGION: this.region,
           PORTAL_TERMINAL_ISSUER_URL: new URL(this.node.tryGetContext('publicUrl') || 'https://d1tah6dqw2fe9f.cloudfront.net').origin },

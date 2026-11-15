@@ -36,6 +36,7 @@
  *   - Errors from AgentCore are converted to HttpError or thrown as-is.
  */
 
+import { PORTAL_TURN_LIMIT_MS } from './turn-limit.ts';
 import https from 'node:https';
 import http from 'node:http';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
@@ -690,8 +691,8 @@ export async function runKiroViaAgentCore(
   emit('status', { state: 'thinking' });
   emit('status', { text: 'Running via AgentCore…' });
 
-  // Default 29 min: just under the AgentCore runtime maxLifetime (30 min).
-  const timeoutMs = Number(process.env.PORTAL_RUN_TIMEOUT_MS) || 29 * 60_000;
+  // Default: the runner's own turn limit plus a minute (see turn-limit.ts).
+  const timeoutMs = Number(process.env.PORTAL_RUN_TIMEOUT_MS) || PORTAL_TURN_LIMIT_MS;
   const ac = new AbortController();
   const merged = signal ? mergeAbortSignals([signal, ac.signal]) : ac.signal;
 

@@ -40,10 +40,10 @@ export function interruptionOf(e: unknown): { kind: InterruptionKind; why: strin
   if (/-32603|dispatch failure|error in the response stream/i.test(String(err?.message ?? ''))) {
     return { kind: 'engine-connection', why: "the engine's service had a connection problem (it was retried and still failed)" };
   }
-  // The engine's process went away in the middle of the turn: the runner stops it at its own turn limit (29 minutes), and it can also be
+  // The engine's process went away in the middle of the turn: the runner stops it at its own turn limit (2 hours), and it can also be
   // killed. The runner reports that only as "ACP error: kiro-cli process exited". (A start-up failure is "exited with code N": not this.)
-  if (/kiro-cli process exited/i.test(String(err?.message ?? ''))) {
-    return { kind: 'engine-stopped', why: "the engine's process stopped before the turn finished (the runner's 29-minute limit for one turn, or it was killed)" };
+  if (/kiro-cli process exited|reached the runner's time limit/i.test(String(err?.message ?? ''))) {
+    return { kind: 'engine-stopped', why: "the engine's process stopped before the turn finished (the runner's time limit for one turn, or it was killed)" };
   }
   return null;
 }

@@ -12,6 +12,7 @@
  * tool-blocked {toolName,reason}, result {stop_reason, metrics}, error {message}.
  */
 
+import { PORTAL_TURN_LIMIT_MS } from './turn-limit.ts';
 import { randomUUID } from 'node:crypto';
 import { invokeAgentCore } from './kiro-agentcore.ts';
 import { HttpError } from '../util.ts';
@@ -144,7 +145,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   emit('status', { text: 'Running Claude via AgentCore…' });
 
   // Just under the AgentCore runtime's 30 minute maximum lifetime.
-  const timeoutMs = Number(process.env.PORTAL_RUN_TIMEOUT_MS) || 29 * 60_000;
+  const timeoutMs = Number(process.env.PORTAL_RUN_TIMEOUT_MS) || PORTAL_TURN_LIMIT_MS;
   const ac = new AbortController();
   const merged = signal ? mergeSignals([signal, ac.signal]) : ac.signal;
   let timedOut = false;
