@@ -54,6 +54,18 @@ function getIdleTimeoutMinutes(): number {
 }
 
 /**
+ * When the idle check will stop this session, or null when it will not: a turn that is going (status running, waiting for the
+ * person, ...) is never idle, and a session that is already stopped has nothing left to count. The same conditions as
+ * listIdleWorkflows; the time counts from the end of the last turn (last_turn_at), so it starts again after every turn.
+ */
+export function idleStopInfo(w: { status?: unknown; last_turn_at?: unknown; stop_reason?: unknown }): { stopAt: string; timeoutMinutes: number } | null {
+  if (!['done', 'pending'].includes(String(w.status ?? '')) || !w.last_turn_at || String(w.stop_reason ?? '') !== '') return null;
+  const timeoutMinutes = getIdleTimeoutMinutes();
+  const at = Date.parse(String(w.last_turn_at)) + timeoutMinutes * 60_000;
+  return Number.isFinite(at) ? { stopAt: new Date(at).toISOString(), timeoutMinutes } : null;
+}
+
+/**
  * Check for sessions that have been inactive for longer than the configured
  * idle timeout and stop them. This function is safe to call repeatedly; it
  * only affects sessions whose status is 'done' or 'pending' (not running).
@@ -215,7 +227,9 @@ export function registerSessionLifecycleRoutes(): void {
   //     toolApprovalMode: 'trust-all'|'ask',
   //     usageUnit: 'usd'|'credits',   — Kiro bills in credits, the other engines in dollars
   //     thisTurn: { costUsd: number, credits: number, inputTokens: number|null, outputTokens: number|null } | null,
-  //     thisSession: { costUsd: number, credits: number, inputTokens: number|null, outputTokens: number|null }
+  //     thisSession: { costUsd: number, credits: number, inputTokens: number|null, outputTokens: number|null },
+  //     idle: { stopAt: ISO, timeoutMinutes } | null,   — when the idle check stops the session; null while a turn is going
+  //     serverNow: ISO
   //   }
   router.get(
     '/api/projects/:id/workflows/:wid/status-bar',
@@ -269,6 +283,9 @@ export function registerSessionLifecycleRoutes(): void {
         usageUnit: isKiro ? 'credits' : 'usd',
         thisTurn,
         thisSession,
+        // When an idle session will be stopped (null while a turn is going), and the server's clock to count down against.
+        idle: idleStopInfo(w),
+        serverNow: now(),
       });
     },
   );

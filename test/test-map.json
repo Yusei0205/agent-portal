@@ -307,6 +307,7 @@
         "test/create-clone-first.test.ts",
         "test/session-title.test.ts",
         "test/session-lifecycle.test.ts",
+        "test/web-idle-countdown.test.ts",
         "test/session-agent-events.test.ts",
         "test/session-context.test.ts",
         "test/session-files.test.ts",

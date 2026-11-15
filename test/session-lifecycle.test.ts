@@ -1543,3 +1543,71 @@ describe('Conditional idle-stop: double call is a no-op', () => {
     assert.equal(events.length, 1, 'exactly one system event should be recorded (not two)');
   });
 });
+
+describe('Idle countdown — the status bar says when an idle session will be stopped', () => {
+  let baseUrl: string;
+  let cookie: string;
+  let projectId: string;
+  before(async () => {
+    ({ baseUrl } = await createTestServer());
+    cookie = await setupAdmin(baseUrl, 'countdown-admin@example.com');
+    projectId = await createProject(baseUrl, cookie, 'Countdown Project');
+  });
+  after(async () => cleanup());
+
+  const bar = async (wfId: string) => (await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wfId}/status-bar`, { cookie })).body as {
+    idle: { stopAt: string; timeoutMinutes: number } | null; serverNow: string;
+  };
+  const sessionIdleFor = async (minutes: number, status = 'done', stopReason = ''): Promise<string> => {
+    const wfId = await createWorkflow(baseUrl, cookie, projectId, `idle ${minutes} ${status}`);
+    dbRun(`UPDATE p6_workflows SET status = ?, last_turn_at = ?, stop_reason = ? WHERE id = ?`, status, new Date(Date.now() - minutes * 60_000).toISOString(), stopReason, wfId);
+    return wfId;
+  };
+
+  it('an idle session has a stop time of the end of its last turn plus the idle timeout, with the server clock to count against', async () => {
+    const wfId = await sessionIdleFor(25);
+    const last = String(one<Row>('SELECT last_turn_at FROM p6_workflows WHERE id = ?', wfId)!.last_turn_at);
+    const b = await bar(wfId);
+    assert.equal(b.idle?.timeoutMinutes, 30);
+    assert.equal(b.idle?.stopAt, new Date(Date.parse(last) + 30 * 60_000).toISOString());
+    assert.ok(Math.abs(Date.parse(b.serverNow) - Date.now()) < 5_000);
+    const left = Date.parse(b.idle!.stopAt) - Date.parse(b.serverNow);
+    assert.ok(left > 4 * 60_000 && left < 5 * 60_000 + 5_000, `about five minutes left, got ${left} ms`);
+  });
+
+  it('while the agent is working there is no countdown: only a finished turn can be idle', async () => {
+    for (const status of ['running', 'blocked', 'failed', 'paused']) {
+      const wfId = await sessionIdleFor(50, status);
+      assert.equal((await bar(wfId)).idle, null, `${status} session`);
+    }
+  });
+
+  it('a session that was already stopped for idling has nothing left to count', async () => {
+    const wfId = await sessionIdleFor(50, 'paused', 'idle');
+    assert.equal((await bar(wfId)).idle, null);
+  });
+
+  it('the countdown follows the configured timeout', async () => {
+    const put = await fetchJson(baseUrl, '/api/admin/session/idle-timeout', { method: 'PUT', cookie, body: { minutes: 10 } });
+    assert.equal(put.status, 200);
+    try {
+      const wfId = await sessionIdleFor(4);
+      const b = await bar(wfId);
+      assert.equal(b.idle?.timeoutMinutes, 10);
+      assert.ok(Math.abs((Date.parse(b.idle!.stopAt) - Date.parse(b.serverNow)) - 6 * 60_000) < 5_000, 'six minutes left');
+    } finally {
+      await fetchJson(baseUrl, '/api/admin/session/idle-timeout', { method: 'PUT', cookie, body: { minutes: 30 } });
+    }
+  });
+
+  it('it agrees with the real stop: a session shown as past its time is stopped by the check, one still within it is not', async () => {
+    const over = await sessionIdleFor(31);
+    const within = await sessionIdleFor(29);
+    assert.ok(Date.parse((await bar(over)).idle!.stopAt) < Date.now());
+    assert.ok(Date.parse((await bar(within)).idle!.stopAt) > Date.now());
+    await checkIdleSessions();
+    assert.equal(one<Row>('SELECT status FROM p6_workflows WHERE id = ?', over)!.status, 'paused');
+    assert.equal(one<Row>('SELECT status FROM p6_workflows WHERE id = ?', within)!.status, 'done');
+    assert.equal((await bar(over)).idle, null, 'after the stop the countdown is gone');
+  });
+});

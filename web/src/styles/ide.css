@@ -1456,6 +1456,8 @@
 }
 .ide-status-pill--warn { color: var(--warn, #d9a441); border-color: color-mix(in srgb, var(--warn, #d9a441) 45%, transparent); }
 .ide-status-ctx { display: inline-flex; align-items: center; gap: 5px; }
+.ide-status-idle { display: inline-flex; align-items: center; gap: 5px; font-variant-numeric: tabular-nums; }
+.ide-status-idle.is-soon { color: var(--warn, #b45309); font-weight: 600; }
 .ide-status-meter { width: 46px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; display: inline-block; }
 .ide-status-meter-fill { display: block; height: 100%; background: var(--ok); border-radius: 3px; }
 .ide-status-meter-fill.is-mid { background: var(--warn, #d9a441); }

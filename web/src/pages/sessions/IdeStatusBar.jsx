@@ -268,13 +268,22 @@ function ModelChip({ projectId, workflowId, engine, credentialId, model, onChang
  *   onModelChanged?: () => void,   — called after the model was switched, so the chat shows the confirmation
  * }} props
  */
+/** The idle countdown starts showing this long before the session is stopped. */
+const IDLE_WARN_MS = 10 * 60_000;
+const formatCountdown = (ms) => {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+};
+
 export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onModelChanged }) {
   const [bar, setBar] = useState(null);
 
   const load = useCallback(async () => {
     try {
       const data = await api.get(`/api/projects/${projectId}/workflows/${workflowId}/status-bar`);
-      setBar(data);
+      // The server's clock against this one, so the countdown is right on a machine whose clock is off.
+      const skew = Date.parse(data?.serverNow) - Date.now();
+      setBar(data && { ...data, skewMs: Number.isFinite(skew) ? skew : 0 });
     } catch {
       // 404 = endpoint not built yet, or no data — show minimal bar
       setBar(null);
@@ -300,6 +309,18 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
     const t = setInterval(loadLimits, 60_000);
     return () => { live = false; clearInterval(t); };
   }, [projectId, workflowId, engine]);
+
+  // The countdown to the idle stop shows for the last ten minutes only, and only while the session is idle (the server sends
+  // `idle: null` while a turn is going, so working time never counts).
+  const [clock, setClock] = useState(() => Date.now());
+  const idleLeft = bar?.idle?.stopAt ? Date.parse(bar.idle.stopAt) - (clock + (bar.skewMs || 0)) : null;
+  const countdown = idleLeft !== null && Number.isFinite(idleLeft) && idleLeft <= IDLE_WARN_MS;
+  useEffect(() => {
+    if (!countdown) return undefined;
+    setClock(Date.now());
+    const t = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [countdown]);
 
   const isKiro   = bar?.engine === 'kiro';
   const turn     = bar?.thisTurn;
@@ -330,6 +351,14 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
           model={bar.model ?? ''}
           onChanged={() => { load(); onModelChanged?.(); }}
         />
+      )}
+      {countdown && (
+        <span
+          className={`ide-status-chip ide-status-idle${idleLeft <= 120_000 ? ' is-soon' : ''}`}
+          title={`Nothing has happened in this session for a while, so it is stopped after ${bar.idle.timeoutMinutes} minutes without a turn. Send a message to keep it open. A stopped session keeps its history and carries on when you write to it.`}
+        >
+          <span className="ide-status-key">{idleLeft > 0 ? 'closes in' : 'closing'}</span> {idleLeft > 0 ? formatCountdown(idleLeft) : ''}
+        </span>
       )}
       {typeof bar?.contextPercent === 'number' && (
         <span className="ide-status-chip ide-status-ctx" title={`${bar.contextPercent}% of the model's context window is in use`}>
