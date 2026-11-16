@@ -68,6 +68,7 @@ function NewDocModal({ projectId, onClose, onCreated }) {
   const [accounts, setAccounts]   = useState([]);
   const [roles, setRoles]         = useState([]);
   const [manualSignIn, setManualSignIn] = useState(false);
+  const [perRole, setPerRole] = useState(false);
   const [manage, setManage]       = useState(false);
 
   const handleAttachments = (ids, uploading) => {
@@ -91,6 +92,25 @@ function NewDocModal({ projectId, onClose, onCreated }) {
     setBusy(true);
     setError(null);
     try {
+      // A large guide: one document per role, each its own session (and its own 40 screenshots), grouped by a shared tag.
+      if (isGuide && shots && perRole && roles.length >= 2) {
+        const setTag = { id: `set_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`, name: name.trim() };
+        let last = null;
+        for (const role of roles) {
+          last = await api.post(`/api/projects/${projectId}/generated-docs`, {
+            name:          `${name.trim()} — ${role}`.slice(0, 120),
+            docType,
+            audience:      audience.trim() || undefined,
+            description:   [description.trim(), `This part of the guide covers only what the "${role}" role does: sign in as that role and document its tasks.`].filter(Boolean).join('\n\n'),
+            ...ai,
+            sources:       ctx,
+            guideSet:      setTag,
+            guide:         { screenshots: true, url: guideUrl.trim(), roles: [role], hosts: guideHosts.split(/[\s,]+/).filter(Boolean), manualSignIn: false },
+          });
+        }
+        onCreated(last);
+        return;
+      }
       const r = await api.post(`/api/projects/${projectId}/generated-docs`, {
         name:          name.trim(),
         docType,
@@ -170,6 +190,12 @@ function NewDocModal({ projectId, onClose, onCreated }) {
                           </label>
                         ))}
                       </div>
+                    )}
+                    {roles.length >= 2 && (
+                      <label className="checkbox-row" style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                        <input type="checkbox" checked={perRole} onChange={(e) => setPerRole(e.target.checked)} disabled={busy} />
+                        Large guide: one document per role ({roles.length} sessions, up to 40 screenshots each)
+                      </label>
                     )}
                     <button type="button" className="btn btn-sm btn-ghost" onClick={() => setManage(true)} disabled={busy}>Manage test accounts…</button>
                     <p className="field-hint">The agent never sees the passwords: they are typed into the sign-in page for it. Use test accounts only.</p>
@@ -595,6 +621,16 @@ export function GeneratedDocs({ projectId }) {
                               >
                                 Download HTML guide
                               </a>
+                              {d.sources?.guideSet && (
+                                <a
+                                  href={`/api/projects/${projectId}/generated-docs/guide-set/${d.sources.guideSet.id}/download?format=html`}
+                                  className="btn btn-sm btn-ghost"
+                                  download
+                                  title="All the documents of this large guide as one web page, a chapter per role"
+                                >
+                                  Whole guide (HTML)
+                                </a>
+                              )}
                               <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShotsDoc(d)} title="Which screenshots the guide shows, and which it does not">
                                 Screenshots
                               </button>

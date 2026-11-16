@@ -11,7 +11,7 @@
  *   GET    /api/projects/:id/generated-docs/:docId/download  — download .md or .docx
  */
 import { persistFile, restoreFile, syncTreeDown } from './durable-files.ts';
-import { parseManifest, shotBoard, boardCounts, buildGuideHtml, shotPath, type ShotRow } from './guide-bundle.ts';
+import { parseManifest, shotBoard, boardCounts, buildGuideHtml, shotPath, mergeGuides, guideSetFromSources, type ShotRow } from './guide-bundle.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
@@ -455,6 +455,10 @@ export function registerGeneratedDocRoutes(): void {
     const ai = await resolveCreateAi(req.user!.id, body);
     const guide = await parseGuide(body.guide, docType, String(project.id), ai.engine);
     if (guide) sources.guide = guide;
+    // A large guide is several documents (one per role) that share a set: only a well-formed tag is kept, and only on a user guide.
+    delete (sources as Record<string, unknown>).guideSet;
+    const guideSet = docType === 'user-guide' ? guideSetFromSources({ guideSet: body.guideSet }) : null;
+    if (guideSet) (sources as Record<string, unknown>).guideSet = guideSet;
     const { goal, preWorkflowId, preWorkDir, repoIds } = await prepareDocRun(
       project,
       { type: docType as DocType, title: name, audience: audience ?? '' },
@@ -640,6 +644,46 @@ export function registerGeneratedDocRoutes(): void {
     const versions = (await getGeneratedDocRepository().listVersions(String(d.id))) as unknown as Row[];
 
     sendJson(res, 200, { versions: versions.map(versionView) });
+  });
+
+  // GET /api/projects/:id/generated-docs/guide-set/:setId/download?format=html — the documents of a large guide (one per
+  // role) as one web page: a chapter per document, with all their screenshots
+  router.get('/api/projects/:id/generated-docs/guide-set/:setId/download', async (req: PortalRequest, res: PortalResponse) => {
+    const project = await requireProjectAccess(req, res, req.params.id);
+    if (!project) return;
+    const all = (await getGeneratedDocRepository().listByProject(String(project.id))) as unknown as Row[];
+    const members = all
+      .map((d) => ({ d, set: guideSetFromSources(parseJson<Record<string, unknown>>(String(d.sources_json ?? '{}'), {})) }))
+      .filter((x) => x.set && x.set.id === req.params.setId)
+      .sort((a, b) => String(a.d.name).localeCompare(String(b.d.name)));
+    if (!members.length) { sendJson(res, 404, { error: 'No guide with that id' }); return; }
+    const parts: Array<{ label: string; slug: string; md: string; files: string[]; manifest: import('./guide-bundle.ts').ShotEntry[]; dir: string }> = [];
+    for (const { d, set } of members) {
+      const v = await latestVersion(String(d.id));
+      const board = v ? await guideBoard(v) : null;
+      if (!board) continue;
+      const mf = path.join(board.dir, 'screenshots', 'manifest.jsonl');
+      const label = String(d.name).startsWith(`${set!.name} — `) ? String(d.name).slice(set!.name.length + 3) : String(d.name);
+      parts.push({ label, slug: String(d.id), md: board.md, files: board.files, manifest: fs.existsSync(mf) ? parseManifest(fs.readFileSync(mf, 'utf8')).shots : [], dir: board.dir });
+    }
+    if (!parts.length) { sendJson(res, 404, { error: 'None of the documents of this guide is ready yet' }); return; }
+    const merged = mergeGuides(members[0].set!.name, parts);
+    const JSZip = (await import('jszip')).default;
+    const zip = new JSZip();
+    zip.file('index.html', buildGuideHtml({ title: members[0].set!.name, md: merged.md, rows: merged.rows, generatedAt: now() }));
+    for (const f of merged.files) {
+      const part = parts[f.part];
+      const abs = path.resolve(part.dir, ...f.from.split('/'));
+      if (!abs.startsWith(path.resolve(part.dir) + path.sep) || !fs.existsSync(abs)) continue;
+      zip.file(f.to, fs.readFileSync(abs), { createFolders: false });
+    }
+    const out = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+    (res as any).writeHead(200, {
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${members[0].set!.name.replace(/[^a-z0-9_-]/gi, '_')}-guide.zip"`,
+      'Content-Length': out.length,
+    });
+    (res as any).end(out);
   });
 
   // GET /api/projects/:id/generated-docs/:docId/shots — the shot board of a guide: which pictures are placed in the text,

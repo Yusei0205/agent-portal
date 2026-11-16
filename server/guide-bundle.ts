@@ -82,12 +82,19 @@ export function parseManifest(text: string): { shots: ShotEntry[]; skipped: numb
   return { shots, skipped };
 }
 
+const IMAGE_MD = /!\[([^\]]*)\]\(([^)\s]+)((?:\s+"[^"]*")?)\)/g;
+
 /** The picture files the Markdown shows, in order of appearance. */
 export function referencedShots(md: string): string[] {
-  const out: string[] = [];
-  for (const m of String(md ?? '').matchAll(/!\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g)) {
-    const p = textRef(m[1]);
-    if (p && !out.includes(p)) out.push(p);
+  return [...referencedCaptions(md).keys()];
+}
+
+/** Each picture the Markdown shows with the caption (alt text) of its first appearance. */
+export function referencedCaptions(md: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of String(md ?? '').matchAll(IMAGE_MD)) {
+    const p = textRef(m[2]);
+    if (p && !out.has(p)) out.set(p, m[1].trim().slice(0, 300));
   }
   return out;
 }
@@ -99,7 +106,8 @@ export function referencedShots(md: string): string[] {
 export function shotBoard(md: string, files: string[], manifestShots: ShotEntry[]): ShotRow[] {
   const byFile = new Map(manifestShots.map((s) => [s.file, s]));
   const onDisk = new Set(files.map(shotPath));
-  const refs = referencedShots(md);
+  const captions = referencedCaptions(md);
+  const refs = [...captions.keys()];
   const rows: ShotRow[] = [];
   const blank = (file: string): ShotEntry => ({ file, role: '', page: '', title: '', notes: '', boxes: [], missing: false });
   const seen = new Set<string>();
@@ -107,7 +115,10 @@ export function shotBoard(md: string, files: string[], manifestShots: ShotEntry[
     if (seen.has(file)) return;
     seen.add(file);
     const m = byFile.get(file);
-    rows.push({ ...(m ?? blank(file)), status, inManifest: Boolean(m) });
+    const row = { ...(m ?? blank(file)), status, inManifest: Boolean(m) };
+    // A manifest written during capture knows the role and the page; the caption in the text says what the picture shows.
+    if (!row.title) row.title = captions.get(file) ?? '';
+    rows.push(row);
   };
   for (const f of refs) add(f, onDisk.has(f) ? 'placed' : 'missing-file');
   for (const f of [...onDisk].sort()) add(f, 'unplaced');
@@ -226,4 +237,67 @@ footer{margin-top:3em;padding-top:1em;border-top:1px solid var(--line);color:var
 <main>${body}${extra.join('')}<footer>Generated ${esc(input.generatedAt.slice(0, 10))}</footer></main>
 </div></body></html>
 `;
+}
+
+// ── Large guides: one document per role, merged ───────────────────────────────
+
+export interface GuideSetTag { id: string; name: string }
+
+/** The tag that groups the documents of a large guide (kept in a document's sources), or null when absent or malformed. */
+export function guideSetFromSources(sources: Record<string, unknown> | null | undefined): GuideSetTag | null {
+  const g = sources?.guideSet as Record<string, unknown> | undefined;
+  if (!g || typeof g !== 'object') return null;
+  const id = typeof g.id === 'string' ? g.id.trim() : '';
+  const name = typeof g.name === 'string' ? g.name.trim() : '';
+  if (!/^[A-Za-z0-9_-]{6,60}$/.test(id) || !name || name.length > 120) return null;
+  return { id, name };
+}
+
+export interface GuidePart {
+  /** The chapter title (the role). */
+  label: string;
+  /** Names the part's screenshots folder in the merged guide: screenshots/<slug>/. */
+  slug: string;
+  md: string;
+  /** Picture files of the part, as screenshots/<file>. */
+  files: string[];
+  manifest: ShotEntry[];
+}
+
+/** Raises every heading one level (a document's # becomes the chapter's ##), leaving fenced code alone; drops the first # line. */
+function demoteHeadings(md: string): string {
+  let fenced = false;
+  let droppedTitle = false;
+  const out: string[] = [];
+  for (const line of String(md ?? '').split(/\r?\n/)) {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; out.push(line); continue; }
+    const h = !fenced && /^(#{1,6})\s+(.*)$/.exec(line);
+    if (!h) { out.push(line); continue; }
+    if (h[1].length === 1 && !droppedTitle) { droppedTitle = true; continue; }
+    out.push(`${'#'.repeat(Math.min(6, h[1].length + 1))} ${h[2]}`);
+  }
+  return out.join('\n');
+}
+
+/**
+ * Puts the documents of a large guide into one: a chapter per document (its headings one level lower), its pictures under
+ * screenshots/<slug>/ so two documents can use the same file name, and one shot board across all of them.
+ * `files` says which file of which part goes where in the bundle.
+ */
+export function mergeGuides(title: string, parts: GuidePart[]): { md: string; rows: ShotRow[]; files: Array<{ part: number; from: string; to: string }> } {
+  const chunks: string[] = [`# ${title}`];
+  const rows: ShotRow[] = [];
+  const files: Array<{ part: number; from: string; to: string }> = [];
+  parts.forEach((p, i) => {
+    const rel = (f: string): string => `screenshots/${p.slug}/${shotPath(f).slice('screenshots/'.length)}`;
+    const md = demoteHeadings(p.md).replace(IMAGE_MD, (whole, alt: string, href: string, t: string) => {
+      const r = textRef(href);
+      return r ? `![${alt}](${rel(r)}${t})` : whole;
+    });
+    chunks.push(`## ${p.label}\n\n${md.trim()}`);
+    const own = p.files.map(shotPath);
+    rows.push(...shotBoard(md, own.map(rel), p.manifest.map((m) => ({ ...m, file: rel(m.file) }))));
+    for (const f of own) files.push({ part: i, from: f, to: rel(f) });
+  });
+  return { md: chunks.join('\n\n'), rows, files };
 }

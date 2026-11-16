@@ -99,6 +99,23 @@ export const OVERLAY_SOURCE = `(function (items) {
 export const REMOVE_OVERLAY_SOURCE = `(function () { document.querySelectorAll('[data-portal-capture]').forEach(function (e) { e.remove(); }); return true; })()`;
 
 export interface CaptureBox { n: number; label: string; inView: boolean }
+
+/** The role the run signed in as last: written with each screenshot to screenshots/manifest.jsonl (where the guide's shot board reads it). */
+let signedInRole = '';
+
+/** One line of screenshots/manifest.jsonl for a screenshot just saved. Never throws: a manifest that cannot be written must not lose the picture. */
+export function appendManifest(workDir: string, rel: string, pageUrl: string, boxes: CaptureBox[]): void {
+  try {
+    let pagePath = '';
+    try { const u = new URL(pageUrl); pagePath = `${u.pathname}${u.search ? '?…' : ''}`.slice(0, 200); } catch { /* not a web page */ }
+    const line = JSON.stringify({
+      file: rel, role: signedInRole, page: pagePath, at: new Date().toISOString(),
+      boxes: boxes.map((b) => ({ n: b.n, label: b.label })),
+    });
+    fs.appendFileSync(path.join(workDir, 'screenshots', 'manifest.jsonl'), `${line}
+`);
+  } catch { /* the picture is saved; the manifest is a convenience */ }
+}
 export type CaptureResult = { ok: true; rel: string; bytes: number; png: Buffer; boxes: CaptureBox[] } | { ok: false; error: string };
 
 function locate(page: CapturePage, h: Highlight): CaptureLocator {
@@ -158,6 +175,7 @@ export async function capture(
   if (png.length > CAPTURE_LIMITS.pngBytes) return { ok: false, error: 'The screenshot is too large to send back. Capture the visible part (not the full page).' };
   fs.mkdirSync(path.dirname(target.abs), { recursive: true });
   fs.writeFileSync(target.abs, png);
+  appendManifest(workDir, target.rel, page.url(), boxes);
   return { ok: true, rel: target.rel, bytes: png.length, png, boxes };
 }
 
@@ -272,6 +290,7 @@ async function signInInner(
       const submit = submitSel ? page.locator(submitSel).first() : await firstVisible(page, SUBMIT_SELECTORS);
       if (submit) await submit.click(); else await pass.press('Enter');
       await settle(page);
+      signedInRole = account.role.slice(0, 80);
       return { ok: true, message: `Submitted the sign-in form for the "${account.role}" account. The page is now ${page.url()}. Check that you are signed in (a user menu or the home screen, not the sign-in form again).` };
     }
     // Two-step form: the username first, then the password on the next screen.

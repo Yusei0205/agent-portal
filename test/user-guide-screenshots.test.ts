@@ -188,4 +188,46 @@ describe('user guide requests', () => {
       fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
+
+  it('merges the documents of a large guide (one per role) into one web page, and keeps only a well-formed set tag', async () => {
+    const made: Array<{ doc: any; workflowId: string }> = [];
+    for (const role of ['Admin', 'Clerk']) {
+      const r = await post({ name: 'Big guide — ' + role, guideSet: { id: 'set_big0001', name: 'Big guide' } });
+      assert.equal(r.status, 200);
+      made.push(r.body as any);
+    }
+    const bad = await post({ name: 'Loose', guideSet: { id: 'x', name: '' } });
+    assert.equal((bad.body as any).doc.sources.guideSet, undefined, 'a malformed tag is dropped');
+    assert.deepEqual(made[0].doc.sources.guideSet, { id: 'set_big0001', name: 'Big guide' });
+
+    const dirs: string[] = [];
+    try {
+      for (const [i, m] of made.entries()) {
+        const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-test-set-'));
+        dirs.push(workDir);
+        fs.mkdirSync(path.join(workDir, 'screenshots'));
+        fs.writeFileSync(path.join(workDir, 'screenshots', '01-home.png'), png(640, 360));
+        fs.writeFileSync(path.join(workDir, 'screenshots', 'manifest.jsonl'), JSON.stringify({ file: 'screenshots/01-home.png', role: i ? 'Clerk' : 'Admin', page: '/home', boxes: [{ n: 1, label: 'Menu' }] }) + '\n');
+        fs.writeFileSync(path.join(workDir, 'document.md'), '# Part ' + i + '\n\n## Home\n\n![Home: 1 Menu](screenshots/01-home.png)\n');
+        await processDocOutput(m.workflowId, 'run-set-' + i, workDir);
+      }
+      const dl = await fetch(baseUrl + '/api/projects/' + projectId + '/generated-docs/guide-set/set_big0001/download?format=html', { headers: { cookie, 'x-requested-with': 'agent-portal' } });
+      assert.equal(dl.status, 200);
+      const zip = await JSZip.loadAsync(Buffer.from(await dl.arrayBuffer()));
+      const names = Object.keys(zip.files).sort();
+      assert.equal(names.length, 3, names.join(','));
+      assert.ok(names.includes('index.html'));
+      assert.equal(names.filter((n) => /^screenshots\/gd_[^/]+\/01-home\.png$/.test(n)).length, 2, 'the same file name from two documents');
+      const page = await zip.file('index.html')!.async('string');
+      assert.match(page, /<title>Big guide<\/title>/);
+      assert.match(page, /<h2 id="admin">Admin<\/h2>/);
+      assert.match(page, /<h2 id="clerk">Clerk<\/h2>/);
+      assert.match(page, /<li value="1">Menu<\/li>/);
+
+      const none = await fetch(baseUrl + '/api/projects/' + projectId + '/generated-docs/guide-set/set_nothing/download', { headers: { cookie, 'x-requested-with': 'agent-portal' } });
+      assert.equal(none.status, 404);
+    } finally {
+      for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
 });

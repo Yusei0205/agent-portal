@@ -29,7 +29,7 @@ export const RUNNER_FILE_EXTS = new Set([
  */
 export const RUNNER_CODE_EXTS = new Set([
   '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.py', '.java', '.kt', '.go', '.rs', '.rb', '.php', '.cs',
-  '.c', '.h', '.cpp', '.hpp', '.swift', '.sh', '.sql', '.css', '.scss', '.txt', '.json', '.yaml', '.yml', '.xml', '.toml',
+  '.jsonl', '.c', '.h', '.cpp', '.hpp', '.swift', '.sh', '.sql', '.css', '.scss', '.txt', '.json', '.yaml', '.yml', '.xml', '.toml',
 ]);
 const CODE_NOISE_FILES = new Set(['package-lock.json', 'npm-shrinkwrap.json', 'pnpm-lock.yaml']);
 const CODE_NOISE_DIRS = new Set(['dist', 'build', 'out', 'coverage', 'target', 'vendor', '__pycache__', '.venv', 'venv', '.next', '.nuxt', '.gradle', '.idea', '.vscode']);
