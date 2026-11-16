@@ -268,6 +268,59 @@ function runContract(
       assert.equal(srA.finished, 1, 'project A should have 1 finished run');
     });
 
+    // ── Usage by project / person / day ──────────────────────────────────────
+
+    test('usage: dollars, credits and tokens by project, person and day, and nothing from outside the window or the chosen projects', async () => {
+      const projA = label === 'DynamoDB' ? `proj-use-a-${sfx}` : seedProject('Usage A');
+      const projB = label === 'DynamoDB' ? `proj-use-b-${sfx}` : seedProject('Usage B');
+      const uid = `user-use-${sfx}`;
+      const nm = `Usage Person ${sfx}`;
+      let budget: import('../server/repositories/budget.ts').BudgetRepository;
+      const restore: Array<() => void> = [];
+      if (label === 'DynamoDB') {
+        const { DynamoDbBudgetRepository } = await import('../server/repositories/budget-dynamodb.ts');
+        budget = new DynamoDbBudgetRepository();
+        // The person's name comes from the auth repository, the project's from the projects repository.
+        const { setAuthRepository, clearAuthRepository } = await import('../server/repositories/auth.ts');
+        setAuthRepository({ listUsersWithLastActive: async () => [{ id: uid, name: nm, email: 'x@y.z' }] } as never);
+        restore.push(clearAuthRepository);
+        const { setProjectRepository, clearProjectRepository } = await import('../server/repositories/projects.ts');
+        setProjectRepository({ listProjects: async () => [{ id: projA, name: 'Usage A' }, { id: projB, name: 'Usage B' }] } as never);
+        restore.push(clearProjectRepository);
+      } else {
+        budget = new SqliteBudgetRepository();
+        getDb().prepare("INSERT OR IGNORE INTO users (id, email, name, password_hash, is_admin, disabled, created_at) VALUES (?, ?, ?, 'x', 0, 0, ?)").run(uid, `${uid}@t.t`, nm, now());
+      }
+      try {
+        const at = (daysAgo: number): string => new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+        const rec = (project: string, o: { usd?: number; credits?: number; inT?: number; outT?: number; at: string }) => budget.record({
+          user_id: uid, project_id: project, workflow_id: null, run_id: null, cost_usd: o.usd ?? 0, credits: o.credits ?? 0,
+          input_tokens: o.inT ?? 0, output_tokens: o.outT ?? 0, provider: o.credits ? 'kiro' : 'claude', model: 'm', created_at: o.at,
+        });
+        await rec(projA, { usd: 1.5, inT: 1000, outT: 500, at: at(0) });
+        await rec(projA, { credits: 10.25, at: at(1) });
+        await rec(projB, { credits: 4, at: at(2) });
+        await rec(projA, { credits: 999, at: at(40) }); // outside a 7-day window
+        const since = at(6).slice(0, 10) + 'T00:00:00.000Z';
+        const until = new Date(Date.now() + 1000).toISOString();
+
+        const all = await stats.getUsageBreakdown(since, until, [projA, projB], true);
+        const a = all.byProject.find((p) => p.id === projA)!;
+        assert.deepEqual([a.name, a.runs, a.costUsd, a.credits, a.tokens], ['Usage A', 2, 1.5, 10.25, 1500], 'dollars, credits and tokens kept apart; the old row left out');
+        assert.deepEqual([all.byProject.find((p) => p.id === projB)!.credits], [4]);
+        const person = all.byUser.find((u) => u.id === uid)!;
+        assert.deepEqual([person.name, person.costUsd, person.credits], [nm, 1.5, 14.25], 'by person: both projects, still apart');
+        assert.deepEqual(all.byDay.map((d) => d.id), [at(2), at(1), at(0)].map((d) => d.slice(0, 10)), 'one row per day with usage, oldest first');
+        assert.equal(all.byDay[1].credits, 10.25);
+
+        const onlyB = await stats.getUsageBreakdown(since, until, [projB], false);
+        assert.deepEqual(onlyB.byProject.map((p) => p.id), [projB], 'a chosen project only');
+        assert.deepEqual(onlyB.byUser, [], 'no per-person rows unless asked');
+        assert.equal(onlyB.byDay.length, 1);
+        assert.deepEqual(await stats.getUsageBreakdown(since, until, [], true), { byProject: [], byUser: [], usersScopedToProjects: true, byDay: [] }, 'no projects, no usage');
+      } finally { for (const r of restore) r(); }
+    });
+
     // ── G5/G12: failed and stopped apart, runs per day ───────────────────────
 
     test('G5/G12: failed and cancelled are counted apart, and runs are listed per day with their average time', async () => {

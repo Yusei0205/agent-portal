@@ -73,7 +73,7 @@ function yesterdayStart(): string {
 
 // ── Access control helper ──────────────────────────────────────────────────────
 
-async function requireMember(
+export async function requireMember(
   req: PortalRequest,
   res: PortalResponse,
   projectId: string,

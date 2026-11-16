@@ -56,6 +56,8 @@ import type {
   AgentRollup,
   AgentEdge,
   DailyRunStat,
+  UsageBreakdown,
+  UsageRow,
   RecentSession,
   ActiveSessionData,
   ActiveSessionStep,
@@ -528,6 +530,69 @@ export class DynamoDbStatsRepository implements StatsRepository {
       finished += d + f + c;
     }
     return { done, finished, failed, cancelled };
+  }
+
+  // ── Usage by project / person / day ─────────────────────────────────────────
+
+  async getUsageBreakdown(
+    since: string,
+    until: string,
+    projectIds: string[] | null,
+    includeUsers: boolean,
+  ): Promise<UsageBreakdown> {
+    // No projects means no usage (the per-person rollups are not kept per project, so they must not be read for nobody's projects).
+    if (projectIds !== null && projectIds.length === 0) return { byProject: [], byUser: [], usersScopedToProjects: true, byDay: [] };
+    // Every project is needed when none is chosen; with projects chosen the list only gives their names (an id stands in if it fails).
+    let projects: Array<{ id: string; name: string }> = [];
+    if (projectIds === null) projects = await getProjectRepository().listProjects();
+    else { try { projects = await getProjectRepository().listProjects(); } catch { /* names fall back to ids */ } }
+    const names = new Map(projects.map((p) => [p.id, p.name]));
+    const ids = projectIds ?? projects.map((p) => p.id);
+    const start = since.slice(0, 10);
+    // The rollup range includes its end key; nothing is stored for a day that has not happened.
+    const end = new Date(Math.max(Date.parse(until), Date.now()) + 86_400_000).toISOString().slice(0, 10);
+
+    const row = (id: string, name: string): UsageRow => ({ id, name, runs: 0, costUsd: 0, credits: 0, tokens: 0 });
+    const add = (r: UsageRow, item: Record<string, AttributeValue>): void => {
+      r.runs += getNumber(item, 'runCount');
+      r.costUsd += getNumber(item, 'costUsd');
+      r.credits += getNumber(item, 'credits');
+      r.tokens += getNumber(item, 'inputTokens') + getNumber(item, 'outputTokens');
+    };
+    const byDay = new Map<string, UsageRow>();
+    const byProject: UsageRow[] = [];
+    await Promise.all(ids.map(async (pid) => {
+      const items = await queryRollupRange(this.client, 'STATS#', [pid], start, end);
+      const r = row(pid, names.get(pid) ?? pid);
+      for (const item of items) {
+        add(r, item);
+        const date = (getString(item, 'SK') ?? '').replace('DAY#', '');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+        if (!byDay.has(date)) byDay.set(date, row(date, date));
+        add(byDay.get(date)!, item);
+      }
+      byProject.push(r);
+    }));
+
+    // Per-person rollups are kept per person only, not per project: with a project chosen they are for all projects.
+    const byUser: UsageRow[] = [];
+    if (includeUsers) {
+      const users = await getAuthRepository().listUsersWithLastActive();
+      await Promise.all(users.map(async (u) => {
+        const items = await queryRollupRange(this.client, 'USERSTATS#', [u.id], start, end);
+        const r = row(u.id, u.name ?? u.email);
+        for (const item of items) add(r, item);
+        byUser.push(r);
+      }));
+    }
+    const used = (r: UsageRow): boolean => r.runs > 0 || r.costUsd > 0 || r.credits > 0 || r.tokens > 0;
+    const biggest = (a: UsageRow, b: UsageRow): number => b.costUsd - a.costUsd || b.credits - a.credits || b.tokens - a.tokens;
+    return {
+      byProject: byProject.filter(used).sort(biggest),
+      byUser: byUser.filter(used).sort(biggest),
+      usersScopedToProjects: projectIds === null,
+      byDay: [...byDay.values()].filter((r) => r.id >= start && r.id < end).sort((a, b) => (a.id < b.id ? -1 : 1)),
+    };
   }
 
   // ── G12: runs per day ───────────────────────────────────────────────────────

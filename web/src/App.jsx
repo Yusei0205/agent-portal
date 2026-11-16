@@ -30,6 +30,7 @@ import { Configuration } from './pages/Configuration.jsx';
 import { ReviewsPage } from './pages/ReviewsPage.jsx';
 import { TestsPage } from './pages/tests/TestsPage.jsx';
 import { Dashboard } from './pages/Dashboard.jsx';
+import { Usage } from './pages/Usage.jsx';
 import { Account } from './pages/Account.jsx';
 import { Feedback } from './pages/Feedback.jsx';
 import { Help } from './pages/Help.jsx';
@@ -63,6 +64,7 @@ registerShortcuts([
   { id: 'goto_credentials',   keys: 'g y',          label: 'Go to Agent sign-ins',    group: 'Navigate' },
   { id: 'goto_config',        keys: 'g x',          label: 'Go to Agent setup',       group: 'Navigate' },
   { id: 'goto_dashboard',     keys: 'g d',          label: 'Go to Dashboard',        group: 'Navigate' },
+  { id: 'goto_usage',         keys: 'g u',          label: 'Go to Usage',            group: 'Navigate' },
 ]);
 
 // Navigation is defined in Rail.jsx (NAV_SECTIONS).
@@ -444,6 +446,7 @@ function Shell({ user, onSignOut }) {
   const isSessionsRoute   = route.projectId && route.tab === 'sessions';
   const isProjectsRoute   = !route.projectId && route.tab === 'projects';
   const isDashboardRoute  = !route.projectId && route.tab === 'dashboard';
+  const isUsageRoute      = !route.projectId && route.tab === 'usage';
   const isSetupRoute      = route.projectId && route.tab === 'setup';
   const isSettingsRoute   = !route.projectId && route.tab === 'settings';
   const isInboxRoute      = !route.projectId && route.tab === 'inbox';
@@ -549,6 +552,8 @@ function Shell({ user, onSignOut }) {
             <Projects user={user} onProjectsChange={loadProjects} />
           ) : isDashboardRoute ? (
             <Dashboard user={user} projects={projects} />
+          ) : isUsageRoute ? (
+            <Usage projects={projects} />
           ) : isSetupRoute ? (
             <ProjectHub projectId={route.projectId} user={user} initialTab={route.rest?.[0]} />
           ) : isSettingsRoute ? (

@@ -37,6 +37,7 @@ const NAV_SECTIONS = [
     label: '',
     items: [
       { tab: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
+      { tab: 'usage', label: 'Usage', icon: 'chart' },
     ],
   },
   {

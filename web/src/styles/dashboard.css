@@ -767,3 +767,21 @@
 .db-attn-detail { flex-basis: 100%; }
 .db-perf-note { font-size: 0.78rem; margin: 8px 0 0; }
 .db-cost-none { padding: 12px 0; }
+
+/* Usage page */
+.us-header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
+.us-h1 { margin: 0; }
+.us-lead { margin: 4px 0 0; max-width: 60ch; font-size: 0.86rem; }
+.us-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.us-control { display: inline-flex; align-items: center; gap: 6px; }
+.us-kpis { display: flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 20px; overflow: hidden; }
+.us-kpi { display: grid; gap: 2px; padding: 12px 20px; min-width: 140px; flex: 1 1 140px; border-right: 1px solid var(--line); }
+.us-kpi:last-child { border-right: 0; }
+.us-kpi strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; }
+.us-none { margin: -4px 0 16px; }
+.us-section { margin-bottom: 24px; }
+.us-h2 { font-size: 0.95rem; margin: 0 0 8px; }
+.us-note { font-weight: 400; font-size: 0.78rem; }
+.us-table { width: 100%; }
+.us-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.us-idle td { color: var(--ink-3); }

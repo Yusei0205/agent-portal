@@ -176,6 +176,9 @@ export const HELP_TOPICS = [
       {
         heading: 'Panels',
         rows: [
+          ['Needs attention', 'What is waiting on you: your Inbox items, failed sessions, and idle sessions that will be closed within 15 minutes. Send a message to keep an idle session open.'],
+          ['Runs per day', 'Runs that finished each day (done, failed, and stopped by you) with the average run time. Days are UTC days.'],
+          ['Success Rate', 'Done out of the runs that ended on their own. A run you stopped is shown separately and is not counted as a failure.'],
           ['Active Session', 'The session running right now and its latest steps.'],
           ['Recent Sessions', 'The latest sessions across your projects; **View all** opens Projects.'],
           ['Agent Network', 'A graph of the agents that ran and how they delegated work to each other.'],
@@ -184,6 +187,27 @@ export const HELP_TOPICS = [
       },
     ],
     tips: ['Press **g d** from anywhere to come back to the Dashboard.'],
+  },
+  {
+    id: 'usage',
+    group: 'start',
+    title: 'Usage',
+    icon: 'chart',
+    page: { tab: 'usage' },
+    summary: 'What the agents used, by person, project and day. Claude is priced in dollars and Kiro in credits, so they are shown side by side and never added together.',
+    sections: [
+      {
+        heading: 'Reading it',
+        rows: [
+          ['Runs', 'Runs that reported usage. A run that reported none is not in these rows.'],
+          ['Cost (Claude)', 'Dollars. Codex runs report tokens only, so they add to **Tokens** but not to the cost.'],
+          ['Credits (Kiro)', 'Kiro credits for the turn, as Kiro reports them.'],
+          ['By person', 'Admins only: it would show what colleagues used. With a project chosen it still covers all projects.'],
+          ['By day', 'UTC days, newest first.'],
+        ],
+      },
+    ],
+    tips: ['Press **g u** from anywhere to open Usage. Pick a period (7, 30 or 90 days) and, optionally, one project.'],
   },
 
   // ── Work ────────────────────────────────────────────────────────────────────

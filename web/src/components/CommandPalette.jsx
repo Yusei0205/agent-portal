@@ -28,6 +28,7 @@ function buildNavItems(route, user) {
   // Portal pages (always available)
   items.push(
     { id: 'goto_projects',    label: 'Projects',       description: 'All your projects',                    keys: 'g p', href: '#/projects'          },
+    { id: 'goto_usage',       label: 'Usage',          description: 'Dollars, credits and tokens by person, project and day', keys: 'g u', href: '#/usage' },
     { id: 'goto_inbox',       label: 'Inbox',          description: 'Pending PR-review notifications',      keys: 'g b', href: '#/inbox'             },
     { id: 'goto_connections', label: 'Git connections', description: 'Git hosts used to clone repositories', keys: 'g n', href: '#/connect/git' },
     { id: 'goto_integrations',label: 'Tools & services', description: 'Portal-wide MCP tools and services', keys: 'g j', href: '#/connect/tools'     },

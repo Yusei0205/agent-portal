@@ -75,7 +75,7 @@ export function CostPanel({ period, projectId, user, refreshKey }) {
         </span>
       </h2>
 
-      <p className="muted" style={{ fontSize: '0.8rem' }}>Credits are reported separately from USD. Codex subscription runs report tokens; dollar cost is not provided by Codex.</p>
+      <p className="muted" style={{ fontSize: '0.8rem' }}><a href="#/usage">Usage by person, project and day</a>. Credits are reported separately from USD. Codex subscription runs report tokens; dollar cost is not provided by Codex.</p>
 
       {noUsageReported ? (
         <p className="muted db-cost-none" role="status">

@@ -8,6 +8,7 @@ import { getTheme, setTheme } from '../lib/theme.js';
 
 const PAGE_NAMES = {
   dashboard:    'Dashboard',
+  usage:        'Usage',
   sessions:     'Sessions',
   workspaces:   'Workspaces',
   reviews:      'Reviews',

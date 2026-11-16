@@ -89,6 +89,28 @@ export interface AgentRollup {
   lastRunAt: string | null;
 }
 
+/** One line of the Usage page: what a person, project or day used. Claude is priced in dollars, Kiro in credits: kept apart. */
+export interface UsageRow {
+  /** Project id, user id, or the UTC day (YYYY-MM-DD). */
+  id: string;
+  name: string;
+  /** Runs that reported usage. */
+  runs: number;
+  costUsd: number;
+  credits: number;
+  tokens: number;
+}
+
+export interface UsageBreakdown {
+  byProject: UsageRow[];
+  /** Only when asked for (admins). */
+  byUser: UsageRow[];
+  /** True when the per-person totals were limited to the chosen projects; false when they are for all projects. */
+  usersScopedToProjects: boolean;
+  /** One row for every UTC day with usage, oldest first. */
+  byDay: UsageRow[];
+}
+
 export interface DailyRunStat {
   /** UTC day, YYYY-MM-DD (the rollups are kept per UTC day). */
   date: string;
@@ -264,6 +286,17 @@ export interface StatsRepository {
     userId: string,
     isAdmin: boolean,
   ): Promise<{ done: number; finished: number; failed: number; cancelled: number }>;
+
+  /**
+   * Usage (dollars, credits, tokens) by project, by person and by day for [since, until). `projectIds` null = every project.
+   * Callers decide who may see what; this only reads.
+   */
+  getUsageBreakdown(
+    since: string,
+    until: string,
+    projectIds: string[] | null,
+    includeUsers: boolean,
+  ): Promise<UsageBreakdown>;
 
   /** G12: Runs per day (done / failed / cancelled and the average duration) for [since, until), one row per day that had runs. */
   getDailyRunStats(

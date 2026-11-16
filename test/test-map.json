@@ -452,6 +452,22 @@
         "dashboard"
       ]
     },
+    "usage": {
+      "description": "Usage page: dollars (Claude), credits (Kiro) and tokens by person, project and day",
+      "sources": [
+        "server/usage.ts",
+        "server/repositories/stats.ts",
+        "server/repositories/stats-sqlite.ts",
+        "server/repositories/stats-dynamodb.ts",
+        "web/src/pages/Usage.jsx"
+      ],
+      "tests": [
+        "test/usage.test.ts",
+        "test/stats-repo.test.ts",
+        "test/web-usage-page.test.ts"
+      ],
+      "smokeIds": []
+    },
     "knowledge": {
       "description": "Knowledge base documents, search, ask, decisions, and learning content",
       "sources": [

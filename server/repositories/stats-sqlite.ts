@@ -20,6 +20,8 @@ import type {
   AgentRollup,
   AgentEdge,
   DailyRunStat,
+  UsageBreakdown,
+  UsageRow,
   RecentSession,
   ActiveSessionData,
   ActiveSessionStep,
@@ -350,6 +352,46 @@ export class SqliteStatsRepository implements StatsRepository {
       failed: Number(row?.failed_count ?? 0),
       cancelled: Number(row?.cancelled_count ?? 0),
     };
+  }
+
+  // ── Usage by project / person / day ─────────────────────────────────────────
+
+  async getUsageBreakdown(
+    since: string,
+    until: string,
+    projectIds: string[] | null,
+    includeUsers: boolean,
+  ): Promise<UsageBreakdown> {
+    if (projectIds !== null && projectIds.length === 0) return { byProject: [], byUser: [], usersScopedToProjects: true, byDay: [] };
+    const scope = projectIds === null ? '' : `AND bu.project_id IN (${projectIds.map(() => '?').join(',')})`;
+    const args = [since, until, ...(projectIds ?? [])];
+    const sums = `COUNT(*) AS runs, COALESCE(SUM(bu.cost_usd), 0) AS cost, COALESCE(SUM(bu.credits), 0) AS credits,
+       COALESCE(SUM(bu.input_tokens + bu.output_tokens), 0) AS tokens`;
+    type R = { id: string | null; name: string | null; runs: number; cost: number; credits: number; tokens: number };
+    const toRow = (r: R, fallback: string): UsageRow => ({
+      id: String(r.id ?? ''), name: String(r.name ?? fallback), runs: Number(r.runs), costUsd: Number(r.cost), credits: Number(r.credits), tokens: Number(r.tokens),
+    });
+    const byProject = all<R>(
+      `SELECT bu.project_id AS id, p.name AS name, ${sums}
+       FROM budget_usage bu LEFT JOIN projects p ON p.id = bu.project_id
+       WHERE bu.created_at >= ? AND bu.created_at < ? ${scope}
+       GROUP BY bu.project_id ORDER BY cost DESC, credits DESC`, ...args,
+    ).map((r) => toRow(r, '(no project)'));
+    const byUser = includeUsers
+      ? all<R>(
+        `SELECT bu.user_id AS id, COALESCE(u.name, u.email) AS name, ${sums}
+         FROM budget_usage bu LEFT JOIN users u ON u.id = bu.user_id
+         WHERE bu.created_at >= ? AND bu.created_at < ? ${scope}
+         GROUP BY bu.user_id ORDER BY cost DESC, credits DESC`, ...args,
+      ).map((r) => toRow(r, '(unknown)'))
+      : [];
+    const byDay = all<R>(
+      `SELECT substr(bu.created_at, 1, 10) AS id, substr(bu.created_at, 1, 10) AS name, ${sums}
+       FROM budget_usage bu
+       WHERE bu.created_at >= ? AND bu.created_at < ? ${scope}
+       GROUP BY substr(bu.created_at, 1, 10) ORDER BY id`, ...args,
+    ).map((r) => toRow(r, ''));
+    return { byProject, byUser, usersScopedToProjects: true, byDay };
   }
 
   // ── G12: runs per day ───────────────────────────────────────────────────────
