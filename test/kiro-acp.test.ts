@@ -383,6 +383,39 @@ describe('Kiro ACP — usage_update → credits recorded', () => {
   });
 });
 
+// ── ACP metering: what real kiro-cli sends ────────────────────────────────────
+
+describe('Kiro ACP — _kiro.dev/metadata meteringUsage → credits recorded', () => {
+  let t: TestData;
+
+  before(() => {
+    createTestDb();
+    t = makeTestData();
+    process.env.PORTAL_KIRO_FAKE = FAKE_KIRO;
+    process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-metering';
+    delete process.env.PORTAL_KIRO_TEXT_MODE;
+  });
+
+  after(async () => {
+    delete process.env.PORTAL_KIRO_FAKE;
+    delete process.env.PORTAL_FAKE_KIRO_SCENARIO;
+    await cleanup();
+  });
+
+  it('a turn whose credits come only in the metadata frame (no usage_update) still records them: the sum of the per-call entries', async () => {
+    const { ctx, events } = await makeCtx(t);
+    await runKiro(ctx);
+    const row = one<{ cost_usd: number; credits: number }>('SELECT cost_usd, credits FROM p6_runs WHERE id = ?', t.runId);
+    assert.ok(row, 'p6_runs row must exist');
+    assert.ok(Math.abs(Number(row.credits) - 0.35) < 1e-9, `credits should be 0.1 + 0.25, got ${row.credits}`);
+    assert.equal(Number(row.cost_usd), 0, 'Kiro credits must not be stored as dollars');
+    const bu = one<{ credits: number }>("SELECT credits FROM budget_usage WHERE workflow_id = ? AND provider = 'kiro'", t.workflowId);
+    assert.ok(bu && Math.abs(Number(bu.credits) - 0.35) < 1e-9, 'and in the usage records the dashboard reads');
+    const live = events.filter((e) => e.type === 'cost-update');
+    assert.equal(live.length, 1, 'one live update: the frame with only the context percentage reports no credits');
+  });
+});
+
 // ── ACP permission — approve ──────────────────────────────────────────────────
 
 describe('Kiro ACP — session/request_permission → approve', () => {

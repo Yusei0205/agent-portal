@@ -319,6 +319,8 @@
         "test/web-pull-request-session.test.ts",
         "test/kiro-runner-interrupt.test.ts",
         "test/kiro-runner-turn-limit.test.ts",
+        "test/kiro-runner-metering.test.ts",
+        "test/kiro-metering.test.ts",
         "test/queued-messages.test.ts",
         "test/lost-runs.test.ts",
         "test/recovery.test.ts",

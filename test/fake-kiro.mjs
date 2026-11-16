@@ -493,6 +493,25 @@ if (subCommand === 'acp') {
         });
       }
 
+      // What real kiro-cli sends: no standard usage_update. Frames while the turn runs carry only the context percentage; the turn-end
+      // `_kiro.dev/metadata` lists the credits, one entry per model call (here two: 0.1 + 0.25 = 0.35).
+      if (scenario === 'acp-metering') {
+        notification('_kiro.dev/metadata', { sessionId, contextUsagePercentage: 0.4 });
+        notification('session/update', {
+          sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: [{ type: 'text', text: 'Done.' }] },
+        });
+        notification('_kiro.dev/metadata', {
+          sessionId,
+          contextUsagePercentage: 0.7,
+          turnDurationMs: 1948,
+          meteringUsage: [
+            { unit: 'credit', unitPlural: 'credits', value: 0.1 },
+            { unit: 'credit', unitPlural: 'credits', value: 0.25 },
+          ],
+        });
+      }
+
       if (scenario === 'acp-permission' || scenario === 'acp-permission-deny') {
         notification('session/update', {
           sessionId,

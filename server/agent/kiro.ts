@@ -330,6 +330,24 @@ function parseRawOutput(rawOutput: unknown): string {
   return JSON.stringify(rawOutput);
 }
 
+/**
+ * The credits in a `_kiro.dev/metadata` notification: the sum of its `meteringUsage` entries that are credits (one per model call of the
+ * turn), or null when the frame has none (mid-turn frames carry only the context percentage). Same rule as kiro-runner/src/metering.ts.
+ */
+export function meteredCredits(params: unknown): number | null {
+  const entries = (params as { meteringUsage?: unknown } | null | undefined)?.meteringUsage;
+  if (!Array.isArray(entries)) return null;
+  let total = 0;
+  let any = false;
+  for (const e of entries) {
+    const o = e as { value?: unknown; unit?: unknown; unitPlural?: unknown } | null;
+    if (!o || typeof o !== 'object') continue;
+    const value = Number(o.value);
+    if ((o.unitPlural === 'credits' || o.unit === 'credit') && Number.isFinite(value) && value >= 0) { total += value; any = true; }
+  }
+  return any ? total : null;
+}
+
 function handleAcpUpdate(
   update: SessionUpdatePayload,
   ctx: RunContext,
@@ -527,6 +545,15 @@ async function runKiroAcp(
       heartbeatElapsed = 0; // reset elapsed counter when real updates arrive
 
       if (isReplaying) return; // suppress replayed history from session/load
+
+      // Kiro reports the turn's credits in its own metadata notification (never as a standard usage_update).
+      if (method === '_kiro.dev/metadata') {
+        const metered = meteredCredits(params);
+        if (metered !== null) {
+          credits = metered;
+          emit('cost-update', { credits, unit: 'credits' });
+        }
+      }
 
       if (method === 'session/update') {
         const p = params as { sessionId?: string; update?: SessionUpdatePayload };

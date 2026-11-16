@@ -22,6 +22,7 @@
 
 import { emitRunnerFiles, writeInputFilesAsync } from '../shared/runner-files.js';
 import { runCheckSteps } from '../shared/runner-checks.js';
+import { creditsFromMetadata } from './metering.js';
 import { parseRunnerRepos, cloneRunnerRepos, usablePersistRoot, PERSIST_ROOT } from '../shared/runner-repos.js';
 import { parseSnapshot, restoreWorkspace, moveSnapshotMarks } from '../shared/runner-snapshot.js';
 import { reportRepoChanges } from '../shared/runner-finalize-run.js';
@@ -530,6 +531,7 @@ export async function runKiroRun(
       // (`contextUsagePercentage`), or as used/size in the standard `usage_update`. Each notification method is
       // logged once by name so a change in what Kiro sends can be seen in the logs.
       const seenMethods = new Set<string>();
+      let meteringLogged = 0;
       let lastPercent = -1;
       const reportContext = (percent: unknown): void => {
         const n = Number(percent);
@@ -556,6 +558,18 @@ export async function runKiroRun(
         }
         if (method !== 'session/update') {
           reportContext(findPercent(params));
+          // Kiro's credits for the turn: in its own metadata notification, not in a standard usage_update.
+          if (method === '_kiro.dev/metadata') {
+            const credits = creditsFromMetadata(params);
+            if (credits !== null) {
+              // The first frames are logged as they came, so a change in what Kiro sends can be read from the logs.
+              if (meteringLogged < 3) {
+                meteringLogged++;
+                process.stdout.write(JSON.stringify({ event: 'acp_metering', meteringUsage: JSON.stringify((params as { meteringUsage?: unknown }).meteringUsage).slice(0, 400), credits }) + '\n');
+              }
+              made.emit({ type: 'usage', credits });
+            }
+          }
           return;
         }
         {
