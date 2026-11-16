@@ -53,7 +53,7 @@ function UsageTable({ title, note, firstColumn, rows, empty }) {
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id || r.name} className={r.runs === 0 ? 'us-idle' : undefined}>
+                <tr key={r.id || r.name} className={r.runs === 0 ? 'us-quiet' : undefined}>
                   <td>{r.name}</td>
                   <td className="us-num">{r.runs}</td>
                   <td className="us-num">{fmtUsd(r.costUsd)}</td>

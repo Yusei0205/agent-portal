@@ -783,5 +783,6 @@
 .us-h2 { font-size: 0.95rem; margin: 0 0 8px; }
 .us-note { font-weight: 400; font-size: 0.78rem; }
 .us-table { width: 100%; }
-.us-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.us-idle td { color: var(--ink-3); }
+/* The header and its amounts line up on the right. (.data-table th sets its own alignment, so this has to be at least as specific.) */
+.us-table th.us-num, .us-table td.us-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.us-quiet td { color: var(--ink-3); }

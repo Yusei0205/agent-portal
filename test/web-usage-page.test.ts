@@ -16,7 +16,7 @@ const full = {
   byUser: [row('u1', 'ann@x.com', 3, 2, 4, 1700), row('u2', 'bob@x.com', 1, 0, 10.25, 0)],
   byUserAllProjects: false,
   byProject: [row('p1', 'Alpha', 3, 2, 10.25, 1700), row('p2', 'Beta', 1, 0, 4, 0)],
-  byDay: [row(day(2), day(2), 1, 0, 4, 0), row(day(1), day(1), 1, 0, 10.25, 0), row(day(0), day(0), 2, 2, 0, 1700)],
+  byDay: [row(day(3), day(3), 0, 0, 0, 0), row(day(2), day(2), 1, 0, 4, 0), row(day(1), day(1), 1, 0, 10.25, 0), row(day(0), day(0), 2, 2, 0, 1700)],
 };
 
 test('the usage page shows dollars and credits apart, by person, project and day, and says so when nothing was reported', async () => {
@@ -62,7 +62,32 @@ createRoot(document.getElementById('root')).render(<Usage projects={[{ id: 'p1',
     const days = await page.getByRole('region', { name: 'By day' }).getByRole('row').allInnerTexts();
     assert.match(days[1], new RegExp(day(0)), 'newest day first');
     assert.match(days[3], new RegExp(day(2)));
+    assert.match(days[4], new RegExp(day(3)), 'a quiet day is listed too');
     assert.equal(await page.getByRole('status').count(), 0, 'usage was reported: no "none reported" line');
+
+    // Every amount sits under its own header: the same right edge and right-aligned text in all three tables, all four numeric columns.
+    // (Plain JavaScript as a string: the page has no helpers the transpiler would add.)
+    const misaligned = await page.evaluate(`(() => {
+      const bad = [];
+      const edge = (r, s) => r.right - parseFloat(s.paddingRight);
+      for (const table of Array.from(document.querySelectorAll('table.us-table'))) {
+        const heads = Array.from(table.querySelectorAll('thead th'));
+        const cells = Array.from(table.querySelectorAll('tbody tr:first-child td'));
+        heads.forEach((th, i) => {
+          if (i === 0) return;
+          const h = th.getBoundingClientRect(), c = cells[i].getBoundingClientRect();
+          const hs = getComputedStyle(th), cs = getComputedStyle(cells[i]);
+          if (hs.textAlign !== 'right' || cs.textAlign !== 'right' || Math.abs(edge(h, hs) - edge(c, cs)) > 1) {
+            bad.push(table.getAttribute('aria-label') + ' / ' + th.textContent + ': header ' + hs.textAlign + ' ' + edge(h, hs).toFixed(1) + ', amount ' + cs.textAlign + ' ' + edge(c, cs).toFixed(1));
+          }
+        });
+      }
+      return bad;
+    })()`) as string[];
+    assert.deepEqual(misaligned, [], 'headers and amounts line up');
+    // A day with no runs is the same font as the others (it is only dimmer).
+    const fonts = await page.evaluate(`Array.from(document.querySelectorAll('table.us-table tbody td')).map((td) => getComputedStyle(td).fontFamily)`) as string[];
+    assert.equal(new Set(fonts).size, 1, 'one font in every table cell: ' + [...new Set(fonts)].join(' | '));
 
     // A project and a period are sent to the portal; per-person totals that are for all projects say so.
     answer = { ...full, byUserAllProjects: true };
