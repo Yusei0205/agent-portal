@@ -89,6 +89,15 @@ export interface AgentRollup {
   lastRunAt: string | null;
 }
 
+export interface DailyRunStat {
+  /** UTC day, YYYY-MM-DD (the rollups are kept per UTC day). */
+  date: string;
+  done: number;
+  failed: number;
+  cancelled: number;
+  avgDurationMs: number;
+}
+
 export interface AgentEdge {
   source: string;
   target: string;
@@ -244,14 +253,26 @@ export interface StatsRepository {
     isAdmin: boolean,
   ): Promise<{ today: number; yesterday: number }>;
 
-  /** G5/G6: Done + finished counts for success-rate computation over a period. */
+  /**
+   * G5/G6: Run counts for success-rate computation over a period. `finished` = done + failed + cancelled; `failed` and `cancelled`
+   * are given apart because a run the person stopped is not a failure.
+   */
   getSuccessRateCounts(
     since: string,
     until: string,
     projectId: string | null,
     userId: string,
     isAdmin: boolean,
-  ): Promise<{ done: number; finished: number }>;
+  ): Promise<{ done: number; finished: number; failed: number; cancelled: number }>;
+
+  /** G12: Runs per day (done / failed / cancelled and the average duration) for [since, until), one row per day that had runs. */
+  getDailyRunStats(
+    since: string,
+    until: string,
+    projectId: string | null,
+    userId: string,
+    isAdmin: boolean,
+  ): Promise<DailyRunStat[]>;
 
   /** G7: Per-agent aggregate stats in period. */
   getAgentRollups(

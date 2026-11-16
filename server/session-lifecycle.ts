@@ -26,6 +26,7 @@ import { getSessionBrowserState, shutdownSessionBrowser } from './agent/browser-
 import { getSetting } from './settings.ts';
 import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
 import { getSessionsRepository } from './repositories/sessions.ts';
+import type { WorkflowRecord } from './repositories/sessions.ts';
 import { sweepLostRuns } from './workflows/driver.ts';
 import { sessionSignIn } from './session-sign-in.ts';
 import { getSessionLimits } from './engine-limits.ts';
@@ -63,6 +64,20 @@ export function idleStopInfo(w: { status?: unknown; last_turn_at?: unknown; stop
   const timeoutMinutes = getIdleTimeoutMinutes();
   const at = Date.parse(String(w.last_turn_at)) + timeoutMinutes * 60_000;
   return Number.isFinite(at) ? { stopAt: new Date(at).toISOString(), timeoutMinutes } : null;
+}
+
+/** Sessions the idle check will stop within the next `withinMinutes` minutes, soonest first (what the dashboard warns about). */
+export async function listIdleClosingSoon(withinMinutes: number): Promise<Array<{ workflow: WorkflowRecord; stopAt: string }>> {
+  const timeoutMinutes = getIdleTimeoutMinutes();
+  const idleFor = Math.max(0, timeoutMinutes - withinMinutes);
+  const cutoff = new Date(Date.now() - idleFor * 60_000).toISOString();
+  const rows = await getSessionsRepository().listIdleWorkflows(cutoff);
+  const out: Array<{ workflow: WorkflowRecord; stopAt: string }> = [];
+  for (const workflow of rows) {
+    const info = idleStopInfo(workflow);
+    if (info) out.push({ workflow, stopAt: info.stopAt });
+  }
+  return out.sort((a, b) => (a.stopAt < b.stopAt ? -1 : 1));
 }
 
 /**

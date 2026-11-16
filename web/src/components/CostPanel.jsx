@@ -58,6 +58,8 @@ export function CostPanel({ period, projectId, user, refreshKey }) {
     );
   }
 
+  // Runs happened but none reported any cost, credits or tokens (Kiro does not report them yet): that is "not reported", not "free".
+  const noUsageReported = data.totalRuns > 0 && !data.totalCost && !data.totalCredits && !data.totalTokens;
   const showByProject = !projectId && data.costByProject?.length > 1;
   const showByUser = user?.is_admin && data.costByUser?.length > 0;
 
@@ -67,13 +69,20 @@ export function CostPanel({ period, projectId, user, refreshKey }) {
         <Icon name="chart" size={16} aria-hidden="true" />
         Cost and usage
         <span className="muted" style={{ fontWeight: 400, marginLeft: 8, fontSize: '0.8rem' }}>
-          {fmtCost(data.totalCost)} total · {Number(data.totalCredits ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} credits · {fmtTokens(data.totalTokens)} tokens · {data.totalRuns} runs
+          {noUsageReported
+            ? `usage not reported · ${data.totalRuns} runs`
+            : `${fmtCost(data.totalCost)} total · ${Number(data.totalCredits ?? 0).toLocaleString(undefined, { maximumFractionDigits: 4 })} credits · ${fmtTokens(data.totalTokens)} tokens · ${data.totalRuns} runs`}
         </span>
       </h2>
 
       <p className="muted" style={{ fontSize: '0.8rem' }}>Credits are reported separately from USD. Codex subscription runs report tokens; dollar cost is not provided by Codex.</p>
 
-      {data.totalRuns === 0 && data.totalCost === 0 && !data.totalCredits && !data.totalTokens ? (
+      {noUsageReported ? (
+        <p className="muted db-cost-none" role="status">
+          {data.totalRuns} run{data.totalRuns === 1 ? '' : 's'} in this period, but none reported any cost, credits or tokens (Kiro sessions do not
+          report usage yet), so there is nothing to total. Try a longer period to see earlier days that did.
+        </p>
+      ) : data.totalRuns === 0 && data.totalCost === 0 && !data.totalCredits && !data.totalTokens ? (
         <p className="muted" style={{ padding: '12px 0' }}>No usage in this period yet.</p>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>

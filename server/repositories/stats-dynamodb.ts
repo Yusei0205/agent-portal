@@ -55,6 +55,7 @@ import type {
   UserCost,
   AgentRollup,
   AgentEdge,
+  DailyRunStat,
   RecentSession,
   ActiveSessionData,
   ActiveSessionStep,
@@ -509,21 +510,52 @@ export class DynamoDbStatsRepository implements StatsRepository {
     projectId: string | null,
     userId: string,
     isAdmin: boolean,
-  ): Promise<{ done: number; finished: number }> {
+  ): Promise<{ done: number; finished: number; failed: number; cancelled: number }> {
     const projectIds = await resolveProjectIds(projectId, userId, isAdmin);
     const startDate = since.slice(0, 10);
     const endDate = until.slice(0, 10);
     const effectiveIds = projectIds ?? ['GLOBAL'];
 
     const items = await queryRollupRange(this.client, 'RUNSTATS#', effectiveIds, startDate, endDate);
-    let done = 0, finished = 0;
+    let done = 0, finished = 0, failed = 0, cancelled = 0;
     for (const item of items) {
       const d = getNumber(item, 'doneCount');
-      const f = getNumber(item, 'failedCount') + getNumber(item, 'cancelledCount');
+      const f = getNumber(item, 'failedCount');
+      const c = getNumber(item, 'cancelledCount');
       done += d;
-      finished += d + f;
+      failed += f;
+      cancelled += c;
+      finished += d + f + c;
     }
-    return { done, finished };
+    return { done, finished, failed, cancelled };
+  }
+
+  // ── G12: runs per day ───────────────────────────────────────────────────────
+
+  async getDailyRunStats(
+    since: string,
+    until: string,
+    projectId: string | null,
+    userId: string,
+    isAdmin: boolean,
+  ): Promise<DailyRunStat[]> {
+    const projectIds = await resolveProjectIds(projectId, userId, isAdmin);
+    const items = await queryRollupRange(this.client, 'RUNSTATS#', projectIds ?? ['GLOBAL'], since.slice(0, 10), until.slice(0, 10));
+    const byDay = new Map<string, { done: number; failed: number; cancelled: number; ms: number; n: number }>();
+    for (const item of items) {
+      const date = (getString(item, 'SK') ?? '').replace('DAY#', '');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+      const d = byDay.get(date) ?? { done: 0, failed: 0, cancelled: 0, ms: 0, n: 0 };
+      d.done += getNumber(item, 'doneCount');
+      d.failed += getNumber(item, 'failedCount');
+      d.cancelled += getNumber(item, 'cancelledCount');
+      d.ms += getNumber(item, 'totalDurationMs');
+      d.n += getNumber(item, 'durationCount');
+      byDay.set(date, d);
+    }
+    return [...byDay.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([date, d]) => ({
+      date, done: d.done, failed: d.failed, cancelled: d.cancelled, avgDurationMs: d.n > 0 ? Math.round(d.ms / d.n) : 0,
+    }));
   }
 
   // ── G7: per-agent rollups ────────────────────────────────────────────────────

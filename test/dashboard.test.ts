@@ -1032,3 +1032,107 @@ describe('GET /api/dashboard/agents/:agent/runs – URL edge cases', () => {
     assert.ok(runs.length >= 1, 'drill-down for "qa/review" via %2F should return runs');
   });
 });
+
+// ── Success rate, runs per day, idle sessions about to close ──────────────────
+
+function seedIdleWorkflow(projectId: string, opts: { minutesAgo: number; status?: string; stopReason?: string; title?: string }): string {
+  const db = getDb();
+  const wid = `wf-idle-${Math.random().toString(36).slice(2)}`;
+  const ts = now();
+  db.prepare(`
+    INSERT INTO p6_workflows
+      (id, project_id, goal, title, status, engine, trust_tools, lead_agent, created_at, updated_at, last_turn_at, stop_reason)
+    VALUES (?, ?, 'idle goal', ?, ?, 'demo', 0, 'default', ?, ?, ?, ?)
+  `).run(wid, projectId, opts.title ?? 'Idle session', opts.status ?? 'done', ts, ts, new Date(Date.now() - opts.minutesAgo * 60_000).toISOString(), opts.stopReason ?? '');
+  return wid;
+}
+
+describe('GET /api/dashboard – success rate leaves out runs the person stopped', () => {
+  test('2 done + 1 failed + 3 stopped is 2/3, with the failed and stopped counts given apart', async () => {
+    const proj = seedProject('Rate Proj');
+    for (const st of ['done', 'done', 'failed', 'cancelled', 'cancelled', 'cancelled'] as const) seedWorkflowAndRun(proj, 'rate-agent', st);
+    const r = await fetchJson(baseUrl, `/api/dashboard?period=today&projectId=${proj}`, { cookie: adminCookie });
+    const summary = (r.body as { summary: Record<string, number> }).summary;
+    assert.ok(Math.abs(summary.successRate - 2 / 3) < 1e-9, `rate ${summary.successRate}`);
+    assert.equal(summary.failedRuns, 1);
+    assert.equal(summary.stoppedRuns, 3);
+    assert.equal(summary.finishedRuns, 6);
+    // The per-agent rate is the same measure.
+    const agent = (r.body as { agents: Array<Record<string, number | string>> }).agents.find((a) => a.agent === 'rate-agent')!;
+    assert.ok(Math.abs(Number(agent.successRate) - 2 / 3) < 1e-9, `agent rate ${agent.successRate}`);
+  });
+
+  test('only stopped runs: nothing finished on its own, so the page has no rate to show', async () => {
+    const proj = seedProject('Stopped Only Proj');
+    seedWorkflowAndRun(proj, 'stop-agent', 'cancelled');
+    seedWorkflowAndRun(proj, 'stop-agent', 'cancelled');
+    const r = await fetchJson(baseUrl, `/api/dashboard?period=today&projectId=${proj}`, { cookie: adminCookie });
+    const summary = (r.body as { summary: Record<string, number> }).summary;
+    assert.equal(summary.finishedRuns - summary.stoppedRuns, 0);
+    assert.equal(summary.stoppedRuns, 2);
+    assert.equal(summary.failedRuns, 0);
+  });
+
+  test('dayStartUtc is UTC midnight today', async () => {
+    const r = await fetchJson(baseUrl, '/api/dashboard?period=today', { cookie: adminCookie });
+    const { dayStartUtc } = (r.body as { summary: { dayStartUtc: string } }).summary;
+    assert.equal(dayStartUtc, new Date(new Date().setUTCHours(0, 0, 0, 0)).toISOString());
+  });
+});
+
+describe('GET /api/dashboard – runs per day', () => {
+  test('a day for every day of the window (7, or 30 for the 30d period), oldest first, today carrying the seeded runs', async () => {
+    const proj = seedProject('Daily Proj');
+    for (const st of ['done', 'done', 'failed', 'cancelled'] as const) seedWorkflowAndRun(proj, 'daily-agent', st);
+    const week = (await fetchJson(baseUrl, `/api/dashboard?period=today&projectId=${proj}`, { cookie: adminCookie })).body as { daily: Array<Record<string, number | string>> };
+    assert.equal(week.daily.length, 7);
+    const dates = week.daily.map((d) => String(d.date));
+    assert.deepEqual([...dates].sort(), dates, 'oldest first');
+    assert.equal(dates[6], new Date().toISOString().slice(0, 10), 'ends today');
+    const today = week.daily[6];
+    assert.deepEqual([today.done, today.failed, today.cancelled], [2, 1, 1]);
+    assert.deepEqual(week.daily.slice(0, 6).map((d) => Number(d.done) + Number(d.failed) + Number(d.cancelled)), [0, 0, 0, 0, 0, 0], 'days with no runs are zeros, not gaps');
+    const month = (await fetchJson(baseUrl, `/api/dashboard?period=30d&projectId=${proj}`, { cookie: adminCookie })).body as { daily: unknown[] };
+    assert.equal(month.daily.length, 30);
+  });
+
+  test('fillDays puts every day in and leaves the rest zero', async () => {
+    const { fillDays } = await import('../server/dashboard.ts');
+    const out = fillDays('2026-11-10T00:00:00.000Z', 4, [{ date: '2026-11-11', done: 2, failed: 1, cancelled: 0, avgDurationMs: 5 }]);
+    assert.deepEqual(out.map((d) => d.date), ['2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13']);
+    assert.deepEqual(out.map((d) => d.done), [0, 2, 0, 0]);
+  });
+});
+
+describe('GET /api/dashboard – idle sessions about to close', () => {
+  test('lists a session idle long enough to close within 15 minutes, soonest first; not a fresh one, a running one or a stopped one', async () => {
+    const proj = seedProject('Idle Proj');
+    // Default idle timeout is 30 minutes: 25 minutes idle = closes in about 5, 20 idle = about 10, 5 idle = about 25 (not yet).
+    const soon = seedIdleWorkflow(proj, { minutesAgo: 25, title: 'Closes first' });
+    const later = seedIdleWorkflow(proj, { minutesAgo: 20, title: 'Closes second' });
+    seedIdleWorkflow(proj, { minutesAgo: 5, title: 'Fresh' });
+    seedIdleWorkflow(proj, { minutesAgo: 25, status: 'running', title: 'Running' });
+    seedIdleWorkflow(proj, { minutesAgo: 25, stopReason: 'idle', title: 'Already stopped' });
+    const r = await fetchJson(baseUrl, `/api/dashboard?projectId=${proj}`, { cookie: adminCookie });
+    const idle = (r.body as { idleClosing: Array<{ id: string; title: string; stopAt: string; projectName: string }> }).idleClosing;
+    assert.deepEqual(idle.map((i) => i.id), [soon, later]);
+    assert.deepEqual(idle.map((i) => i.title), ['Closes first', 'Closes second']);
+    assert.equal(idle[0].projectName, 'Idle Proj');
+    const left = Date.parse(idle[0].stopAt) - Date.now();
+    assert.ok(left > 3 * 60_000 && left < 6 * 60_000, `about 5 minutes left, got ${left}`);
+  });
+
+  test("a member sees only their own projects' idle sessions", async () => {
+    const { userId, cookie } = await createMemberUser(baseUrl, 'idle-mem');
+    const mine = seedProject('Idle Mine');
+    const foreign = seedProject('Idle Foreign');
+    addProjectMember(mine, userId);
+    const own = seedIdleWorkflow(mine, { minutesAgo: 25, title: 'Mine' });
+    const other = seedIdleWorkflow(foreign, { minutesAgo: 25, title: 'Not mine' });
+    const ids = ((await fetchJson(baseUrl, '/api/dashboard', { cookie })).body as { idleClosing: Array<{ id: string }> }).idleClosing.map((i) => i.id);
+    assert.ok(ids.includes(own));
+    assert.ok(!ids.includes(other), "another project's session must not be listed to a member");
+    const adminIds = ((await fetchJson(baseUrl, '/api/dashboard', { cookie: adminCookie })).body as { idleClosing: Array<{ id: string }> }).idleClosing.map((i) => i.id);
+    assert.ok(adminIds.includes(other), 'an admin sees all');
+  });
+});

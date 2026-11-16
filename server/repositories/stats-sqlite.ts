@@ -19,6 +19,7 @@ import type {
   UserCost,
   AgentRollup,
   AgentEdge,
+  DailyRunStat,
   RecentSession,
   ActiveSessionData,
   ActiveSessionStep,
@@ -328,11 +329,13 @@ export class SqliteStatsRepository implements StatsRepository {
     projectId: string | null,
     userId: string,
     isAdmin: boolean,
-  ): Promise<{ done: number; finished: number }> {
+  ): Promise<{ done: number; finished: number; failed: number; cancelled: number }> {
     const scope = buildScope('w', projectId, isAdmin, userId);
-    const row = one<{ done_count: number; finished: number }>(
+    const row = one<{ done_count: number; finished: number; failed_count: number; cancelled_count: number }>(
       `SELECT
          SUM(CASE WHEN r.status = 'done' THEN 1 ELSE 0 END) AS done_count,
+         SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+         SUM(CASE WHEN r.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
          SUM(CASE WHEN r.status IN (${TERMINAL_STATUSES}) THEN 1 ELSE 0 END) AS finished
        FROM p6_runs r
        JOIN p6_workflows w ON w.id = r.workflow_id
@@ -344,7 +347,44 @@ export class SqliteStatsRepository implements StatsRepository {
     return {
       done: Number(row?.done_count ?? 0),
       finished: Number(row?.finished ?? 0),
+      failed: Number(row?.failed_count ?? 0),
+      cancelled: Number(row?.cancelled_count ?? 0),
     };
+  }
+
+  // ── G12: runs per day ───────────────────────────────────────────────────────
+
+  async getDailyRunStats(
+    since: string,
+    until: string,
+    projectId: string | null,
+    userId: string,
+    isAdmin: boolean,
+  ): Promise<DailyRunStat[]> {
+    const scope = buildScope('w', projectId, isAdmin, userId);
+    const rows = all<{ day: string; done_count: number; failed_count: number; cancelled_count: number; dur_total: number; dur_n: number }>(
+      `SELECT substr(r.created_at, 1, 10) AS day,
+         SUM(CASE WHEN r.status = 'done' THEN 1 ELSE 0 END) AS done_count,
+         SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+         SUM(CASE WHEN r.status = 'cancelled' THEN 1 ELSE 0 END) AS cancelled_count,
+         SUM(CASE WHEN r.started_at IS NOT NULL AND r.finished_at IS NOT NULL
+               THEN (julianday(r.finished_at) - julianday(r.started_at)) * 86400000 ELSE 0 END) AS dur_total,
+         SUM(CASE WHEN r.started_at IS NOT NULL AND r.finished_at IS NOT NULL THEN 1 ELSE 0 END) AS dur_n
+       FROM p6_runs r
+       JOIN p6_workflows w ON w.id = r.workflow_id
+       WHERE r.status IN (${TERMINAL_STATUSES}) AND r.created_at >= ? AND r.created_at < ?
+         ${scope.filter}
+       GROUP BY day ORDER BY day`,
+      since, until,
+      ...scope.args,
+    );
+    return rows.map((r) => ({
+      date: r.day,
+      done: Number(r.done_count),
+      failed: Number(r.failed_count),
+      cancelled: Number(r.cancelled_count),
+      avgDurationMs: Number(r.dur_n) > 0 ? Math.round(Number(r.dur_total) / Number(r.dur_n)) : 0,
+    }));
   }
 
   // ── G7: per-agent rollups ────────────────────────────────────────────────────

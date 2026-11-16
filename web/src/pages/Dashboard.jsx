@@ -4,10 +4,12 @@
  * Panels:
  *  1. Greeting header + controls (period, project, refresh, animation toggle)
  *  2. 4 KPI stat cards
- *  3. Agent Network graph (SVG radial)
- *  4. Active Session vertical timeline (sidebar)
- *  5. Recent Sessions list
- *  6. Agent Performance sortable table + drill-down modal
+ *  3. Needs attention (inbox, idle sessions about to close, failed sessions)
+ *  4. Runs per day chart
+ *  5. Agent Network graph (SVG radial)
+ *  6. Active Session vertical timeline (sidebar)
+ *  7. Recent Sessions list
+ *  8. Agent Performance sortable table + drill-down modal (columns the deployment does not record are left out)
  *
  * Live updates: subscribes to the global SSE stream, debounced refetch on
  * "dashboard.changed" events.
@@ -19,6 +21,7 @@ import { subscribeGlobal } from '../lib/events.js';
 import { href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
 import { CostPanel } from '../components/CostPanel.jsx';
+import { AttentionPanel, RunsTrendPanel } from '../components/DashboardInsights.jsx';
 import { formatRelative, formatUsage } from '../lib/util.js';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
@@ -48,6 +51,13 @@ function fmtTokens(n) {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(Math.round(n));
+}
+
+/** What "today" means: the rollups are kept per UTC day, so it starts at UTC midnight, which is some other hour for the viewer. */
+export function dayStartLabel(iso) {
+  const d = new Date(iso);
+  if (!iso || Number.isNaN(d.getTime())) return undefined;
+  return `Since ${d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} your time (UTC midnight)`;
 }
 
 function greeting(name) {
@@ -845,6 +855,22 @@ function AgentPerformancePanel({ agents: rawAgents, onDrill }) {
 
   const sorted = useMemo(() => sortRows(agents, sortCol, sortDir), [agents, sortCol, sortDir]);
 
+  // A deployment that does not record a number sends null (percentiles) or a flat 0 (tool calls): a column of "0 errors" or "—" would
+  // read as a result, so those columns are left out and a line says so.
+  const left = useMemo(() => {
+    const noCalls = agents.every((a) => !a.toolCalls);
+    return {
+      p50DurationMs: agents.every((a) => a.p50DurationMs == null),
+      p95DurationMs: agents.every((a) => a.p95DurationMs == null),
+      toolCalls: noCalls,
+      toolErrors: noCalls,
+      // Runs that report no usage (Kiro) add up to 0 tokens: that is "not reported", not "none used".
+      _totalTokens: agents.every((a) => !a._totalTokens),
+    };
+  }, [agents]);
+  const cols = PERF_COLS.filter((c) => !left[c.key]);
+  const leftOut = PERF_COLS.filter((c) => left[c.key]).map((c) => c.label);
+
   const toggleSort = (col) => {
     if (sortCol === col) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortCol(col); setSortDir('desc'); }
@@ -878,7 +904,7 @@ function AgentPerformancePanel({ agents: rawAgents, onDrill }) {
         <table className="data-table db-perf-table" aria-label="Agent performance metrics">
           <thead>
             <tr>
-              {PERF_COLS.map((c) => (
+              {cols.map((c) => (
                 <SortTh key={c.key} col={c.key} label={c.label} numeric={c.numeric} {...thProps} />
               ))}
             </tr>
@@ -902,18 +928,20 @@ function AgentPerformancePanel({ agents: rawAgents, onDrill }) {
                     {fmtPct(row.successRate)}
                   </span>
                 </td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.p50DurationMs)}</td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.p95DurationMs)}</td>
+                {!left.p50DurationMs && <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.p50DurationMs)}</td>}
+                {!left.p95DurationMs && <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.p95DurationMs)}</td>}
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtMs(row.avgDurationMs)}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatUsage(row._avgCost, row._avgCredits)}</td>
                 <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatUsage(row._totalCost, row._totalCredits)}</td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtTokens(row._totalTokens)}</td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.toolCalls ?? '—'}</td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-                  <span style={{ color: row.toolErrors > 0 ? 'var(--danger)' : 'inherit' }}>
-                    {row.toolErrors ?? '—'}
-                  </span>
-                </td>
+                {!left._totalTokens && <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtTokens(row._totalTokens)}</td>}
+                {!left.toolCalls && <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{row.toolCalls ?? '—'}</td>}
+                {!left.toolErrors && (
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                    <span style={{ color: row.toolErrors > 0 ? 'var(--danger)' : 'inherit' }}>
+                      {row.toolErrors ?? '—'}
+                    </span>
+                  </td>
+                )}
                 <td className="muted" style={{ fontSize: '0.79rem', whiteSpace: 'nowrap' }}>
                   {formatRelative(row.lastRunAt)}
                 </td>
@@ -922,6 +950,9 @@ function AgentPerformancePanel({ agents: rawAgents, onDrill }) {
           </tbody>
         </table>
       </div>
+      {leftOut.length > 0 && (
+        <p className="muted db-perf-note">Not recorded here, so not shown: {leftOut.join(', ')}.</p>
+      )}
     </section>
   );
 }
@@ -1030,6 +1061,10 @@ export function Dashboard({ user, projects }) {
   const agents = data?.agents ?? [];
   const recentSessions = data?.recentSessions ?? [];
   const activeSession = data?.activeSession ?? null;
+
+  // The rate is out of the runs that ended on their own; "no finished runs" is not 0%.
+  const endedOnTheirOwn = (summary.finishedRuns ?? 0) - (summary.stoppedRuns ?? 0);
+  const rateKnown = endedOnTheirOwn > 0;
 
   const completedDelta = summary.completedYesterday != null
     ? summary.completedToday - summary.completedYesterday
@@ -1154,9 +1189,10 @@ export function Dashboard({ user, projects }) {
             <StatCard
               icon="check"
               iconColor="var(--ok)"
-              label="Completed Today"
+              label="Runs Completed Today"
               rawValue={summary.completedToday}
               value={fmt(summary.completedToday)}
+              sub={dayStartLabel(summary.dayStartUtc)}
               deltaValue={completedDelta != null ? Math.abs(completedDelta) : undefined}
               deltaLabel={completedDelta != null
                 ? `${completedDelta >= 0 ? '+' : ''}${completedDelta} vs yesterday`
@@ -1166,18 +1202,30 @@ export function Dashboard({ user, projects }) {
             />
             <StatCard
               icon="chart"
-              iconColor={summary.successRate >= 0.9 ? 'var(--ok)' : 'var(--warn)'}
+              iconColor={rateKnown && summary.successRate >= 0.9 ? 'var(--ok)' : 'var(--warn)'}
               label="Success Rate"
-              value={fmtPct(summary.successRate)}
-              deltaLabel={srDelta != null
+              value={rateKnown ? fmtPct(summary.successRate) : null}
+              sub={rateKnown
+                ? `${summary.failedRuns ?? 0} failed${summary.stoppedRuns ? ` · ${summary.stoppedRuns} stopped by you (not counted)` : ''}`
+                : (summary.stoppedRuns ? `${summary.stoppedRuns} stopped by you, none finished on their own` : 'No finished runs in this period')}
+              deltaLabel={rateKnown && srDelta != null
                 ? `${srDelta >= 0 ? '+' : ''}${srDelta.toFixed(1)} pts vs prev period`
                 : undefined}
-              deltaDir={srDelta == null ? undefined : srDelta >= 0 ? 'up' : 'down'}
+              deltaDir={!rateKnown || srDelta == null ? undefined : srDelta >= 0 ? 'up' : 'down'}
               animated={animated}
             />
           </>
         )}
       </div>
+
+      {/* ── What is waiting on the person, and how the runs are going ── */}
+      <AttentionPanel
+        idleClosing={data?.idleClosing}
+        recentSessions={recentSessions}
+        projectFilter={projectFilter}
+        refreshKey={data?.generatedAt}
+      />
+      {data && <RunsTrendPanel daily={data.daily} period={period} />}
 
       {/* ── Cost (was the Insights page) ── */}
       <CostPanel period={period} projectId={projectFilter} user={user} refreshKey={data?.generatedAt} />

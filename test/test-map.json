@@ -437,11 +437,14 @@
         "server/repositories/stats-sqlite.ts",
         "server/repositories/stats-dynamodb.ts",
         "web/src/pages/Dashboard.jsx",
+        "web/src/components/DashboardInsights.jsx",
+        "web/src/components/CostPanel.jsx",
         "web/src/styles/dashboard.css"
       ],
       "tests": [
         "test/dashboard.test.ts",
-        "test/stats-repo.test.ts"
+        "test/stats-repo.test.ts",
+        "test/web-dashboard-insights.test.ts"
       ],
       "smokeIds": [
         "dashboard"

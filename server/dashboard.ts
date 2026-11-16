@@ -21,6 +21,10 @@ import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
 import { getProjectRepository } from './repositories/projects.ts';
 import { getStatsRepository } from './repositories/stats.ts';
+import { listIdleClosingSoon } from './session-lifecycle.ts';
+
+/** A session is listed as "closing soon" when the idle check will stop it within this many minutes. */
+const IDLE_CLOSING_WINDOW_MIN = 15;
 
 // ── Period helpers ─────────────────────────────────────────────────────────────
 
@@ -124,9 +128,20 @@ interface DashboardShape {
     queuedSessions: number;
     completedToday: number;
     completedYesterday: number;
+    /** Done / (done + failed). A run the person stopped is not a failure, so it is not in this rate. */
     successRate: number;
     successRatePrev: number | null;
+    /** Runs that ended in the period: done, failed, and stopped by the person (cancelled). 0 finished = no rate to show. */
+    finishedRuns: number;
+    failedRuns: number;
+    stoppedRuns: number;
+    /** Start of "today" (UTC midnight: the rollups are kept per UTC day), so the page can say what "today" means for the viewer. */
+    dayStartUtc: string;
   };
+  /** Runs per UTC day for the chart (30 days for the 30d period, otherwise 7), every day present, oldest first. */
+  daily: Array<{ date: string; done: number; failed: number; cancelled: number; avgDurationMs: number }>;
+  /** Idle sessions the idle check will close within IDLE_CLOSING_WINDOW_MIN minutes. */
+  idleClosing: Array<{ id: string; projectId: string; projectName: string; title: string; stopAt: string }>;
   network: {
     nodes: Array<{
       id: string;
@@ -167,6 +182,53 @@ interface DashboardShape {
   };
 }
 
+// ── Chart and warning helpers ─────────────────────────────────────────────────
+
+/** One row for every UTC day from `since`, so a day with no runs is a zero on the chart rather than a gap. */
+export function fillDays(
+  since: string,
+  days: number,
+  rows: Array<{ date: string; done: number; failed: number; cancelled: number; avgDurationMs: number }>,
+): DashboardShape['daily'] {
+  const byDate = new Map(rows.map((r) => [r.date, r]));
+  const out: DashboardShape['daily'] = [];
+  const start = Date.parse(since);
+  for (let i = 0; i < days; i++) {
+    const date = new Date(start + i * 86_400_000).toISOString().slice(0, 10);
+    const r = byDate.get(date);
+    out.push({ date, done: r?.done ?? 0, failed: r?.failed ?? 0, cancelled: r?.cancelled ?? 0, avgDurationMs: r?.avgDurationMs ?? 0 });
+  }
+  return out;
+}
+
+async function idleClosingSessions(projectId: string | null, userId: string, isAdmin: boolean): Promise<DashboardShape['idleClosing']> {
+  try {
+    let rows = await listIdleClosingSoon(IDLE_CLOSING_WINDOW_MIN);
+    if (projectId) rows = rows.filter((r) => r.workflow.project_id === projectId);
+    else if (!isAdmin) {
+      const mine = new Set((await getProjectRepository().listMyProjects(userId)).map((p) => p.id));
+      rows = rows.filter((r) => r.workflow.project_id && mine.has(r.workflow.project_id));
+    }
+    rows = rows.slice(0, 10);
+    const names = new Map<string, string>();
+    for (const pid of new Set(rows.map((r) => r.workflow.project_id).filter(Boolean) as string[])) {
+      const p = await getProjectRepository().getProjectById(pid);
+      if (p) names.set(pid, p.name);
+    }
+    return rows.map(({ workflow: w, stopAt }) => ({
+      id: String(w.id),
+      projectId: w.project_id ?? '',
+      projectName: w.project_id ? (names.get(w.project_id) ?? '') : '',
+      title: w.title || String(w.goal ?? '').slice(0, 100),
+      stopAt,
+    }));
+  } catch (e) {
+    // A warning strip must never take the dashboard down.
+    console.error('[dashboard] could not list idle sessions:', e);
+    return [];
+  }
+}
+
 // ── Dashboard computation ─────────────────────────────────────────────────────
 
 async function computeDashboard(
@@ -182,6 +244,9 @@ async function computeDashboard(
   // The "until" for the current period is now (open-ended), with a second of margin: the range is exclusive at the
   // end, so a run stamped in the same millisecond as this request would otherwise be left out.
   const until = new Date(Date.now() + 1000).toISOString();
+  // The chart shows a week at least (a single day is not a trend) and a month for the 30d period.
+  const chartDays = period === '30d' ? 30 : 7;
+  const chartSince = new Date(Date.now() - (chartDays - 1) * 86_400_000).toISOString().slice(0, 10) + 'T00:00:00.000Z';
 
   const stats = getStatsRepository();
 
@@ -198,6 +263,8 @@ async function computeDashboard(
     recentSessions,
     activeSession,
     runningAgentNames,
+    dailyRows,
+    idleClosingRows,
   ] = await Promise.all([
     stats.countDistinctAgents(since, projectId, userId, isAdmin),
     stats.countActiveAgents(projectId, userId, isAdmin),
@@ -211,20 +278,23 @@ async function computeDashboard(
     stats.getRecentSessions(10, projectId, userId, isAdmin),
     stats.getActiveSession(projectId, userId, isAdmin),
     stats.listRunningAgentNames(projectId, userId, isAdmin),
+    stats.getDailyRunStats(chartSince, until, projectId, userId, isAdmin),
+    idleClosingSessions(projectId, userId, isAdmin),
   ]);
 
-  const successRate = srCurrent.finished > 0 ? srCurrent.done / srCurrent.finished : 0;
-  const successRatePrev = srPrev.finished > 0 ? srPrev.done / srPrev.finished : null;
+  // Stopped by the person is not a failure: the rate is done out of the runs that ended on their own.
+  const successRate = srCurrent.done + srCurrent.failed > 0 ? srCurrent.done / (srCurrent.done + srCurrent.failed) : 0;
+  const successRatePrev = srPrev.done + srPrev.failed > 0 ? srPrev.done / (srPrev.done + srPrev.failed) : null;
 
   // Build network nodes from agent rollups with running state from live run data.
   const activeAgentSet = runningAgentNames;
   const networkNodes = agentRollups.map((r) => {
-    const finished = r.doneCount + r.failedCount + r.cancelledCount;
+    const ended = r.doneCount + r.failedCount;
     return {
       id: r.agent,
       label: r.agent,
       runs: r.runs,
-      successRate: finished > 0 ? r.doneCount / finished : 0,
+      successRate: ended > 0 ? r.doneCount / ended : 0,
       running: activeAgentSet.has(r.agent),
       avgDurationMs: r.durationCount > 0 ? Math.round(r.totalDurationMs / r.durationCount) : 0,
     };
@@ -237,7 +307,7 @@ async function computeDashboard(
     runs: r.runs,
     completed: r.doneCount,
     failed: r.failedCount,
-    successRate: r.successRate,
+    successRate: r.doneCount + r.failedCount > 0 ? r.doneCount / (r.doneCount + r.failedCount) : 0,
     p50DurationMs: r.p50DurationMs,
     p95DurationMs: r.p95DurationMs,
     avgDurationMs: r.durationCount > 0 ? Math.round(r.totalDurationMs / r.durationCount) : 0,
@@ -262,7 +332,13 @@ async function computeDashboard(
       completedYesterday: completedCounts.yesterday,
       successRate,
       successRatePrev,
+      finishedRuns: srCurrent.finished,
+      failedRuns: srCurrent.failed,
+      stoppedRuns: srCurrent.cancelled,
+      dayStartUtc: today,
     },
+    daily: fillDays(chartSince, chartDays, dailyRows),
+    idleClosing: idleClosingRows,
     network: { nodes: networkNodes, edges: networkEdges },
     agents,
     recentSessions,

@@ -743,3 +743,27 @@
   /* Very narrow: single KPI column */
   .db-kpis { grid-template-columns: 1fr; }
 }
+
+/* Needs attention */
+.db-attn { margin-bottom: 16px; }
+.db-attn-count {
+  margin-left: 8px; min-width: 1.5em; padding: 0 6px; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; text-align: center;
+  background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn);
+}
+.db-attn-clear { display: flex; align-items: center; gap: 6px; margin: 4px 0 0; color: var(--ok); font-size: 0.86rem; }
+.db-attn-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.db-attn-item {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+  padding: 8px 10px; border-radius: 8px; border-left: 3px solid var(--line);
+  background: color-mix(in srgb, var(--line) 12%, transparent);
+}
+.db-attn-item.is-danger { border-left-color: var(--danger); }
+.db-attn-item.is-warn   { border-left-color: var(--warn); }
+.db-attn-item.is-info   { border-left-color: var(--info); }
+.db-attn-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); }
+.db-attn-title { font-weight: 560; min-width: 0; overflow-wrap: anywhere; }
+.db-attn-project, .db-attn-detail { font-size: 0.78rem; }
+.db-attn-detail { flex-basis: 100%; }
+.db-perf-note { font-size: 0.78rem; margin: 8px 0 0; }
+.db-cost-none { padding: 12px 0; }

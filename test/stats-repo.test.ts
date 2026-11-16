@@ -268,6 +268,49 @@ function runContract(
       assert.equal(srA.finished, 1, 'project A should have 1 finished run');
     });
 
+    // ── G5/G12: failed and stopped apart, runs per day ───────────────────────
+
+    test('G5/G12: failed and cancelled are counted apart, and runs are listed per day with their average time', async () => {
+      const since = new Date(Date.now() - 86_400_000).toISOString();
+      const until = new Date(Date.now() + 86_400_000).toISOString();
+      const t0 = new Date(Date.now() - 120_000).toISOString();
+      const t1 = new Date(Date.now() - 60_000).toISOString(); // every run below took 60 s
+      let projId: string;
+      if (label === 'DynamoDB') {
+        projId = `proj-g12-${sfx}`;
+        for (const [i, st] of (['done', 'done', 'failed', 'cancelled'] as const).entries()) {
+          const wfId = `wf-g12-${i}-${sfx}`;
+          await sessions.createWorkflow({
+            created_by: null, id: wfId, project_id: projId, goal: 'g12', status: 'running',
+            engine: 'demo', trust_tools: 0, lead_agent: null, workspace_id: null,
+            output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+            credential_id: null, model: 'claude', created_at: now(), updated_at: now(),
+          });
+          const run = await sessions.createRun({
+            id: `r-g12-${i}-${sfx}`, workflow_id: wfId, status: 'running', started_at: t0, finished_at: null,
+            cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: now(),
+          });
+          await sessions.finalizeRun(run.id, 'running', { status: st, finished_at: t1 }, { dateUTC: now().slice(0, 10), projectId: projId, agentName: 'default' });
+        }
+      } else {
+        projId = seedProject('G12 Proj');
+        for (const st of ['done', 'done', 'failed', 'cancelled']) {
+          seedRun(seedWorkflow(projId, 'default'), st, { startedAt: t0, finishedAt: t1 });
+        }
+      }
+      const sr = await stats.getSuccessRateCounts(since, until, projId, 'u', true);
+      assert.deepEqual(sr, { done: 2, failed: 1, cancelled: 1, finished: 4 });
+
+      const days = await stats.getDailyRunStats(since, until, projId, 'u', true);
+      assert.equal(days.length, 1, 'all four runs are on one day');
+      assert.equal(days[0].date, now().slice(0, 10));
+      assert.deepEqual([days[0].done, days[0].failed, days[0].cancelled], [2, 1, 1]);
+      assert.ok(Math.abs(days[0].avgDurationMs - 60_000) < 1500, `average run time about 60 s, got ${days[0].avgDurationMs}`);
+
+      const none = await stats.getDailyRunStats(since, until, `proj-none-${sfx}`, 'u', true);
+      assert.deepEqual(none, [], 'a project with no runs has no days');
+    });
+
     // ── G7: agent rollups ────────────────────────────────────────────────────
 
     test('G7: getAgentRollups returns per-agent aggregates', async () => {
