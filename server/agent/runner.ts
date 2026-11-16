@@ -50,7 +50,7 @@ import { ensureAtlassianMcp, isAtlassianMcpUrl } from '../atlassian-mcp.ts';
 import { jiraConnected } from '../jira.ts';
 import { guideRunPayload } from '../guide-accounts.ts';
 import { resumableBrowserSession } from '../browser-session.ts';
-import { collectOutputFiles } from '../output-files.ts';
+import { collectOutputFiles, snapshotWorkDir } from '../output-files.ts';
 import { deliverChildResult } from '../delegation.ts';
 import { issueDetail, downloadAttachments, mustMapping } from '../jira.ts';
 import { ticketMarkdown, composeRunPrompt } from '../jira-text.ts';
@@ -323,6 +323,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
   // artefacts (repos, generated files, agent configs) survive across runs.
   // The path is stored in p6_workflows.work_dir after the first run creates it.
   let workDir = '';
+  // The work folder as it was when the agent started, so files the run was given are not reported as its output.
+  let outputBaseline: Map<string, string> | null = null;
   if (workflow.work_dir) {
     workDir = String(workflow.work_dir);
     await fsp.mkdir(workDir, { recursive: true });
@@ -619,6 +621,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       );
     }
 
+    outputBaseline = snapshotWorkDir(workDir);
+
     // Prepend a repo-location hint so the agent knows where to find the code.
     // This complements any Jira-ticket context already in agentRun.goal.
     if (availableRepoNames.length > 0) {
@@ -834,7 +838,7 @@ ${agentRun.goal}`;
       try {
         const runRow = await repo.getRunById(runId);
         const startedAt = runRow?.started_at ?? new Date(0).toISOString();
-        await collectOutputFiles(runId, workflowId, workDir, startedAt);
+        await collectOutputFiles(runId, workflowId, workDir, startedAt, outputBaseline);
       } catch { /* non-fatal */ }
     }
     // Delete the materialised home directory (contains decrypted ~/.aws and SSO tokens).

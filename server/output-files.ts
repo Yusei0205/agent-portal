@@ -132,11 +132,19 @@ function parseGitPorcelain(output: string, repoDir: string): string[] {
   return files;
 }
 
-async function collectFromRepo(repoDir: string): Promise<string[]> {
+/**
+ * What this run changed in a cloned repository. A session on a branch that is already ahead of the default branch, or
+ * in a clone that holds earlier work, must not list that work as this run's output: uncommitted files count when they
+ * were written since the run started, and commits when they were made since then (`cutoffMs` 0 = no limit).
+ */
+async function collectFromRepo(repoDir: string, cutoffMs = 0): Promise<string[]> {
   const statusOut = await spawnGitSafe(['status', '--porcelain', '-z', '--untracked-files=all'], repoDir);
-  const fromStatus = parseGitPorcelain(statusOut, repoDir);
+  const fromStatus = parseGitPorcelain(statusOut, repoDir).filter((f) => {
+    if (!cutoffMs) return true;
+    try { return fs.statSync(f).mtimeMs >= cutoffMs; } catch { return false; }
+  });
   const logOut = await spawnGitSafe(
-    ['log', '--pretty=format:', '--name-only', 'origin/HEAD..HEAD'],
+    ['log', '--pretty=format:', '--name-only', ...(cutoffMs ? [`--after=${new Date(cutoffMs).toISOString()}`] : []), 'origin/HEAD..HEAD'],
     repoDir,
   );
   const fromLog: string[] = [];
@@ -150,7 +158,7 @@ async function collectFromRepo(repoDir: string): Promise<string[]> {
 }
 
 /** Document files under a repository folder that holds only what a cloud runner sent back. */
-export function collectReceivedRepoDocs(repoDir: string): string[] {
+export function collectReceivedRepoDocs(repoDir: string, cutoffMs = 0): string[] {
   const out: string[] = [];
   const walk = (dir: string): void => {
     let entries: fs.Dirent[];
@@ -159,14 +167,41 @@ export function collectReceivedRepoDocs(repoDir: string): string[] {
       if (e.isSymbolicLink() || e.name.startsWith('.') || EXCLUDED_WORK_DIRS.has(e.name)) continue;
       const full = path.join(dir, e.name);
       if (e.isDirectory()) walk(full);
-      else if (e.isFile() && ALLOWED_EXTS.has(path.extname(e.name).toLowerCase())) out.push(full);
+      else if (e.isFile() && ALLOWED_EXTS.has(path.extname(e.name).toLowerCase())) {
+        try { if (!cutoffMs || fs.statSync(full).mtimeMs >= cutoffMs) out.push(full); } catch { /* gone */ }
+      }
     }
   };
   walk(repoDir);
   return out;
 }
 
-function collectFromWorkDir(workDir: string, cutoffMs: number): string[] {
+/** A file's identity for the before-and-after comparison: its size and time of last change. */
+const fileStamp = (st: fs.Stats): string => `${st.size}:${Math.round(st.mtimeMs)}`;
+
+/**
+ * The files in the session's work folder before the agent starts, after the run's inputs were put there (attached files,
+ * chosen project documents, an unpacked zip). Passed to collectOutputFiles so those are not reported as the run's output.
+ */
+export function snapshotWorkDir(workDir: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (EXCLUDED_WORK_DIRS.has(e.name)) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (e.isFile()) {
+        try { out.set(path.relative(workDir, full).replace(/\\/g, '/'), fileStamp(fs.statSync(full))); } catch { /* gone */ }
+      }
+    }
+  };
+  walk(workDir);
+  return out;
+}
+
+function collectFromWorkDir(workDir: string, cutoffMs: number, baseline: Map<string, string> | null = null): string[] {
   const results: string[] = [];
   const walk = (dir: string): void => {
     let entries: fs.Dirent[];
@@ -181,6 +216,8 @@ function collectFromWorkDir(workDir: string, cutoffMs: number): string[] {
         if (SKELETON_FILES.has(rel)) continue;
         try {
           const stat = fs.statSync(full);
+          // Unchanged since before the agent started: an input of this run, not something it made.
+          if (baseline && baseline.get(rel) === fileStamp(stat)) continue;
           if (stat.mtimeMs >= cutoffMs) results.push(full);
         } catch { /* skip */ }
       }
@@ -288,6 +325,8 @@ export async function collectOutputFiles(
   workflowId: string,
   workDir: string,
   runStartedAt: string = new Date(0).toISOString(),
+  /** The work folder as it was when the agent started (snapshotWorkDir): what was already there is not output. */
+  baseline: Map<string, string> | null = null,
 ): Promise<void> {
   if (!workDir || !fs.existsSync(workDir)) return;
 
@@ -306,12 +345,12 @@ export async function collectOutputFiles(
         if (!entry.isDirectory()) continue;
         const repoDir = path.join(reposDir, entry.name);
         if (fs.existsSync(path.join(repoDir, '.git'))) {
-          const repoFiles = await collectFromRepo(repoDir);
+          const repoFiles = await collectFromRepo(repoDir, cutoffMs);
           allCandidates.push(...repoFiles);
         } else {
           // A cloud run: the runner cloned the repository and sent back only the documents the agent wrote in it
           // (see collectRepoDocuments), so everything in this folder is one of those.
-          allCandidates.push(...collectReceivedRepoDocs(repoDir));
+          allCandidates.push(...collectReceivedRepoDocs(repoDir, cutoffMs));
         }
       }
     } catch { /* skip */ }
@@ -319,7 +358,7 @@ export async function collectOutputFiles(
 
   // Source files count as session output only from the work folder; changes inside cloned repositories belong to the repository.
   const repoCandidates = new Set(allCandidates);
-  const nonRepoFiles = collectFromWorkDir(workDir, cutoffMs);
+  const nonRepoFiles = collectFromWorkDir(workDir, cutoffMs, baseline);
   allCandidates.push(...nonRepoFiles);
 
   const unique = [...new Set(allCandidates)];

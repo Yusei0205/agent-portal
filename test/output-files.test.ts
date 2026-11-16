@@ -25,7 +25,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import { execSync } from 'node:child_process';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
-import { collectOutputFiles } from '../server/output-files.ts';
+import { collectOutputFiles, snapshotWorkDir } from '../server/output-files.ts';
 import { all, one, run as dbRun } from '../server/db.ts';
 import type { Row } from '../server/db.ts';
 
@@ -743,14 +743,14 @@ describe('collectOutputFiles — repo copy detection (git status)', () => {
     execSync('git add README.md', { cwd: repoDir, stdio: 'ignore' });
     execSync('git commit -m init', { cwd: repoDir, stdio: 'ignore' });
 
+    const runStart = new Date(Date.now() - 5_000).toISOString();
     writeFile(repoDir, 'architecture.png', 'PNG_DATA');
 
     const workflowId = await createWorkflow(baseUrl, adminCookie, projectId, 'Repo copy detection');
     const runId = await startRun(baseUrl, adminCookie, projectId, workflowId);
     dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
 
-    // Use a far-future cutoff so mtime-based non-repo scan won't pick it up
-    await collectOutputFiles(runId, workflowId, workDir, new Date(Date.now() + 60_000).toISOString());
+    await collectOutputFiles(runId, workflowId, workDir, runStart);
 
     const files = all<Row>(
       'SELECT path FROM output_files WHERE workflow_id = ? AND refused_reason IS NULL',
@@ -776,13 +776,14 @@ describe('collectOutputFiles — repo copy detection (git status)', () => {
     execSync('git commit -m init', { cwd: repoDir, stdio: 'ignore' });
 
     // A brand-new folder: plain `git status` shows only "?? docs/" here.
+    const runStart = new Date(Date.now() - 5_000).toISOString();
     writeFile(repoDir, 'docs/architecture/rhb backend.png', 'PNG_DATA');
     writeFile(repoDir, 'docs/architecture/generate.py', 'print(1)');
 
     const workflowId = await createWorkflow(baseUrl, adminCookie, projectId, 'Nested repo detection');
     const runId = await startRun(baseUrl, adminCookie, projectId, workflowId);
     dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
-    await collectOutputFiles(runId, workflowId, workDir, new Date(Date.now() + 60_000).toISOString());
+    await collectOutputFiles(runId, workflowId, workDir, runStart);
 
     const paths = all<Row>(
       'SELECT path FROM output_files WHERE workflow_id = ? AND refused_reason IS NULL',
@@ -793,6 +794,51 @@ describe('collectOutputFiles — repo copy detection (git status)', () => {
       `nested png should be detected; got: ${paths.join(', ')}`,
     );
     assert.ok(!paths.some((p) => p.endsWith('.py')), 'scripts are not outputs');
+  });
+
+  it('lists only what this run changed: not files already on the branch or in the work folder before the agent started', async () => {
+    if (!gitAvailable() || !baseUrl) return;
+
+    const repoDir = path.join(workDir, 'repos', 'branch-repo');
+    fs.mkdirSync(repoDir, { recursive: true });
+    const git = (cmd: string, env: Record<string, string> = {}) => execSync(cmd, { cwd: repoDir, stdio: 'ignore', env: { ...process.env, ...env } });
+    git('git init');
+    git('git config user.email test@test.com');
+    git('git config user.name Test');
+    const past = { GIT_COMMITTER_DATE: '2020-01-01T00:00:00Z', GIT_AUTHOR_DATE: '2020-01-01T00:00:00Z' };
+    fs.writeFileSync(path.join(repoDir, 'README.md'), '# Repo');
+    git('git add README.md');
+    git('git commit -m base', past);
+    // The default branch ends here; the branch the session works on is already ahead of it with someone else's work.
+    git('git update-ref refs/remotes/origin/main HEAD');
+    git('git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main');
+    fs.writeFileSync(path.join(repoDir, 'earlier-session.png'), 'OLD');
+    git('git add earlier-session.png');
+    git('git commit -m earlier', past);
+
+    // Inputs of the run: put in the work folder before the agent starts.
+    writeFile(workDir, 'attachments/given.png', 'INPUT');
+    const baseline = snapshotWorkDir(workDir);
+
+    const runStart = new Date(Date.now() - 2_000).toISOString();
+    writeFile(repoDir, 'this-run.png', 'NEW');
+    git('git add this-run.png');
+    git('git commit -m mine');
+    writeFile(workDir, 'made-by-agent.png', 'OUT');
+
+    const workflowId = await createWorkflow(baseUrl, adminCookie, projectId, 'Run scoped outputs');
+    const runId = await startRun(baseUrl, adminCookie, projectId, workflowId);
+    dbRun('UPDATE p6_workflows SET work_dir = ? WHERE id = ?', workDir, workflowId);
+    await collectOutputFiles(runId, workflowId, workDir, runStart, baseline);
+
+    const paths = all<Row>(
+      'SELECT path FROM output_files WHERE workflow_id = ? AND refused_reason IS NULL',
+      workflowId,
+    ).map((f) => String(f.path).replace(/\\/g, '/'));
+    assert.ok(paths.includes('repos/branch-repo/this-run.png'), `this run's commit is an output; got: ${paths.join(', ')}`);
+    assert.ok(paths.includes('made-by-agent.png'), `a file the agent wrote is an output; got: ${paths.join(', ')}`);
+    assert.ok(!paths.some((p) => p.endsWith('earlier-session.png')), 'a commit from before the run is not');
+    assert.ok(!paths.some((p) => p.endsWith('given.png')), 'a file the run was given is not');
   });
 });
 
