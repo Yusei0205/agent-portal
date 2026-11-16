@@ -49,16 +49,42 @@ let retryTimer = null;
 
 const b64url = (s) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
+const subTries = new Map(); // channel -> failed subscribe attempts in a row
+const MAX_SUBSCRIBE_TRIES = 5;
+
+/**
+ * Subscribes the socket to a channel. The token the socket connected with lasts an hour, and AppSync checks it again for every
+ * subscribe: a page left open longer than that would be refused for each new run's channel (/run/<id>) and show no updates
+ * while the run goes on. So the token is renewed (getConfig does it when it is close to expiring) before each subscribe, and a
+ * refused subscribe is retried with a fresh one.
+ */
 function sendSubscribe(channel) {
   if (!ready || !ws || wsIds.has(channel)) return;
   const id = `s${Math.random().toString(36).slice(2)}`;
   wsIds.set(channel, id);
-  ws.send(JSON.stringify({
-    type: 'subscribe',
-    id,
-    channel,
-    authorization: { Authorization: config.token, host: config.httpDomain },
-  }));
+  const socket = ws;
+  getConfig().then((c) => {
+    if (ws !== socket || !ready || wsIds.get(channel) !== id) return; // dropped or unsubscribed meanwhile
+    if (!c || !c.enabled || !c.token) { wsIds.delete(channel); retrySubscribe(channel); return; }
+    socket.send(JSON.stringify({
+      type: 'subscribe',
+      id,
+      channel,
+      authorization: { Authorization: c.token, host: c.httpDomain },
+    }));
+  }).catch(() => { if (wsIds.get(channel) === id) wsIds.delete(channel); retrySubscribe(channel); });
+}
+
+function retrySubscribe(channel) {
+  const tries = (subTries.get(channel) ?? 0) + 1;
+  subTries.set(channel, tries);
+  if (tries > MAX_SUBSCRIBE_TRIES) return;
+  setTimeout(() => { if (subs.has(channel)) sendSubscribe(channel); }, Math.min(2000 * tries, 10000));
+}
+
+function channelOf(id) {
+  for (const [ch, wid] of wsIds) if (wid === id) return ch;
+  return null;
 }
 
 async function connect() {
@@ -80,9 +106,19 @@ async function connect() {
       ready = true;
       retryDelay = 1000;
       for (const channel of subs.keys()) sendSubscribe(channel);
+    } else if (msg.type === 'subscribe_success') {
+      const channel = channelOf(msg.id);
+      if (channel) subTries.delete(channel);
+    } else if (msg.type === 'subscribe_error' || (msg.type === 'error' && msg.id)) {
+      // Most often an expired token: fetch a new one, then try this channel again.
+      const channel = channelOf(msg.id);
+      if (!channel) return;
+      wsIds.delete(channel);
+      if (config) config = { ...config, fetchedAt: 0 };
+      configPromise = null;
+      retrySubscribe(channel);
     } else if (msg.type === 'data') {
-      let channel = null;
-      for (const [ch, id] of wsIds) if (id === msg.id) { channel = ch; break; }
+      const channel = channelOf(msg.id);
       if (!channel) return;
       let event = msg.event;
       if (typeof event === 'string') { try { event = JSON.parse(event); } catch { return; } }
@@ -124,6 +160,7 @@ export function subscribeChannel(channel, onEvent) {
     s.delete(onEvent);
     if (s.size > 0) return;
     subs.delete(channel);
+    subTries.delete(channel);
     const id = wsIds.get(channel);
     if (id && ws && ready) ws.send(JSON.stringify({ type: 'unsubscribe', id }));
     wsIds.delete(channel);
