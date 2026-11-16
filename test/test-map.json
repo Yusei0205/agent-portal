@@ -1558,6 +1558,29 @@
       ],
       "smokeIds": []
     },
+    "flows": {
+      "description": "Flow recipes: parsing and checking a recipe file, and the state machine that moves a running flow on (sequence, parallel steps, run-until loops, failure, stop).",
+      "sources": [
+        "server/flows/recipe.ts",
+        "server/flows/state.ts"
+      ],
+      "tests": [
+        "test/flows.test.ts"
+      ],
+      "smokeIds": []
+    },
+    "flows-engine": {
+      "description": "Running a flow on child sessions (flows/engine.ts, catalog.ts, command.ts): steps start when the steps they wait for are done, the /flow chat command, the flow API, stopping.",
+      "sources": [
+        "server/flows/engine.ts",
+        "server/flows/catalog.ts",
+        "server/flows/command.ts"
+      ],
+      "tests": [
+        "test/flows-engine.test.ts"
+      ],
+      "smokeIds": []
+    },
     "loop-iteration": {
       "description": "Loop iteration logic: status parsing, stagnation (harness PR 1.7: loose matching, window of at least 2), the stop",
       "sources": [

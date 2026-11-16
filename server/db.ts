@@ -2266,6 +2266,15 @@ const M52_API_SIMULATION = `
 `;
 
 /**
+ * The flow state column of a session (the recipe it is running: steps, child sessions, results; '' = none). Checked on
+ * every start like the API simulation tables, so it does not depend on a migration number.
+ */
+function ensureFlowStateColumn(database: DatabaseSync): void {
+  const cols = database.prepare('PRAGMA table_info(p6_workflows)').all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === 'flow_state')) database.exec("ALTER TABLE p6_workflows ADD COLUMN flow_state TEXT NOT NULL DEFAULT ''");
+}
+
+/**
  * The API simulation tables, checked on every start instead of trusting a migration number. Migration numbers are
  * positions in the list above, so two branches that each add one claim the same number, and a database that has met the
  * other branch skips this one. Everything here is idempotent: it creates what is missing and changes nothing else.
@@ -2390,6 +2399,7 @@ export function openDb(file?: string, cfg?: Config): DatabaseSync {
   }
 
   ensureApiSimSchema(db);
+  ensureFlowStateColumn(db);
   // Two-step sign-in state (mfa.ts). Checked on every start, like the schema above.
   if (!(db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).some((c) => c.name === 'mfa')) {
     db.exec('ALTER TABLE users ADD COLUMN mfa TEXT');

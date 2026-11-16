@@ -136,6 +136,7 @@ function itemToWorkflow(item: Record<string, AttributeValue>): WorkflowRecord {
     kind: getString(item, 'kind'),
     run_timeout_minutes: item['run_timeout_minutes'] ? getNumber(item, 'run_timeout_minutes') : null,
     loop_state: getString(item, 'loop_state') ?? '',
+    flow_state: getString(item, 'flow_state') ?? '',
     budget_usd: item['budget_usd'] ? getNumber(item, 'budget_usd') : null,
     child_count: getNumber(item, 'childCount'),
     parent_title: getString(item, 'parentTitle'),
@@ -645,7 +646,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
-      'kind', 'run_timeout_minutes', 'loop_state', 'budget_usd',
+      'kind', 'run_timeout_minutes', 'loop_state', 'flow_state', 'budget_usd',
     ];
     const setExprs: string[] = [];
     const removeExprs: string[] = [];
@@ -702,7 +703,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       'iteration_count', 'max_iterations', 'last_turn_at', 'credential_id',
       'model', 'engine_session_id', 'engine_session_engine', 'updated_at',
       'parent_id', 'work_dir', 'jira_key', 'jira_summary', 'jira_url',
-      'kind', 'run_timeout_minutes', 'loop_state', 'budget_usd',
+      'kind', 'run_timeout_minutes', 'loop_state', 'flow_state', 'budget_usd',
     ];
     const setExprs: string[] = [];
     const removeExprs: string[] = [];

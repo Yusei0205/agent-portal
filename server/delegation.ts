@@ -276,6 +276,16 @@ export async function deliverChildResult(childWorkflowId: string, result = ''): 
       });
     }
 
+    // A step of a flow (flows/engine.ts): the flow takes the result and starts what comes next. The parent's agent is
+    // not woken for it.
+    const { onFlowChildFinished } = await import('./flows/engine.ts');
+    if (await onFlowChildFinished(parentId, childWorkflowId, childStatus, result)) {
+      if (parent.project_id) {
+        emit(parent.project_id, { type: 'workflow.child-finished', parentWorkflowId: parentId, childWorkflowId, childTitle, status: childStatus });
+      }
+      return;
+    }
+
     // Insert child-result event into parent's event log
     await repo.appendWorkflowEvent({
       workflow_id: parentId,

@@ -13,6 +13,7 @@ import { OutputFilePreview } from './OutputFilePreview.jsx';
 import { RunOutputsCard } from './RunOutputsCard.jsx';
 import { PullRequestCards } from './PullRequestCard.jsx';
 import { SessionAgentsStrip } from './SessionAgentsStrip.jsx';
+import { SessionFlowStrip } from './SessionFlowStrip.jsx';
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
@@ -1504,6 +1505,7 @@ export function SessionLive({
       style={{ flex: 1, display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden' }}
     >
       {/* Live graph of the agents working in this session (hidden until there are some) */}
+      {workflowId && <SessionFlowStrip workflowId={workflowId} projectId={projectId} />}
       {workflowId && <SessionAgentsStrip workflowId={workflowId} projectId={projectId} workflow={workflow} events={allEvents} />}
 
       {/* Connection indicator */}

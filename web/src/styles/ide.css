@@ -1470,3 +1470,18 @@
 .ide-usage-value { color: var(--ink); font-variant-numeric: tabular-nums; text-align: right; }
 .ide-usage-hint { grid-column: 1 / -1; color: var(--ink-3); font-size: 0.7rem; }
 .ide-usage-unavailable { color: var(--ink-3); }
+
+/* Flow strip: the steps of the recipe a session is running */
+.flow-steps { list-style: none; margin: 0; padding: 0 12px 6px; display: flex; flex-direction: column; gap: 2px; font-size: 0.8rem; }
+.flow-step { display: flex; align-items: baseline; gap: 8px; }
+.flow-step-mark { width: 1.2em; text-align: center; font-weight: 700; color: var(--ink-3); }
+.flow-step.is-done .flow-step-mark { color: var(--success, var(--accent)); }
+.flow-step.is-running .flow-step-mark { color: var(--accent); }
+.flow-step.is-failed .flow-step-mark { color: var(--danger); }
+.flow-step-id { font-weight: 600; }
+.flow-step-meta { color: var(--ink-3); font-size: 0.72rem; }
+.flow-strip-action { margin-left: auto; }
+.flow-run { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 12px 8px; }
+.flow-run input { flex: 1 1 14rem; min-width: 0; }
+.flow-note { margin: 0; padding: 0 12px 8px; font-size: 0.78rem; color: var(--ink-3); }
+.flow-note.is-error { color: var(--danger); }

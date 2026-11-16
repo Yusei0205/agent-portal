@@ -23,6 +23,7 @@ export const PORTAL_COMMANDS: Array<{ name: string; usage: string; description: 
   { name: 'tools',   usage: '/tools [trust|ask]',     description: 'Show or change whether tools run without asking' },
   { name: 'cost',    usage: '/cost',                  description: 'Show the cost of the last turn and of the whole session' },
   { name: 'status',  usage: '/status',                description: 'Show the engine, model, agent and tool mode' },
+  { name: 'flow',   usage: '/flow [run <name> [input]|status|stop]', description: 'Run a recipe: several agent sessions working in steps' },
   { name: 'rename',  usage: '/rename <title>',        description: 'Rename this session' },
 ];
 

@@ -49,6 +49,9 @@ import { parseSessionIntegrations, encodeSessionIntegrations, integrationIsPerso
 import { deleteSnapshot } from '../agent/runner-snapshot-access.ts';
 import { newLoopState } from './loop.ts';
 import type { WorkflowRecord } from '../repositories/sessions.ts';
+import { resolveFlowCommand } from '../flows/command.ts';
+import { listFlowEntries } from '../flows/catalog.ts';
+import { flowForPage, readFlowState, startFlow, stopFlow } from '../flows/engine.ts';
 
 // ── Constant ───────────────────────────────────────────────────────────────────
 
@@ -915,8 +918,15 @@ ${answer}`,
     // Commands the portal answers itself (/model, /agent, /cost, ...) and commands this session does not have.
     // The command and its answer are saved as one event and nothing is sent to the engine.
     if (isCommand && w.engine !== 'demo') {
-      let answer = await runPortalCommand(w, message, req.user!.id);
-      if (answer === null) {
+      // /flow: a recipe run by the portal answers here; a Kiro-native recipe becomes a prompt for the agent.
+      const flowResult = await resolveFlowCommand(w, message, req.user!.id);
+      let answer: string | null = null;
+      if (flowResult?.type === 'answer') answer = flowResult.text;
+      else if (flowResult?.type === 'prompt') {
+        isCommand = false;
+        commandPrompt = { name: flowResult.name, source: 'flow', prompt: flowResult.prompt };
+      } else answer = await runPortalCommand(w, message, req.user!.id);
+      if (answer === null && !flowResult) {
         const resolved = await resolveSessionCommand(w, message);
         if (resolved?.type === 'unknown') answer = unknownCommandText(resolved.name, String(w.engine));
         else if (resolved?.type === 'prompt') {
@@ -1033,6 +1043,50 @@ ${answer}`,
     if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
     const rows = await repo.listHumanWorkflowEvents(w.id, null, null, null);
     sendJson(res, 200, { messages: rows.map((r) => String(r.body).trim()).filter(Boolean).slice(-100) });
+  });
+
+  // GET /api/projects/:id/workflows/:wid/flow — the recipes this session can run and the state of its flow
+  router.get('/api/projects/:id/workflows/:wid/flow', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const project = await requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const w = await getSessionsRepository().getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    const recipes = (await listFlowEntries(w)).map((e) => ({
+      name: e.name, description: e.description, kind: e.kind, file: e.file, error: e.error ?? null,
+      steps: e.recipe ? e.recipe.steps.map((s) => ({ id: s.id, needs: s.needs })) : [],
+    }));
+    sendJson(res, 200, { flow: flowForPage(w), recipes });
+  });
+
+  // POST /api/projects/:id/workflows/:wid/flow/run { name, input } — run a portal recipe
+  router.post('/api/projects/:id/workflows/:wid/flow/run', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
+    const project = await requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const w = await getSessionsRepository().getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const name = str(body.name, 'name', { max: 64 }).trim();
+    const input = str(body.input, 'input', { max: 10_000, optional: true }).trim();
+    const entry = (await listFlowEntries(w)).find((e) => e.name.toLowerCase() === name.toLowerCase());
+    if (!entry) { sendJson(res, 404, { error: `No recipe named "${name}"` }); return; }
+    if (entry.error) { sendJson(res, 400, { error: entry.error }); return; }
+    if (entry.kind !== 'portal' || !entry.recipe) { sendJson(res, 400, { error: 'This recipe is run by Kiro: type /flow run in the chat' }); return; }
+    await startFlow(w, entry.recipe, input, req.user!.id);
+    const fresh = await getSessionsRepository().getWorkflowById(w.id);
+    sendJson(res, 200, { ok: true, flow: fresh ? flowForPage(fresh) : null });
+  });
+
+  // POST /api/projects/:id/workflows/:wid/flow/stop
+  router.post('/api/projects/:id/workflows/:wid/flow/stop', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
+    const project = await requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const w = await getSessionsRepository().getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+    if (readFlowState(w)?.status !== 'running') { sendJson(res, 409, { error: 'No flow is running in this session' }); return; }
+    await stopFlow(w.id);
+    sendJson(res, 200, { ok: true });
   });
 
   // PATCH /api/projects/:id/workflows/:wid — update session settings
