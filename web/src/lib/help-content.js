@@ -194,20 +194,19 @@ export const HELP_TOPICS = [
     title: 'Usage',
     icon: 'chart',
     page: { tab: 'usage' },
-    summary: 'What the agents used, by person, project and day. Claude is priced in dollars and Kiro in credits, so they are shown side by side and never added together.',
+    summary: 'What the agents used. Each engine is measured in its own unit (Claude in dollars, Kiro in credits, Codex in tokens), so they are shown side by side and never added together.',
     sections: [
       {
         heading: 'Reading it',
         rows: [
-          ['Runs', 'Runs that reported usage. A run that reported none is not in these rows.'],
-          ['Cost (Claude)', 'Dollars. Codex runs report tokens only, so they add to **Tokens** but not to the cost.'],
-          ['Credits (Kiro)', 'Kiro credits for the turn, as Kiro reports them.'],
-          ['By person', 'Admins only: it would show what colleagues used. With a project chosen it still covers all projects.'],
-          ['By day', 'UTC days, newest first.'],
+          ['Engine cards', 'One card per engine with its total for the period in its own unit, and a small bar for each day. Codex reports tokens only, so its card has no dollars.'],
+          ['Runs', 'Runs that reported usage. A run that reported none is not counted.'],
+          ['People / Projects / Days', 'The breakdown. **People** is for admins only: it would show what colleagues used. Days are UTC days, newest first.'],
+          ['Rank by', 'Orders people and projects by one engine (Claude dollars, Kiro credits or Codex tokens). The bar shows each row as a share of that engine total. A dash means that engine was not used.'],
         ],
       },
     ],
-    tips: ['Press **g u** from anywhere to open Usage. Pick a period (7, 30 or 90 days) and, optionally, one project.'],
+    tips: ['Press **g u** from anywhere to open Usage. Pick 7, 30 or 90 days and, optionally, one project.'],
   },
 
   // ── Work ────────────────────────────────────────────────────────────────────

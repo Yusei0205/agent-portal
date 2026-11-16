@@ -769,20 +769,46 @@
 .db-cost-none { padding: 12px 0; }
 
 /* Usage page */
-.us-header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-start; justify-content: space-between; margin-bottom: 16px; }
+.us-header { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-start; justify-content: space-between; margin-bottom: 18px; }
 .us-h1 { margin: 0; }
-.us-lead { margin: 4px 0 0; max-width: 60ch; font-size: 0.86rem; }
+.us-lead { margin: 4px 0 0; max-width: 62ch; font-size: 0.86rem; }
 .us-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.us-control { display: inline-flex; align-items: center; gap: 6px; }
-.us-kpis { display: flex; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 20px; overflow: hidden; }
-.us-kpi { display: grid; gap: 2px; padding: 12px 20px; min-width: 140px; flex: 1 1 140px; border-right: 1px solid var(--line); }
-.us-kpi:last-child { border-right: 0; }
-.us-kpi strong { font-size: 1.35rem; font-variant-numeric: tabular-nums; }
-.us-none { margin: -4px 0 16px; }
-.us-section { margin-bottom: 24px; }
-.us-h2 { font-size: 0.95rem; margin: 0 0 8px; }
-.us-note { font-weight: 400; font-size: 0.78rem; }
+.us-segment { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.us-seg { border: 0; background: transparent; color: var(--ink-2, inherit); padding: 6px 12px; font: inherit; font-size: 0.82rem; cursor: pointer; }
+.us-seg + .us-seg { border-left: 1px solid var(--line); }
+.us-seg.is-active { background: var(--accent); color: var(--on-accent, #fff); }
+.us-seg:focus-visible, .us-tab:focus-visible, .us-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* One card per engine, each in its own unit */
+.us-engines { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.us-engine { position: relative; padding: 14px 16px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface, transparent); border-top: 3px solid var(--engine, var(--line)); display: grid; gap: 2px; }
+.us-engine.is-quiet { opacity: 0.7; }
+.us-engine-head { display: flex; align-items: center; gap: 8px; }
+.us-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--engine, var(--ink-3)); }
+.us-engine-name { font-weight: 600; }
+.us-engine-unit { margin-left: auto; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.us-engine-value { font-size: 1.7rem; font-weight: 650; font-variant-numeric: tabular-nums; line-height: 1.2; margin-top: 4px; }
+.us-engine-sub { font-size: 0.8rem; min-height: 1.2em; }
+.us-bars { width: 100%; height: 36px; margin-top: 8px; display: block; }
+.us-none { margin: -6px 0 16px; }
+
+/* The breakdown panel */
+.us-panel { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px 8px; }
+.us-panel-head { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.us-tabs { display: inline-flex; gap: 4px; }
+.us-tab { border: 0; background: transparent; padding: 6px 12px; border-radius: 8px; font: inherit; font-weight: 560; cursor: pointer; color: var(--ink-3); }
+.us-tab.is-active { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.us-rank { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.82rem; }
+.us-chip { border: 1px solid var(--line); background: transparent; border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 0.8rem; cursor: pointer; color: inherit; }
+.us-chip.is-active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.us-empty { padding: 12px 0; }
 .us-table { width: 100%; }
-/* The header and its amounts line up on the right. (.data-table th sets its own alignment, so this has to be at least as specific.) */
+.us-name { font-weight: 540; }
+.us-th-unit { display: block; font-weight: 400; font-size: 0.68rem; text-transform: none; letter-spacing: 0; opacity: 0.75; }
+/* Header and amounts line up on the right. (.data-table th sets its own alignment, so this has to be at least as specific.) */
 .us-table th.us-num, .us-table td.us-num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.us-table td.us-num { position: relative; }
+.us-share { position: absolute; right: 0; top: 18%; bottom: 18%; border-radius: 4px 0 0 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.us-cell-value { position: relative; }
+.us-none-mark { color: var(--ink-3); }
 .us-quiet td { color: var(--ink-3); }

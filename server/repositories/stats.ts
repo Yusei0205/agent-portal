@@ -89,24 +89,59 @@ export interface AgentRollup {
   lastRunAt: string | null;
 }
 
-/** One line of the Usage page: what a person, project or day used. Claude is priced in dollars, Kiro in credits: kept apart. */
-export interface UsageRow {
+/** The engines the Usage page keeps apart: each is priced in its own unit, so they are never added together. */
+export type UsageEngine = 'claude' | 'kiro' | 'codex' | 'other';
+export const USAGE_ENGINES: readonly UsageEngine[] = ['claude', 'kiro', 'codex', 'other'];
+
+/** Which engine a usage record belongs to, from the provider name the run recorded. */
+export function engineOfProvider(provider: string | null | undefined): UsageEngine {
+  const p = String(provider ?? '').toLowerCase();
+  if (p.startsWith('codex')) return 'codex';
+  if (p === 'kiro') return 'kiro';
+  // Claude Code, however it is paid for: its own subscription, the Anthropic API, or Bedrock.
+  if (p === 'claude' || p === 'anthropic' || p === 'subscription' || p === 'bedrock') return 'claude';
+  return 'other';
+}
+
+export interface UsageTotals {
+  /** Runs that reported usage. */
+  runs: number;
+  /** Dollars (Claude). */
+  costUsd: number;
+  /** Credits (Kiro). */
+  credits: number;
+  /** Tokens (Codex reports only these). */
+  tokens: number;
+}
+
+/** One line of the Usage page: what a person, project or day used, in total and by engine. */
+export interface UsageRow extends UsageTotals {
   /** Project id, user id, or the UTC day (YYYY-MM-DD). */
   id: string;
   name: string;
-  /** Runs that reported usage. */
-  runs: number;
-  costUsd: number;
-  credits: number;
-  tokens: number;
+  engines: Record<UsageEngine, UsageTotals>;
+}
+
+export const emptyTotals = (): UsageTotals => ({ runs: 0, costUsd: 0, credits: 0, tokens: 0 });
+
+export function newUsageRow(id: string, name: string): UsageRow {
+  return { id, name, ...emptyTotals(), engines: { claude: emptyTotals(), kiro: emptyTotals(), codex: emptyTotals(), other: emptyTotals() } };
+}
+
+/** Add one usage record (or the sums of several) to a row, in the total and under its engine. */
+export function addUsage(row: UsageRow, engine: UsageEngine, u: UsageTotals): void {
+  for (const t of [row, row.engines[engine]]) {
+    t.runs += u.runs;
+    t.costUsd += u.costUsd;
+    t.credits += u.credits;
+    t.tokens += u.tokens;
+  }
 }
 
 export interface UsageBreakdown {
   byProject: UsageRow[];
   /** Only when asked for (admins). */
   byUser: UsageRow[];
-  /** True when the per-person totals were limited to the chosen projects; false when they are for all projects. */
-  usersScopedToProjects: boolean;
   /** One row for every UTC day with usage, oldest first. */
   byDay: UsageRow[];
 }

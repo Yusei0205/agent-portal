@@ -46,6 +46,7 @@ import { getDynamoDbClient, marshalItem, getString, getNumber } from './dynamo-c
 import { getSessionsRepository } from './sessions.ts';
 import { getProjectRepository } from './projects.ts';
 import { getAuthRepository } from './auth.ts';
+import { addUsage, engineOfProvider, newUsageRow } from './stats.ts';
 import type {
   StatsRepository,
   InsightTotals,
@@ -534,14 +535,17 @@ export class DynamoDbStatsRepository implements StatsRepository {
 
   // ── Usage by project / person / day ─────────────────────────────────────────
 
+  /**
+   * The daily rollups do not keep the engine, but every run's usage record does (BU#<project>#<day>). So the rollups say which
+   * project-days had any usage, and only those days' records are read: the engine, the person and the amounts all come from them.
+   */
   async getUsageBreakdown(
     since: string,
     until: string,
     projectIds: string[] | null,
     includeUsers: boolean,
   ): Promise<UsageBreakdown> {
-    // No projects means no usage (the per-person rollups are not kept per project, so they must not be read for nobody's projects).
-    if (projectIds !== null && projectIds.length === 0) return { byProject: [], byUser: [], usersScopedToProjects: true, byDay: [] };
+    if (projectIds !== null && projectIds.length === 0) return { byProject: [], byUser: [], byDay: [] };
     // Every project is needed when none is chosen; with projects chosen the list only gives their names (an id stands in if it fails).
     let projects: Array<{ id: string; name: string }> = [];
     if (projectIds === null) projects = await getProjectRepository().listProjects();
@@ -552,46 +556,60 @@ export class DynamoDbStatsRepository implements StatsRepository {
     // The rollup range includes its end key; nothing is stored for a day that has not happened.
     const end = new Date(Math.max(Date.parse(until), Date.now()) + 86_400_000).toISOString().slice(0, 10);
 
-    const row = (id: string, name: string): UsageRow => ({ id, name, runs: 0, costUsd: 0, credits: 0, tokens: 0 });
-    const add = (r: UsageRow, item: Record<string, AttributeValue>): void => {
-      r.runs += getNumber(item, 'runCount');
-      r.costUsd += getNumber(item, 'costUsd');
-      r.credits += getNumber(item, 'credits');
-      r.tokens += getNumber(item, 'inputTokens') + getNumber(item, 'outputTokens');
-    };
-    const byDay = new Map<string, UsageRow>();
-    const byProject: UsageRow[] = [];
+    // 1. Which project-days had usage (the rollup is one small item per day).
+    const pairs: Array<{ pid: string; date: string }> = [];
     await Promise.all(ids.map(async (pid) => {
-      const items = await queryRollupRange(this.client, 'STATS#', [pid], start, end);
-      const r = row(pid, names.get(pid) ?? pid);
-      for (const item of items) {
-        add(r, item);
+      for (const item of await queryRollupRange(this.client, 'STATS#', [pid], start, end)) {
         const date = (getString(item, 'SK') ?? '').replace('DAY#', '');
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
-        if (!byDay.has(date)) byDay.set(date, row(date, date));
-        add(byDay.get(date)!, item);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date >= start && date < end) pairs.push({ pid, date });
       }
-      byProject.push(r);
     }));
 
-    // Per-person rollups are kept per person only, not per project: with a project chosen they are for all projects.
-    const byUser: UsageRow[] = [];
-    if (includeUsers) {
-      const users = await getAuthRepository().listUsersWithLastActive();
-      await Promise.all(users.map(async (u) => {
-        const items = await queryRollupRange(this.client, 'USERSTATS#', [u.id], start, end);
-        const r = row(u.id, u.name ?? u.email);
-        for (const item of items) add(r, item);
-        byUser.push(r);
-      }));
+    // 2. Their usage records, a bounded number at a time.
+    const byProject = new Map<string, UsageRow>();
+    const byDay = new Map<string, UsageRow>();
+    const byUserId = new Map<string, UsageRow>();
+    const take = async ({ pid, date }: { pid: string; date: string }): Promise<void> => {
+      const records = await paginateQuery(this.client, {
+        TableName: runsTable(),
+        KeyConditionExpression: 'PK = :pk',
+        ExpressionAttributeValues: { ':pk': { S: `BU#${pid}#${date}` } },
+      });
+      for (const rec of records) {
+        const engine = engineOfProvider(getString(rec, 'provider'));
+        const u = {
+          runs: 1,
+          costUsd: getNumber(rec, 'cost_usd'),
+          credits: getNumber(rec, 'credits'),
+          tokens: getNumber(rec, 'input_tokens') + getNumber(rec, 'output_tokens'),
+        };
+        if (!byProject.has(pid)) byProject.set(pid, newUsageRow(pid, names.get(pid) ?? pid));
+        addUsage(byProject.get(pid)!, engine, u);
+        if (!byDay.has(date)) byDay.set(date, newUsageRow(date, date));
+        addUsage(byDay.get(date)!, engine, u);
+        if (includeUsers) {
+          const uid = getString(rec, 'user_id') ?? '';
+          if (!byUserId.has(uid)) byUserId.set(uid, newUsageRow(uid, uid || '(unknown)'));
+          addUsage(byUserId.get(uid)!, engine, u);
+        }
+      }
+    };
+    for (let i = 0; i < pairs.length; i += 16) await Promise.all(pairs.slice(i, i + 16).map(take));
+
+    // 3. People's names (best effort: an id stands in for a person who is gone).
+    if (includeUsers && byUserId.size > 0) {
+      try {
+        for (const u of await getAuthRepository().listUsersWithLastActive()) {
+          const row = byUserId.get(u.id);
+          if (row) row.name = u.name ?? u.email;
+        }
+      } catch { /* ids stand in for names */ }
     }
-    const used = (r: UsageRow): boolean => r.runs > 0 || r.costUsd > 0 || r.credits > 0 || r.tokens > 0;
     const biggest = (a: UsageRow, b: UsageRow): number => b.costUsd - a.costUsd || b.credits - a.credits || b.tokens - a.tokens;
     return {
-      byProject: byProject.filter(used).sort(biggest),
-      byUser: byUser.filter(used).sort(biggest),
-      usersScopedToProjects: projectIds === null,
-      byDay: [...byDay.values()].filter((r) => r.id >= start && r.id < end).sort((a, b) => (a.id < b.id ? -1 : 1)),
+      byProject: [...byProject.values()].sort(biggest),
+      byUser: [...byUserId.values()].sort(biggest),
+      byDay: [...byDay.values()].sort((a, b) => (a.id < b.id ? -1 : 1)),
     };
   }
 

@@ -9,6 +9,7 @@ import { getDb } from '../server/db.ts';
 import { now } from '../server/util.ts';
 import { hashPassword } from '../server/auth.ts';
 import { fillUsageDays } from '../server/usage.ts';
+import { newUsageRow } from '../server/repositories/stats.ts';
 
 let baseUrl: string;
 let adminCookie: string;
@@ -42,13 +43,14 @@ const addMember = (projectId: string, userId: string): void => {
 };
 const daysAgo = (n: number): string => new Date(Date.now() - n * 86_400_000).toISOString();
 /** One usage record, as a finished run leaves it. */
-const spend = (projectId: string, userId: string | null, u: { usd?: number; credits?: number; inT?: number; outT?: number; at?: string }): void => {
+const spend = (projectId: string, userId: string | null, u: { usd?: number; credits?: number; inT?: number; outT?: number; at?: string; provider?: string }): void => {
   getDb().prepare(
     'INSERT INTO budget_usage (user_id, project_id, cost_usd, credits, input_tokens, output_tokens, provider, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).run(userId, projectId, u.usd ?? 0, u.credits ?? 0, u.inT ?? 0, u.outT ?? 0, u.credits ? 'kiro' : 'claude', u.at ?? now());
+  ).run(userId, projectId, u.usd ?? 0, u.credits ?? 0, u.inT ?? 0, u.outT ?? 0, u.provider ?? (u.credits ? 'kiro' : 'anthropic'), u.at ?? now());
 };
-type Row = { id: string; name: string; runs: number; costUsd: number; credits: number; tokens: number };
-type Usage = { totals: Row; finishedRuns: number; byProject: Row[]; byUser: Row[] | null; byUserAllProjects: boolean; byDay: Row[]; period: string };
+type Totals = { runs: number; costUsd: number; credits: number; tokens: number };
+type Row = Totals & { id: string; name: string; engines: Record<'claude' | 'kiro' | 'codex' | 'other', Totals> };
+type Usage = { totals: Row; finishedRuns: number; byProject: Row[]; byUser: Row[] | null; byDay: Row[]; period: string };
 const get = async (qs: string, cookie = adminCookie) => fetchJson(baseUrl, `/api/usage${qs}`, { cookie });
 
 describe('GET /api/usage', () => {
@@ -66,17 +68,26 @@ describe('GET /api/usage', () => {
     spend(a, ann.id, { usd: 0.5, inT: 100, outT: 100 });
     spend(a, adminId, { credits: 10.25, at: daysAgo(1) });
     spend(b, ann.id, { credits: 4, at: daysAgo(3) });
+    // Codex reports tokens only (no dollars), recorded under its own provider name.
+    spend(b, adminId, { provider: 'codex-subscription', inT: 2000, outT: 500, at: daysAgo(4) });
     const r = await get(`?period=7d`);
     assert.equal(r.status, 200);
     const body = r.body as Usage;
     const alpha = body.byProject.find((p) => p.id === a)!;
     const beta = body.byProject.find((p) => p.id === b)!;
     assert.deepEqual([alpha.name, alpha.runs, alpha.costUsd, alpha.credits, alpha.tokens], ['Usage Alpha', 3, 2, 10.25, 1700]);
-    assert.deepEqual([beta.runs, beta.costUsd, beta.credits], [1, 0, 4]);
-    // Never added: the credits are not in the dollars.
+    assert.deepEqual([beta.runs, beta.costUsd, beta.credits, beta.tokens], [2, 0, 4, 2500]);
+    // Each engine on its own: Claude's dollars, Kiro's credits, Codex's tokens (and no dollars).
+    assert.deepEqual(alpha.engines.claude, { runs: 2, costUsd: 2, credits: 0, tokens: 1700 });
+    assert.deepEqual(alpha.engines.kiro, { runs: 1, costUsd: 0, credits: 10.25, tokens: 0 });
+    assert.equal(alpha.engines.codex.runs, 0);
+    assert.deepEqual(beta.engines.codex, { runs: 1, costUsd: 0, credits: 0, tokens: 2500 });
+    assert.deepEqual(beta.engines.kiro, { runs: 1, costUsd: 0, credits: 4, tokens: 0 });
+    // Never added: the credits are not in the dollars, the Codex tokens are not Claude's.
     assert.equal(body.totals.costUsd, 2);
     assert.equal(body.totals.credits, 14.25);
-    assert.equal(body.totals.runs, 4);
+    assert.equal(body.totals.runs, 5);
+    assert.deepEqual([body.totals.engines.claude.tokens, body.totals.engines.codex.tokens, body.totals.engines.kiro.credits], [1700, 2500, 14.25]);
     // By person (admin only).
     const annRow = body.byUser!.find((u) => u.id === ann.id)!;
     assert.deepEqual([annRow.name, annRow.runs, annRow.costUsd, annRow.credits], ['ann person', 3, 2, 4]);
@@ -91,6 +102,8 @@ describe('GET /api/usage', () => {
     assert.deepEqual([today.runs, today.costUsd, today.credits], [2, 2, 0]);
     assert.equal(body.byDay.find((d) => d.id === daysAgo(1).slice(0, 10))!.credits, 10.25);
     assert.equal(body.byDay.find((d) => d.id === daysAgo(2).slice(0, 10))!.runs, 0);
+    const codexDay = body.byDay.find((d) => d.id === daysAgo(4).slice(0, 10))!;
+    assert.deepEqual([codexDay.engines.codex.tokens, codexDay.engines.claude.runs], [2500, 0], 'a day shows which engine used it');
   });
 
   test('the window: 30 days by default, usage older than the period is left out', async () => {
@@ -106,7 +119,7 @@ describe('GET /api/usage', () => {
     assert.equal(((await get(`?period=90d&projectId=${p}`)).body as Usage).byDay.length, 90);
   });
 
-  test('a project filter limits the project table; per-person totals stay for the whole project set only where the store can limit them', async () => {
+  test('a project filter limits the project table, the per-person table and the totals', async () => {
     const p1 = seedProject('Usage Only One');
     const p2 = seedProject('Usage Not Chosen');
     spend(p1, adminId, { credits: 1 });
@@ -114,6 +127,8 @@ describe('GET /api/usage', () => {
     const body = (await get(`?projectId=${p1}`)).body as Usage;
     assert.deepEqual(body.byProject.map((x) => x.id), [p1]);
     assert.equal(body.totals.credits, 1);
+    // The per-person totals are for the chosen project only (not everything the person used).
+    assert.equal(body.byUser!.find((u) => u.id === adminId)!.credits, 1);
   });
 
   test('runs that finished without reporting usage are told apart from a period with no runs', async () => {
@@ -149,7 +164,9 @@ describe('GET /api/usage', () => {
   });
 
   test('fillUsageDays gives every day and leaves the quiet ones at zero', () => {
-    const out = fillUsageDays('2026-11-10', 3, [{ id: '2026-11-11', name: '2026-11-11', runs: 2, costUsd: 1, credits: 0, tokens: 9 }]);
+    const day11 = newUsageRow('2026-11-11', '2026-11-11');
+    day11.runs = 2;
+    const out = fillUsageDays('2026-11-10', 3, [day11]);
     assert.deepEqual(out.map((d) => d.id), ['2026-11-10', '2026-11-11', '2026-11-12']);
     assert.deepEqual(out.map((d) => d.runs), [0, 2, 0]);
   });

@@ -293,13 +293,14 @@ function runContract(
       }
       try {
         const at = (daysAgo: number): string => new Date(Date.now() - daysAgo * 86_400_000).toISOString();
-        const rec = (project: string, o: { usd?: number; credits?: number; inT?: number; outT?: number; at: string }) => budget.record({
+        const rec = (project: string, o: { usd?: number; credits?: number; inT?: number; outT?: number; at: string; provider?: string }) => budget.record({
           user_id: uid, project_id: project, workflow_id: null, run_id: null, cost_usd: o.usd ?? 0, credits: o.credits ?? 0,
-          input_tokens: o.inT ?? 0, output_tokens: o.outT ?? 0, provider: o.credits ? 'kiro' : 'claude', model: 'm', created_at: o.at,
+          input_tokens: o.inT ?? 0, output_tokens: o.outT ?? 0, provider: o.provider ?? (o.credits ? 'kiro' : 'anthropic'), model: 'm', created_at: o.at,
         });
         await rec(projA, { usd: 1.5, inT: 1000, outT: 500, at: at(0) });
         await rec(projA, { credits: 10.25, at: at(1) });
         await rec(projB, { credits: 4, at: at(2) });
+        await rec(projB, { provider: 'codex-subscription', inT: 3000, outT: 200, at: at(2) }); // Codex: tokens only
         await rec(projA, { credits: 999, at: at(40) }); // outside a 7-day window
         const since = at(6).slice(0, 10) + 'T00:00:00.000Z';
         const until = new Date(Date.now() + 1000).toISOString();
@@ -307,17 +308,28 @@ function runContract(
         const all = await stats.getUsageBreakdown(since, until, [projA, projB], true);
         const a = all.byProject.find((p) => p.id === projA)!;
         assert.deepEqual([a.name, a.runs, a.costUsd, a.credits, a.tokens], ['Usage A', 2, 1.5, 10.25, 1500], 'dollars, credits and tokens kept apart; the old row left out');
-        assert.deepEqual([all.byProject.find((p) => p.id === projB)!.credits], [4]);
+        const b = all.byProject.find((p) => p.id === projB)!;
+        assert.deepEqual([b.runs, b.credits, b.tokens], [2, 4, 3200]);
+        // The engines are kept apart: dollars are Claude's, credits Kiro's, and Codex has tokens only.
+        assert.deepEqual(a.engines.claude, { runs: 1, costUsd: 1.5, credits: 0, tokens: 1500 });
+        assert.deepEqual(a.engines.kiro, { runs: 1, costUsd: 0, credits: 10.25, tokens: 0 });
+        assert.deepEqual(b.engines.codex, { runs: 1, costUsd: 0, credits: 0, tokens: 3200 });
+        assert.deepEqual(b.engines.kiro, { runs: 1, costUsd: 0, credits: 4, tokens: 0 });
+        assert.equal(b.engines.claude.runs, 0);
         const person = all.byUser.find((u) => u.id === uid)!;
-        assert.deepEqual([person.name, person.costUsd, person.credits], [nm, 1.5, 14.25], 'by person: both projects, still apart');
+        assert.deepEqual([person.name, person.costUsd, person.credits, person.engines.codex.tokens], [nm, 1.5, 14.25, 3200], 'by person: both projects, still apart');
         assert.deepEqual(all.byDay.map((d) => d.id), [at(2), at(1), at(0)].map((d) => d.slice(0, 10)), 'one row per day with usage, oldest first');
         assert.equal(all.byDay[1].credits, 10.25);
+        assert.equal(all.byDay[0].engines.codex.tokens, 3200);
 
         const onlyB = await stats.getUsageBreakdown(since, until, [projB], false);
         assert.deepEqual(onlyB.byProject.map((p) => p.id), [projB], 'a chosen project only');
         assert.deepEqual(onlyB.byUser, [], 'no per-person rows unless asked');
         assert.equal(onlyB.byDay.length, 1);
-        assert.deepEqual(await stats.getUsageBreakdown(since, until, [], true), { byProject: [], byUser: [], usersScopedToProjects: true, byDay: [] }, 'no projects, no usage');
+        // With a project chosen, the per-person totals are that project's only.
+        const personInB = (await stats.getUsageBreakdown(since, until, [projB], true)).byUser.find((u) => u.id === uid)!;
+        assert.deepEqual([personInB.credits, personInB.costUsd, personInB.tokens], [4, 0, 3200], 'the person in project B alone');
+        assert.deepEqual(await stats.getUsageBreakdown(since, until, [], true), { byProject: [], byUser: [], byDay: [] }, 'no projects, no usage');
       } finally { for (const r of restore) r(); }
     });
 

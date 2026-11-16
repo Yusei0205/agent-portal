@@ -10,6 +10,7 @@
 
 import { one, all } from '../db.ts';
 import type { Row } from '../db.ts';
+import { addUsage, engineOfProvider, newUsageRow } from './stats.ts';
 import type {
   StatsRepository,
   InsightTotals,
@@ -362,36 +363,45 @@ export class SqliteStatsRepository implements StatsRepository {
     projectIds: string[] | null,
     includeUsers: boolean,
   ): Promise<UsageBreakdown> {
-    if (projectIds !== null && projectIds.length === 0) return { byProject: [], byUser: [], usersScopedToProjects: true, byDay: [] };
+    if (projectIds !== null && projectIds.length === 0) return { byProject: [], byUser: [], byDay: [] };
     const scope = projectIds === null ? '' : `AND bu.project_id IN (${projectIds.map(() => '?').join(',')})`;
     const args = [since, until, ...(projectIds ?? [])];
     const sums = `COUNT(*) AS runs, COALESCE(SUM(bu.cost_usd), 0) AS cost, COALESCE(SUM(bu.credits), 0) AS credits,
        COALESCE(SUM(bu.input_tokens + bu.output_tokens), 0) AS tokens`;
-    type R = { id: string | null; name: string | null; runs: number; cost: number; credits: number; tokens: number };
-    const toRow = (r: R, fallback: string): UsageRow => ({
-      id: String(r.id ?? ''), name: String(r.name ?? fallback), runs: Number(r.runs), costUsd: Number(r.cost), credits: Number(r.credits), tokens: Number(r.tokens),
-    });
-    const byProject = all<R>(
-      `SELECT bu.project_id AS id, p.name AS name, ${sums}
+    type R = { id: string | null; name: string | null; provider: string | null; runs: number; cost: number; credits: number; tokens: number };
+    // One query per table, grouped by the key and the provider; the providers are folded into engines here.
+    const fold = (rows: R[], fallback: string): UsageRow[] => {
+      const byId = new Map<string, UsageRow>();
+      for (const r of rows) {
+        const id = String(r.id ?? '');
+        const row = byId.get(id) ?? newUsageRow(id, String(r.name ?? fallback));
+        addUsage(row, engineOfProvider(r.provider), { runs: Number(r.runs), costUsd: Number(r.cost), credits: Number(r.credits), tokens: Number(r.tokens) });
+        byId.set(id, row);
+      }
+      return [...byId.values()];
+    };
+    const byProject = fold(all<R>(
+      `SELECT bu.project_id AS id, p.name AS name, bu.provider AS provider, ${sums}
        FROM budget_usage bu LEFT JOIN projects p ON p.id = bu.project_id
        WHERE bu.created_at >= ? AND bu.created_at < ? ${scope}
-       GROUP BY bu.project_id ORDER BY cost DESC, credits DESC`, ...args,
-    ).map((r) => toRow(r, '(no project)'));
+       GROUP BY bu.project_id, bu.provider`, ...args,
+    ), '(no project)');
     const byUser = includeUsers
-      ? all<R>(
-        `SELECT bu.user_id AS id, COALESCE(u.name, u.email) AS name, ${sums}
+      ? fold(all<R>(
+        `SELECT bu.user_id AS id, COALESCE(u.name, u.email) AS name, bu.provider AS provider, ${sums}
          FROM budget_usage bu LEFT JOIN users u ON u.id = bu.user_id
          WHERE bu.created_at >= ? AND bu.created_at < ? ${scope}
-         GROUP BY bu.user_id ORDER BY cost DESC, credits DESC`, ...args,
-      ).map((r) => toRow(r, '(unknown)'))
+         GROUP BY bu.user_id, bu.provider`, ...args,
+      ), '(unknown)')
       : [];
-    const byDay = all<R>(
-      `SELECT substr(bu.created_at, 1, 10) AS id, substr(bu.created_at, 1, 10) AS name, ${sums}
+    const byDay = fold(all<R>(
+      `SELECT substr(bu.created_at, 1, 10) AS id, substr(bu.created_at, 1, 10) AS name, bu.provider AS provider, ${sums}
        FROM budget_usage bu
        WHERE bu.created_at >= ? AND bu.created_at < ? ${scope}
-       GROUP BY substr(bu.created_at, 1, 10) ORDER BY id`, ...args,
-    ).map((r) => toRow(r, ''));
-    return { byProject, byUser, usersScopedToProjects: true, byDay };
+       GROUP BY substr(bu.created_at, 1, 10), bu.provider`, ...args,
+    ), '').sort((a, b) => (a.id < b.id ? -1 : 1));
+    const biggest = (a: UsageRow, b: UsageRow): number => b.costUsd - a.costUsd || b.credits - a.credits || b.tokens - a.tokens;
+    return { byProject: byProject.sort(biggest), byUser: byUser.sort(biggest), byDay };
   }
 
   // ── G12: runs per day ───────────────────────────────────────────────────────
