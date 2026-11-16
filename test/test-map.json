@@ -1581,6 +1581,16 @@
       ],
       "smokeIds": []
     },
+    "guide-bundle": {
+      "description": "A user guide as a bundle: the shot board (placed, not in the text, file missing, not captured), the screenshot manifest, and the single-page HTML guide.",
+      "sources": [
+        "server/guide-bundle.ts"
+      ],
+      "tests": [
+        "test/guide-bundle.test.ts"
+      ],
+      "smokeIds": []
+    },
     "loop-iteration": {
       "description": "Loop iteration logic: status parsing, stagnation (harness PR 1.7: loose matching, window of at least 2), the stop",
       "sources": [

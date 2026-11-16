@@ -10,7 +10,8 @@
  *   GET    /api/projects/:id/generated-docs/:docId/versions  — list versions
  *   GET    /api/projects/:id/generated-docs/:docId/download  — download .md or .docx
  */
-import { persistFile, restoreFile } from './durable-files.ts';
+import { persistFile, restoreFile, syncTreeDown } from './durable-files.ts';
+import { parseManifest, shotBoard, boardCounts, buildGuideHtml, shotPath, type ShotRow } from './guide-bundle.ts';
 import fs from 'node:fs';
 import path from 'node:path';
 import { router, sendJson } from './http.ts';
@@ -178,6 +179,20 @@ function listScreenshots(dir: string): string[] {
   return out;
 }
 
+/** A guide's Markdown, its pictures (relative paths) and the shot board built from them. Null when the version has no Markdown. */
+async function guideBoard(v: Row): Promise<{ dir: string; md: string; files: string[]; rows: ShotRow[] } | null> {
+  const mdFile = v.md_path ? String(v.md_path) : '';
+  if (!mdFile || !(await restoreFile(mdFile))) return null;
+  const dir = path.dirname(mdFile);
+  const md = fs.readFileSync(mdFile, 'utf8');
+  // On the cloud portal each instance has its own disk: bring the pictures and the manifest in first.
+  await syncTreeDown(path.join(dir, 'screenshots'));
+  const files = listScreenshots(dir).map((abs) => shotPath(path.relative(dir, abs).split(path.sep).join('/').replace(/^screenshots\//, '')));
+  const manifestFile = path.join(dir, 'screenshots', 'manifest.jsonl');
+  const manifest = fs.existsSync(manifestFile) ? parseManifest(fs.readFileSync(manifestFile, 'utf8')).shots : [];
+  return { dir, md, files, rows: shotBoard(md, files, manifest) };
+}
+
 async function getDoc(docId: string, projectId: string): Promise<Row> {
   const d = (await getGeneratedDocRepository().getById(docId, projectId)) as unknown as Row | null;
   if (!d) throw notFound('Document not found');
@@ -343,6 +358,9 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
   if (mdPath) await persistFile(mdPath, 'text/markdown');
   // The screenshots of a user guide stay with the document, for the Word file's pictures and for the zip download.
   for (const shot of listScreenshots(path.dirname(mdPath))) await persistFile(shot, 'image/png');
+  // Where each picture came from (role, page, boxes), when the run wrote it: the shot board and the HTML guide use it.
+  const manifestFile = path.join(path.dirname(mdPath), 'screenshots', 'manifest.jsonl');
+  if (fs.existsSync(manifestFile)) await persistFile(manifestFile, 'application/x-ndjson');
   if (docxPath) await persistFile(docxPath);
 
   // Get next version number
@@ -624,13 +642,25 @@ export function registerGeneratedDocRoutes(): void {
     sendJson(res, 200, { versions: versions.map(versionView) });
   });
 
+  // GET /api/projects/:id/generated-docs/:docId/shots — the shot board of a guide: which pictures are placed in the text,
+  // which are not, which the text shows but are missing, and which could not be taken
+  router.get('/api/projects/:id/generated-docs/:docId/shots', async (req: PortalRequest, res: PortalResponse) => {
+    const project = await requireProjectAccess(req, res, req.params.id);
+    if (!project) return;
+    const d = await getDoc(req.params.docId, String(project.id));
+    const v = await latestVersion(String(d.id));
+    const board = v ? await guideBoard(v) : null;
+    if (!board) { sendJson(res, 200, { shots: [], counts: boardCounts([]) }); return; }
+    sendJson(res, 200, { shots: board.rows, counts: boardCounts(board.rows) });
+  });
+
   // GET /api/projects/:id/generated-docs/:docId/download
   router.get('/api/projects/:id/generated-docs/:docId/download', async (req: PortalRequest, res: PortalResponse) => {
     const project = await requireProjectAccess(req, res, req.params.id);
     if (!project) return;
 
     const d = await getDoc(req.params.docId, String(project.id));
-    const format = (req.query.get('format') ?? 'md') as 'md' | 'docx' | 'zip';
+    const format = (req.query.get('format') ?? 'md') as 'md' | 'docx' | 'zip' | 'html';
 
     if (!d.latest_version_id) {
       sendJson(res, 404, { error: 'No version available yet' });
@@ -640,6 +670,29 @@ export function registerGeneratedDocRoutes(): void {
     const v = await latestVersion(String(d.id));
     if (!v) {
       sendJson(res, 404, { error: 'Version not found' });
+      return;
+    }
+
+    if (format === 'html') {
+      // One page (index.html) with its screenshots/ folder, zipped: open index.html after unpacking.
+      const board = await guideBoard(v);
+      if (!board) { sendJson(res, 404, { error: 'No Markdown file available' }); return; }
+      const JSZip = (await import('jszip')).default;
+      const zip = new JSZip();
+      zip.file('index.html', buildGuideHtml({ title: String(d.name), md: board.md, rows: board.rows, generatedAt: now() }));
+      for (const row of board.rows) {
+        if (row.status !== 'placed' && row.status !== 'unplaced') continue;
+        const abs = path.resolve(board.dir, ...row.file.split('/'));
+        if (!abs.startsWith(path.resolve(board.dir) + path.sep) || !fs.existsSync(abs)) continue;
+        zip.file(row.file, fs.readFileSync(abs), { createFolders: false });
+      }
+      const out = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+      (res as any).writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': `attachment; filename="${String(d.name).replace(/[^a-z0-9_-]/gi, '_')}-guide.zip"`,
+        'Content-Length': out.length,
+      });
+      (res as any).end(out);
       return;
     }
 

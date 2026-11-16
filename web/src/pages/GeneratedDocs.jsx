@@ -12,6 +12,7 @@ import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
 import { GuideAccountsModal } from '../components/GuideAccounts.jsx';
+import { GuideShotBoard } from '../components/GuideShotBoard.jsx';
 import { IdeBrowser } from './sessions/IdeBrowser.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -395,6 +396,7 @@ export function GeneratedDocs({ projectId }) {
   const [refreshingDoc, setRefreshingDoc] = useState(null);
   const [retryingIds, setRetryingIds] = useState(new Set());
   const [watching, setWatching] = useState(null);
+  const [shotsDoc, setShotsDoc] = useState(null);
   const { confirmState, requestConfirm } = useConfirm();
   const { toast, toasts, removeToast } = useToast();
 
@@ -583,6 +585,21 @@ export function GeneratedDocs({ projectId }) {
                               Download ZIP
                             </a>
                           )}
+                          {d.doc_type === 'user-guide' && (
+                            <>
+                              <a
+                                href={`/api/projects/${projectId}/generated-docs/${d.id}/download?format=html`}
+                                className="btn btn-sm btn-ghost"
+                                download
+                                title="A single web page (index.html) with its screenshots folder: unzip and open index.html"
+                              >
+                                Download HTML guide
+                              </a>
+                              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShotsDoc(d)} title="Which screenshots the guide shows, and which it does not">
+                                Screenshots
+                              </button>
+                            </>
+                          )}
                         </>
                       )}
                       {d.status === 'generating' && d.sources?.guide?.screenshots && d.workflow_id && (
@@ -652,6 +669,7 @@ export function GeneratedDocs({ projectId }) {
         />
       )}
 
+      {shotsDoc && <GuideShotBoard projectId={projectId} doc={shotsDoc} onClose={() => setShotsDoc(null)} />}
       {watching && <WatchBrowserModal doc={watching} projectId={projectId} onClose={() => setWatching(null)} />}
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />

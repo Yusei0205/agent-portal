@@ -165,6 +165,25 @@ describe('user guide requests', () => {
       const zip = await JSZip.loadAsync(Buffer.from(await dl.arrayBuffer()));
       assert.deepEqual(Object.keys(zip.files).sort(), ['document.docx', 'document.md', 'screenshots/01-login.png']);
       assert.match(await zip.file('document.md')!.async('string'), /!\[Sign in: 1 Email, 2 Sign in\]\(screenshots\/01-login\.png\)/);
+
+      // The shot board: one placed, one the text shows but is missing.
+      const board = await fetchJson(baseUrl, `/api/projects/${projectId}/generated-docs/${doc.id}/shots`, { cookie });
+      assert.equal(board.status, 200);
+      const b = board.body as { shots: Array<{ file: string; status: string }>; counts: Record<string, number> };
+      assert.deepEqual(Object.fromEntries(b.shots.map((x) => [x.file, x.status])), {
+        'screenshots/01-login.png': 'placed',
+        'screenshots/02-missing.png': 'missing-file',
+      });
+      assert.equal(b.counts.total, 2);
+
+      // The HTML guide: index.html with the figure and a "to be added" list, plus the picture that exists.
+      const html = await fetch(`${baseUrl}/api/projects/${projectId}/generated-docs/${doc.id}/download?format=html`, { headers: { cookie, 'x-requested-with': 'agent-portal' } });
+      assert.equal(html.status, 200);
+      const hz = await JSZip.loadAsync(Buffer.from(await html.arrayBuffer()));
+      assert.deepEqual(Object.keys(hz.files).sort(), ['index.html', 'screenshots/01-login.png']);
+      const page = await hz.file('index.html')!.async('string');
+      assert.match(page, /<figure><img loading="lazy" src="screenshots\/01-login\.png"/);
+      assert.match(page, /02-missing\.png<\/code>[\s\S]*the text shows it but the file is missing/);
     } finally {
       fs.rmSync(workDir, { recursive: true, force: true });
     }
