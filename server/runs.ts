@@ -39,6 +39,9 @@ function runView(r: Row | RunRecord) {
   };
 }
 
+/** Most events one history request returns (the response must stay well under the 6 MB a Lambda can answer with). */
+const HISTORY_PAGE_MAX = 2000;
+
 function eventView(e: EventRecord | Row) {
   let payload: unknown = {};
   try {
@@ -168,12 +171,16 @@ export function registerRunRoutes(): void {
     });
   });
 
-  // GET /api/runs/:id/events/history: the stored events as JSON (used with AppSync live updates in the cloud portal)
+  // GET /api/runs/:id/events/history?after=<event id>&limit=<n>: the stored events after `after` (0 = from the start), oldest
+  // first, as JSON (used with AppSync live updates in the cloud portal). A long run has tens of thousands of events, so the
+  // page reads them in pages: ask again with `after` = the last id received until a page comes back empty.
   router.get('/api/runs/:id/events/history', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const workflow = await requireRunAccess(req, res, req.params.id);
     if (!workflow) return;
-    const past = await getSessionsRepository().listRunEvents(req.params.id);
-    sendJson(res, 200, { events: past.map(eventView) });
+    const after = Math.max(0, Math.floor(Number(req.query.get('after') ?? 0)) || 0);
+    const limit = Math.min(HISTORY_PAGE_MAX, Math.max(1, Math.floor(Number(req.query.get('limit') ?? HISTORY_PAGE_MAX)) || HISTORY_PAGE_MAX));
+    const page = await getSessionsRepository().listRunEventsFrom(req.params.id, after, limit);
+    sendJson(res, 200, { events: page.map(eventView), after });
   });
 
   // GET /api/runs/:id/events (SSE stream)

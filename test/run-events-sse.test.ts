@@ -119,6 +119,33 @@ describe('GET /api/runs/:id/events — live events', () => {
     assert.ok(!sse.frames.some((f) => f.event?.payload?.text === 'other-run-marker'));
   });
 
+  it('history comes in pages after an event id, so a long run is read to its end (not just the first 5000)', async () => {
+    const run = `run-hist-${Date.now()}`;
+    insert('p6_runs', { id: run, workflow_id: workflowId, status: 'running', created_at: new Date().toISOString() });
+    for (let i = 1; i <= 7; i += 1) emitRunEvent(run, projectId, workflowId, 'assistant-text', { text: `h${i}` });
+
+    const page = async (after: number, limit: number) => {
+      const r = await fetchJson(baseUrl, `/api/runs/${run}/events/history?after=${after}&limit=${limit}`, { cookie });
+      assert.equal(r.status, 200);
+      return (r.body as { events: Array<{ id: number; payload: { text: string } }> }).events;
+    };
+    const seen: string[] = [];
+    let last = 0;
+    for (let i = 0; i < 10; i += 1) {
+      const events = await page(last, 3);
+      if (!events.length) break;
+      assert.ok(events.length <= 3, 'a page is at most the limit');
+      for (const e of events) { assert.ok(e.id > last, 'ids go up'); last = e.id; seen.push(e.payload.text); }
+    }
+    assert.deepEqual(seen, ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'h7']);
+    assert.deepEqual(await page(last, 3), [], 'nothing after the last one');
+
+    emitRunEvent(run, projectId, workflowId, 'assistant-text', { text: 'h8' });
+    assert.deepEqual((await page(last, 3)).map((e) => e.payload.text), ['h8'], 'a poll after the last id gets only what is new');
+    // Without after/limit the first page comes back, as before.
+    assert.equal((await fetchJson(baseUrl, `/api/runs/${run}/events/history`, { cookie })).status, 200);
+  });
+
   it('rejects requests without a session', async () => {
     const sse = openSse(baseUrl, `/api/runs/${runId}/events`, '');
     await sse.ready;

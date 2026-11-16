@@ -6,7 +6,7 @@ import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { publishToChannel, flushRealtime, _setBatchPublisher } from '../server/realtime.ts';
 // @ts-expect-error: plain JS module without type declarations
-import { insertRunEvent } from '../web/src/lib/runEventOrder.js';
+import { insertRunEvent, mergeRunEvents } from '../web/src/lib/runEventOrder.js';
 
 const saved = process.env.PORTAL_EVENTS_HTTP_DOMAIN;
 afterEach(() => {
@@ -77,5 +77,24 @@ describe('browser: insertRunEvent', () => {
     const next = insertRunEvent(original, { id: '2' });
     assert.deepEqual(original, [{ id: 1 }, { id: 3 }]);
     assert.deepEqual(next.map((e: { id: number | string }) => Number(e.id)), [1, 2, 3]);
+  });
+});
+
+describe('browser: a page of stored history joins a run\'s events in one step', () => {
+  it('keeps events sorted by id, merges interleaved ones, and puts events without an id last', () => {
+    const have = [{ id: 1 }, { id: 2 }, { id: 5 }];
+    assert.deepEqual(mergeRunEvents(have, [{ id: 3 }, { id: 4 }, { id: 6 }]).map((e: { id: number }) => e.id), [1, 2, 3, 4, 5, 6]);
+    assert.deepEqual(mergeRunEvents(have, [{ id: 7 }, { id: 8 }]).map((e: { id: number }) => e.id), [1, 2, 5, 7, 8], 'the common case: appended');
+    assert.deepEqual(mergeRunEvents(have, [{ type: 'x' }, { id: 3 }]).map((e: { id?: number }) => e.id ?? 'none'), [1, 2, 3, 5, 'none']);
+    assert.equal(mergeRunEvents(have, []), have, 'nothing to add: the same array');
+  });
+
+  it('merges tens of thousands of events quickly (one copy, not one per event)', () => {
+    const page = (from: number) => Array.from({ length: 2000 }, (_, i) => ({ id: from + i }));
+    let events: Array<{ id: number }> = [];
+    const t0 = Date.now();
+    for (let p = 0; p < 12; p += 1) events = mergeRunEvents(events, page(p * 2000 + 1));
+    assert.equal(events.length, 24000);
+    assert.ok(Date.now() - t0 < 1000, 'took ' + (Date.now() - t0) + ' ms');
   });
 });

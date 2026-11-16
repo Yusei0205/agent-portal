@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { realtimeAvailable, subscribeChannel } from './realtime.js';
-import { insertRunEvent } from './runEventOrder.js';
+import { insertRunEvent, mergeRunEvents } from './runEventOrder.js';
 
 /**
  * @param {string | null | undefined} runId
@@ -107,32 +107,43 @@ export function useRunStream(runId) {
         if (!historyLoaded) queued.push(ev); else addEvent(ev);
       });
       setState((s) => ({ ...s, connected: true, error: null }));
-      try {
-        const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/events/history`, { credentials: 'include' });
-        if (res.ok) {
+
+      // The stored events after the last one shown, in pages: a long run has tens of thousands of events, and one
+      // request used to return only the first 5000, so a reloaded page stopped part of the way through the run.
+      let lastId = 0;
+      const loadHistory = async () => {
+        for (let page = 0; page < 200 && alive.v; page += 1) {
+          const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/events/history?after=${lastId}&limit=2000`, { credentials: 'include' });
+          if (!res.ok) return;
           const body = await res.json();
-          for (const ev of body.events ?? []) addEvent(ev);
+          const events = body.events ?? [];
+          if (!events.length) return;
+          // One state update per page: a long run is read in many pages of thousands of events.
+          const fresh = [];
+          for (const ev of events) {
+            if (typeof ev.id === 'number' && ev.id > lastId) lastId = ev.id;
+            if (ev.type === 'run-complete' || ev.type === 'run-failed') done = true;
+            const key = ev.id ?? `${ev.type}-${ev.created_at}`;
+            if (ev.id && seen.current.has(key)) continue;
+            if (ev.id) seen.current.add(key);
+            fresh.push(ev);
+          }
+          if (fresh.length && alive.v) setState((s) => ({ ...s, events: mergeRunEvents(s.events, fresh) }));
         }
-      } catch { /* live events still arrive */ }
+      };
+      try { await loadHistory(); } catch { /* live events still arrive */ }
       historyLoaded = true;
       for (const ev of queued) addEvent(ev);
 
-      // Safety net: the live channel can miss events (a dropped connection, a late subscribe). Until the run
-      // reports it has ended, re-read the stored history every few seconds; events already shown are skipped.
+      // Safety net: the live channel can miss events (a dropped connection, a late subscribe, a token that ran out
+      // on a page left open). Until the run reports it has ended, ask for what is new every few seconds: cheap now,
+      // since only events after the last one shown come back. Slower after 20 minutes, and never given up on while the
+      // page is open and the run is going (a run can last hours).
       const started = Date.now();
       const poll = async () => {
-        if (!alive.v || done || Date.now() - started > 20 * 60_000) return;
-        try {
-          const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/events/history`, { credentials: 'include' });
-          if (res.ok) {
-            const body = await res.json();
-            for (const ev of body.events ?? []) {
-              addEvent(ev);
-              if (ev.type === 'run-complete' || ev.type === 'run-failed') done = true;
-            }
-          }
-        } catch { /* try again */ }
-        if (alive.v && !done) pollTimer = setTimeout(poll, 2500);
+        if (!alive.v || done || Date.now() - started > 6 * 3600_000) return;
+        try { await loadHistory(); } catch { /* try again */ }
+        if (alive.v && !done) pollTimer = setTimeout(poll, Date.now() - started > 20 * 60_000 ? 8000 : 2500);
       };
       pollTimer = setTimeout(poll, 2500);
     });

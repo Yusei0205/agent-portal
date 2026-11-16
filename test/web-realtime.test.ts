@@ -25,8 +25,11 @@ class FakeSocket {
 const flush = (): Promise<void> => new Promise((r) => setImmediate(r));
 let seq = 0;
 
-async function freshModule(): Promise<typeof import('../web/src/lib/realtime.js')> {
+type Realtime = { subscribeChannel: (channel: string, fn: (e: unknown) => void) => () => void };
+
+async function freshModule(): Promise<Realtime> {
   seq += 1;
+  // @ts-ignore a plain JavaScript module (no declaration file); the query string gives each test its own copy and state
   return import(`../web/src/lib/realtime.js?case=${seq}`);
 }
 
@@ -51,7 +54,7 @@ describe('realtime subscriptions on a long-open page', () => {
     (globalThis as any).WebSocket = saved.ws;
   });
 
-  async function connected(rt: typeof import('../web/src/lib/realtime.js'), channel: string): Promise<FakeSocket> {
+  async function connected(rt: Realtime, channel: string): Promise<FakeSocket> {
     rt.subscribeChannel(channel, () => undefined);
     await flush(); await flush();
     const socket = FakeSocket.all[0];
