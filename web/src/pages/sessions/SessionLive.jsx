@@ -1436,7 +1436,7 @@ export function SessionLive({
     const scrollBottom = el ? el.scrollHeight - el.scrollTop : 0;
     try {
       const data = await api.get(
-        `/api/projects/${projectId}/workflows/${workflowId}/transcript?limit=50&cursor=${encodeURIComponent(nextCursor)}`,
+        `/api/projects/${projectId}/workflows/${workflowId}/transcript?limit=200&cursor=${encodeURIComponent(nextCursor)}`,
       );
       setEarlierEvents((prev) => mergeEventLists(
         (data.events ?? []).map(normaliseTranscriptEvent).reverse(),

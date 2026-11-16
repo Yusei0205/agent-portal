@@ -50,6 +50,7 @@ import {
 import type { AttributeValue, GlobalSecondaryIndex } from '@aws-sdk/client-dynamodb';
 import { getDynamoDbClient, marshalItem, getString, getNumber, av } from './dynamo-client.ts';
 import { now, HttpError } from '../util.ts';
+import { TRANSCRIPT_HIDDEN_EVENT_TYPES } from './sessions.ts';
 import type {
   SessionsRepository,
   WorkflowRecord,
@@ -1623,7 +1624,8 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
     cursor: import('./sessions.ts').TranscriptCursor | null,
     limit: number,
   ): Promise<{ rows: import('./sessions.ts').TranscriptRow[]; nextCursor: import('./sessions.ts').TranscriptCursor | null }> {
-    // 1. List all run IDs for this workflow.
+    // 1. The workflow's runs, newest first. A run starts after the one before it ends, so the runs' events are in
+    //    time order run by run: a page only needs the newest runs' events, read from the end backwards.
     const runSkItems = await paginateQuery(this.client, {
       TableName: runsTable(),
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
@@ -1631,40 +1633,68 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
         ':pk': av(`WF#${workflowId}`),
         ':prefix': av('RUN#'),
       },
+      ScanIndexForward: false,
     });
-    const runEntries: Array<{ runId: string }> = runSkItems.map((item) => {
-      const sk = getString(item, 'SK') ?? '';
-      // SK = RUN#<isoCreatedAt>#<runId> — extract the last segment
-      const parts = sk.split('#');
-      return { runId: parts[parts.length - 1] };
+    const runEntries: Array<{ runId: string; startedAt: string }> = runSkItems.map((item) => {
+      // SK = RUN#<isoCreatedAt>#<runId>
+      const parts = (getString(item, 'SK') ?? '').split('#');
+      return { runId: parts[parts.length - 1], startedAt: parts[1] ?? '' };
     });
 
-    // 2. Fetch all run events (paginate each run partition fully for correctness).
-    //    Cap at MAX_TRANSCRIPT_EVENTS total to prevent excessive reads.
-    const MAX_TRANSCRIPT_EVENTS = 10_000;
+    // 2. Run events, newest first, until the page is full. Reasoning chunks (nine in ten events of a long run) are
+    //    not part of the transcript. With a cursor on a run event, that run is read from just before it and the runs
+    //    after it are skipped; with any other cursor a run's events are limited to those at or before its time.
+    const hidden = TRANSCRIPT_HIDDEN_EVENT_TYPES;
     const allRunRows: import('./sessions.ts').TranscriptRow[] = [];
-    for (const { runId } of runEntries) {
-      if (allRunRows.length >= MAX_TRANSCRIPT_EVENTS) break;
-      const evtItems = await paginateQuery(this.client, {
-        TableName: eventsTable(),
-        KeyConditionExpression: 'PK = :pk',
-        ExpressionAttributeValues: { ':pk': av(`RUN#${runId}`) },
-        ScanIndexForward: true,
-      }, MAX_TRANSCRIPT_EVENTS - allRunRows.length);
-      for (const item of evtItems) {
-        const sk = getString(item, 'SK') ?? '';
-        allRunRows.push({
-          src: 'r',
-          id: seqFromSk(sk),
-          created_at: getString(item, 'created_at') ?? '',
-          kind: getString(item, 'type') ?? '',
-          body: getString(item, 'payload') ?? '',
-          run_id: runId,
-        });
+    const cursorRun = cursor?.src === 'r' && cursor.run_id ? cursor.run_id : null;
+    let reachedCursorRun = cursorRun === null;
+    for (const { runId, startedAt } of runEntries) {
+      if (allRunRows.length >= limit) break;
+      let before: number | null = null;
+      if (cursorRun) {
+        if (!reachedCursorRun) {
+          if (runId !== cursorRun) continue;
+          reachedCursorRun = true;
+        }
+        if (runId === cursorRun) before = cursor!.id;
+      } else if (cursor && startedAt > cursor.ts) {
+        continue; // the whole run started after the cursor
       }
+      let lastKey: Record<string, AttributeValue> | undefined;
+      do {
+        const names: Record<string, string> = { '#t': 'type' };
+        const values: Record<string, AttributeValue> = { ':pk': av(`RUN#${runId}`) };
+        let keyCond = 'PK = :pk';
+        if (before !== null) { keyCond += ' AND SK < :before'; values[':before'] = av(seqSk(before)); }
+        else keyCond += ' AND begins_with(SK, :prefix)', values[':prefix'] = av('SEQ#');
+        const filters = [`NOT (#t IN (${hidden.map((_, i) => `:h${i}`).join(', ')}))`];
+        hidden.forEach((h, i) => { values[`:h${i}`] = av(h); });
+        if (cursor && !cursorRun) { filters.push('created_at <= :ts'); values[':ts'] = av(cursor.ts); }
+        const res = await this.client.send(new QueryCommand({
+          TableName: eventsTable(),
+          KeyConditionExpression: keyCond,
+          FilterExpression: filters.join(' AND '),
+          ExpressionAttributeNames: names,
+          ExpressionAttributeValues: values,
+          ScanIndexForward: false,
+          Limit: 500, // events read per request (before the filter): a long run is mostly reasoning chunks
+          ExclusiveStartKey: lastKey,
+        }));
+        for (const item of res.Items ?? []) {
+          allRunRows.push({
+            src: 'r',
+            id: seqFromSk(getString(item, 'SK') ?? ''),
+            created_at: getString(item, 'created_at') ?? '',
+            kind: getString(item, 'type') ?? '',
+            body: getString(item, 'payload') ?? '',
+            run_id: runId,
+          });
+        }
+        lastKey = res.LastEvaluatedKey;
+      } while (lastKey && allRunRows.length < limit);
     }
 
-    // 3. Fetch all workflow events.
+    // 3. The workflow's own events (messages, commands, markers): few, so all of them.
     const wfEvtItems = await paginateQuery(this.client, {
       TableName: runsTable(),
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
@@ -1683,11 +1713,12 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       run_id: null,
     }));
 
-    // 4. Merge and apply cursor filter.
+    // 4. Merge and apply the cursor to the workflow events (run events were limited above).
     let allRows: import('./sessions.ts').TranscriptRow[] = [...allRunRows, ...allWfRows];
 
     if (cursor) {
       allRows = allRows.filter((row) => {
+        if (row.src === 'r') return true;
         if (row.created_at < cursor.ts) return true;
         if (row.created_at > cursor.ts) return false;
         if (row.src > cursor.src) return true;
@@ -1705,11 +1736,12 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
       return b.id - a.id;
     });
 
-    // 6. Take limit rows and build next cursor.
+    // 6. Take limit rows and build next cursor (a run event's cursor names its run, so the next page resumes inside it).
     const page = allRows.slice(0, limit);
+    const last = page[page.length - 1];
     const nextCursor: import('./sessions.ts').TranscriptCursor | null =
       page.length === limit
-        ? { ts: page[page.length - 1].created_at, src: page[page.length - 1].src, id: page[page.length - 1].id }
+        ? { ts: last.created_at, src: last.src, id: last.id, ...(last.src === 'r' && last.run_id ? { run_id: last.run_id } : {}) }
         : null;
 
     return { rows: page, nextCursor };

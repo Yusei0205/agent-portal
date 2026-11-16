@@ -722,7 +722,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
           SELECT 'r' AS src, e.id, e.created_at, e.type AS kind, e.payload AS body, e.run_id
           FROM p6_events e
           JOIN p6_runs r ON r.id = e.run_id
-          WHERE r.workflow_id = ?
+          WHERE r.workflow_id = ? AND e.type <> 'agent-thought'
           UNION ALL
           SELECT 'w' AS src, we.id, we.created_at, we.kind, we.body, NULL AS run_id
           FROM p6_workflow_events we
@@ -743,7 +743,7 @@ export class SqliteSessionsRepository implements SessionsRepository {
           SELECT 'r' AS src, e.id, e.created_at, e.type AS kind, e.payload AS body, e.run_id
           FROM p6_events e
           JOIN p6_runs r ON r.id = e.run_id
-          WHERE r.workflow_id = ?
+          WHERE r.workflow_id = ? AND e.type <> 'agent-thought'
           UNION ALL
           SELECT 'w' AS src, we.id, we.created_at, we.kind, we.body, NULL AS run_id
           FROM p6_workflow_events we

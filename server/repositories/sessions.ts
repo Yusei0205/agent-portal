@@ -233,7 +233,15 @@ export type TranscriptRow = {
  * Opaque cursor for transcript pagination.
  * Encodes the position of the last (oldest) row on the current page.
  */
-export type TranscriptCursor = { ts: string; src: 'r' | 'w'; id: number };
+/** Where a transcript page ends. `run_id` (for a run event) lets DynamoDB resume inside that run without reading the ones before it. */
+export type TranscriptCursor = { ts: string; src: 'r' | 'w'; id: number; run_id?: string | null };
+
+/**
+ * Run events the transcript leaves out: Kiro's reasoning arrives as hundreds of tiny `agent-thought` chunks (nine in ten
+ * events of a long run) that the page never shows in the conversation. Counting them made a page of 200 events hold a
+ * handful of visible turns, and "Load earlier turns" (50 events) add one or two.
+ */
+export const TRANSCRIPT_HIDDEN_EVENT_TYPES: readonly string[] = ['agent-thought'];
 
 // ── Options ────────────────────────────────────────────────────────────────────
 

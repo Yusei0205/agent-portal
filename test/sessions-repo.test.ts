@@ -1074,6 +1074,54 @@ function runContract(label: string, makeRepo: () => Promise<SessionsRepository>)
       }
     });
 
+    test('listTranscript -- leaves out reasoning chunks, and pages through a long run to its first event', async () => {
+      const wfId = generateId();
+      const ts = now();
+      await repo.createWorkflow({
+        id: wfId, project_id: null, goal: 'Long run', status: 'done',
+        engine: 'kiro', trust_tools: 0, lead_agent: null, workspace_id: null,
+        output_files_enabled: 0, repo_ids: '[]', iteration_count: 0, max_iterations: 10,
+        credential_id: null, model: '', created_by: null, created_at: ts, updated_at: ts,
+      });
+      const base = Date.now() - 3_600_000;
+      const runA = generateId();
+      const runB = generateId();
+      await repo.createRun({ id: runA, workflow_id: wfId, status: 'done', started_at: new Date(base).toISOString(), finished_at: new Date(base).toISOString(), cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: new Date(base).toISOString() });
+      await repo.createRun({ id: runB, workflow_id: wfId, status: 'done', started_at: new Date(base + 600_000).toISOString(), finished_at: new Date(base + 600_000).toISOString(), cost_usd: 0, input_tokens: 0, output_tokens: 0, created_at: new Date(base + 600_000).toISOString() });
+      // Run A: 1,200 events, nine in ten of them reasoning chunks (more than one DynamoDB read of 500). Run B: 30, same mix.
+      let visibleA = 0;
+      for (let i = 0; i < 1200; i += 1) {
+        const thought = i % 10 !== 0;
+        if (!thought) visibleA += 1;
+        await repo.appendRunEvent(runA, thought ? 'agent-thought' : 'tool-start', JSON.stringify({ n: i }), new Date(base + i).toISOString());
+      }
+      let visibleB = 0;
+      for (let i = 0; i < 30; i += 1) {
+        const thought = i % 10 !== 0;
+        if (!thought) visibleB += 1;
+        await repo.appendRunEvent(runB, thought ? 'agent-thought' : 'tool-start', JSON.stringify({ n: i }), new Date(base + 600_000 + i).toISOString());
+      }
+      await repo.appendWorkflowEvent({ workflow_id: wfId, kind: 'human', body: 'between the runs', data: null, created_at: new Date(base + 300_000).toISOString() });
+
+      const first = await repo.listTranscript(wfId, null, 10);
+      assert.ok(first.rows.every((r) => r.kind !== 'agent-thought'), 'no reasoning chunks');
+      assert.equal(first.rows.length, 10, 'a full page of visible rows: not a few rows among hundreds of chunks');
+      assert.equal(first.rows[0].run_id, runB, 'newest run first');
+
+      const seen: string[] = [];
+      let cursor: import('../server/repositories/sessions.ts').TranscriptCursor | null = null;
+      let pages = 0;
+      do {
+        const r = await repo.listTranscript(wfId, cursor, 25);
+        for (const row of r.rows) seen.push(`${row.src}:${row.run_id ?? 'wf'}:${row.id}`);
+        cursor = r.nextCursor;
+        pages += 1;
+        if (pages > 40) assert.fail('too many pages');
+      } while (cursor);
+      assert.equal(new Set(seen).size, seen.length, 'no row twice');
+      assert.equal(seen.length, visibleA + visibleB + 1, 'every visible event of both runs and the message, back to the first');
+    });
+
     test('listTranscript -- cursor-based paging has no overlap between pages', async () => {
       const wfId = generateId();
       const ts = now();
