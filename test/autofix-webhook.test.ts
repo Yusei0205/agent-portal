@@ -112,6 +112,42 @@ describe('autofix webhook', () => {
     assert.equal(f.occurrences, 3);
   });
 
+  it('a fetch that fails once and then succeeds still dedupes to one finding', async () => {
+    let n = 0;
+    _setEvidenceFetcher(async () => (n++ === 0 ? 'CI / eslint failure' : 'long log tail 12 errors in 3.4s\nsrc/x.ts'));
+    await deliver(fx('workflow_run_failed_main'));
+    await deliver(fx('workflow_run_failed_main'));
+    const f = await findings();
+    assert.equal(f.length, 1);
+    assert.equal(f[0].occurrences, 2);
+  });
+
+  it('two concurrent deliveries of the same payload create one finding with occurrences 2', async () => {
+    const body = fx('workflow_run_failed_main');
+    const rs = await Promise.all([0, 1].map(() => fetch(`${baseUrl}/api/hooks/autofix/${projectId}`, {
+      method: 'POST', body, headers: { 'content-type': 'application/json', 'x-github-event': 'workflow_run', 'x-hub-signature-256': sign(body) },
+    })));
+    assert.deepEqual(rs.map((r) => r.status), [202, 202]);
+    await _drainIntakeForTest();
+    const f = await findings();
+    assert.equal(f.length, 1);
+    assert.equal(f[0].occurrences, 2);
+  });
+
+  it('a finding being fixed keeps its evidence and commit; only the counter moves', async () => {
+    await deliver(fx('workflow_run_failed_main'));
+    const repo = getAutofixFindingsRepository();
+    const first = (await findings())[0];
+    await repo.transition(first.id, ['new'], { status: 'fixing' });
+    _setEvidenceFetcher(async () => 'different evidence');
+    await deliver(fx('workflow_run_failed_main').replace('a1b2c3d4e5f6', 'ffffffffffff'));
+    const f = (await repo.getById(first.id))!;
+    assert.equal(f.status, 'fixing');
+    assert.equal(f.occurrences, 2);
+    assert.equal(f.evidence, first.evidence);
+    assert.equal(f.commit_sha, first.commit_sha);
+  });
+
   it('autofix branch failures, ping and success store nothing', async () => {
     await deliver(fx('workflow_run_failed_autofix'));
     await deliver(fx('ping'), 'ping');

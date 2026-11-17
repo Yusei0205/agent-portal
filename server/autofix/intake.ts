@@ -4,10 +4,7 @@ import { getAutofixFindingsRepository } from '../repositories/autofix-findings.t
 import type { AutofixFinding } from '../repositories/autofix-findings.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
 import type { GitRepoRecord } from '../repositories/git-repos.ts';
-import { getGitConnectionsRepository } from '../repositories/git-connections.ts';
-import { decrypt } from '../secrets.ts';
-import { config } from '../config.ts';
-import { parseJson } from '../util.ts';
+import { githubTokenForRepo } from '../pull-requests.ts';
 import { parseGitHubOwnerRepo } from '../review.ts';
 import { computeFingerprint } from './fingerprint.ts';
 import { scrubEvidence } from './scrub.ts';
@@ -32,16 +29,6 @@ export async function findProjectGithubRepo(projectId: string, fullName: string)
   return null;
 }
 
-async function githubToken(repo: GitRepoRecord): Promise<string | null> {
-  if (!repo.connection_id) return null;
-  const conn = await getGitConnectionsRepository().getById(repo.connection_id);
-  if (!conn?.credentials_enc) return null;
-  try {
-    const creds = parseJson<Record<string, string>>(decrypt(conn.credentials_enc, config.secretKey), {});
-    return creds.token || null;
-  } catch { return null; }
-}
-
 export async function fetchCiEvidence(c: FindingCandidate, projectId: string): Promise<string> {
   const fallback = scrubEvidence(`${c.kind} CI check failed (conclusion: failure) on ${c.branch}`);
   if (!c.runId) return fallback;
@@ -49,7 +36,7 @@ export async function fetchCiEvidence(c: FindingCandidate, projectId: string): P
     const repo = await findProjectGithubRepo(projectId, c.repoFullName);
     const slug = repo ? parseGitHubOwnerRepo(repo.url ?? '') : null;
     if (!repo || !slug) return fallback;
-    const token = await githubToken(repo);
+    const token = await githubTokenForRepo(repo);
     const doFetch: FetchFn = githubFetch ?? ((u, i) => fetch(u, i));
     const headers: Record<string, string> = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -72,7 +59,7 @@ export async function recordFinding(projectId: string, c: FindingCandidate, evid
   const repos = getAutofixFindingsRepository();
   const repo = await findProjectGithubRepo(projectId, c.repoFullName);
   const clean = scrubEvidence(evidence);
-  const fingerprint = computeFingerprint({ repo: c.repoFullName, branch: c.branch, kind: c.kind, error: clean });
+  const fingerprint = computeFingerprint({ repo: c.repoFullName, branch: c.branch, kind: c.kind, error: c.errorText });
   const policy = await getAutofixPolicy(projectId);
   const { finding, created } = await repos.upsertByFingerprint({
     project_id: projectId, source: c.source, kind: c.kind, fingerprint, severity: c.severity, evidence: clean,
@@ -88,7 +75,8 @@ export async function recordFinding(projectId: string, c: FindingCandidate, evid
   if ((finding.status === 'dismissed' || finding.status === 'suppressed') && cooling) return { finding, created }; // counter only
   if (finding.status === 'resolved') {
     await repos.transition(finding.id, ['resolved'], { status: 'new', evidence: clean, commit_sha: c.headSha || finding.commit_sha });
-  } else {
+  } else if (finding.status !== 'fixing' && finding.status !== 'pr_open') {
+    // A finding being fixed keeps the evidence and commit the fix works from; only the counter moves.
     await repos.transition(finding.id, [finding.status], { status: finding.status, evidence: clean, commit_sha: c.headSha || finding.commit_sha });
   }
   return { finding: (await repos.getById(finding.id)) ?? finding, created };

@@ -121,6 +121,19 @@ function codecommitTarget(url: string): { name: string; region: string | null } 
 
 // ── Credential lookup (same order as getCloneEnv in repos.ts) ─────────────────
 
+/** The GitHub token of the repository's git connection, or null when it has none. */
+export async function githubTokenForRepo(repo: { connection_id?: string | null }): Promise<string | null> {
+  if (!repo.connection_id) return null;
+  const conn = await getGitConnectionsRepository().getById(repo.connection_id);
+  if (!conn?.credentials_enc) return null;
+  try {
+    const creds = parseJson<Record<string, string>>(decrypt(conn.credentials_enc, config.secretKey), {});
+    return creds.token || null;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveCredentials(repo: Repository, kind: 'github' | 'codecommit'): Promise<PrCredentials> {
   if (kind === 'codecommit' && repo.project_id) {
     try {
@@ -138,6 +151,10 @@ async function resolveCredentials(repo: Repository, kind: 'github' | 'codecommit
     } catch { /* fall back to the connection */ }
   }
 
+  if (kind === 'github') {
+    const token = await githubTokenForRepo(repo);
+    return token ? { kind: 'github', token } : null;
+  }
   if (!repo.connection_id) return null;
   const conn = await getGitConnectionsRepository().getById(repo.connection_id);
   if (!conn?.credentials_enc) return null;
@@ -148,7 +165,6 @@ async function resolveCredentials(repo: Repository, kind: 'github' | 'codecommit
     return null;
   }
 
-  if (kind === 'github') return creds.token ? { kind: 'github', token: creds.token } : null;
   if (conn.provider !== 'codecommit') return null;
 
   const region = creds.region || 'us-east-1';
