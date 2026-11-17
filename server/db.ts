@@ -2266,6 +2266,40 @@ const M52_API_SIMULATION = `
 `;
 
 /**
+ * Auto-fix findings: one row per distinct problem (CI failure, review finding, failed session) per project, deduplicated
+ * by fingerprint. Not related to the code review tables (findings, p10_findings).
+ */
+const M53_AUTOFIX_FINDINGS = `
+  CREATE TABLE IF NOT EXISTS autofix_findings (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    source TEXT NOT NULL CHECK(source IN ('ci_failed','review_finding','session_failed')),
+    kind TEXT NOT NULL DEFAULT '',
+    fingerprint TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'medium' CHECK(severity IN ('low','medium','high')),
+    evidence TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','triaged','fixing','pr_open','resolved','dismissed','suppressed','needs_human')),
+    repo_id TEXT,
+    branch TEXT,
+    commit_sha TEXT,
+    workflow_id TEXT,
+    fix_branch TEXT,
+    pr_number INTEGER,
+    pr_url TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    occurrences INTEGER NOT NULL DEFAULT 1,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    cooldown_until TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS autofix_findings_fp ON autofix_findings(project_id, fingerprint);
+  CREATE INDEX IF NOT EXISTS autofix_findings_status ON autofix_findings(project_id, status);
+  CREATE INDEX IF NOT EXISTS autofix_findings_workflow ON autofix_findings(workflow_id);
+  CREATE INDEX IF NOT EXISTS autofix_findings_fix_branch ON autofix_findings(fix_branch);
+`;
+
+/**
  * The flow state column of a session (the recipe it is running: steps, child sessions, results; '' = none). Checked on
  * every start like the API simulation tables, so it does not depend on a migration number.
  */
@@ -2323,7 +2357,7 @@ function ensureApiSimSchema(database: DatabaseSync): void {
   `);
 }
 
-const MIGRATIONS: Array<string | ((database: DatabaseSync) => void)> = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY, M44_APPROVAL_BINDING, M45_RUN_LIMITS, M46_LOOP_STATE, M47_FEEDBACK, M48_KIRO_CREDITS, migrateCodexEngine, M50_CODEX_CLOUD, migrateCodexConfig, M52_API_SIMULATION];
+const MIGRATIONS: Array<string | ((database: DatabaseSync) => void)> = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY, M44_APPROVAL_BINDING, M45_RUN_LIMITS, M46_LOOP_STATE, M47_FEEDBACK, M48_KIRO_CREDITS, migrateCodexEngine, M50_CODEX_CLOUD, migrateCodexConfig, M52_API_SIMULATION, M53_AUTOFIX_FINDINGS];
 
 MIGRATIONS.push(`CREATE TABLE IF NOT EXISTS automation_records (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
