@@ -55,6 +55,8 @@ import type { RunContext } from './types.ts';
 import { getSettings } from '../settings.ts';
 import { ApprovalRelay, isApprovalRequest, type ControlSender } from './agentcore-bridge.ts';
 import { recordHostTimeLimit } from './host-limit.ts';
+import { repoChangeOf } from './runner-finalize.ts';
+import type { RepoChanges } from './runner-finalize.ts';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -98,7 +100,7 @@ export type AgentCoreSSEEvent =
   | { type: 'tool'; name: string; agentId?: string; agent?: string }
   | { type: 'subagent-started' | 'subagent-finished' | 'subagent-failed'; id: string; name: string; description?: string; summary?: string; status?: string; parentId?: string; durationMs?: number }
   | { type: 'check-result'; ok: boolean; ranAt: string; steps: unknown[] }
-  | { type: 'repo-changes'; repo: string; base: string; commits: number; files: number }
+  | { type: 'repo-changes'; repo: string; base: string; commits: number; files: number; paths?: unknown }
   | { type: 'browser-session'; browserId: string; sessionId: string; width: number; height: number }
   | { type: 'browser-waiting'; state: string; message?: string }
   | { type: 'browser-navigate'; url: string }
@@ -656,7 +658,7 @@ const defaultRepoChangesHooks: RepoChangesHooks = {
     const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
     const { getSessionsRepository } = await import('../repositories/sessions.ts');
     const w = await getSessionsRepository().getWorkflowById(run.workflowId);
-    return finalizeRunPayloadFlag(run.projectId, Boolean(String(w?.jira_key ?? '').trim()));
+    return finalizeRunPayloadFlag(run.projectId, Boolean(String(w?.jira_key ?? '').trim()), run.workflowId);
   },
   handle: async (ctx, changes) => {
     const { handleRepoChanges } = await import('../session-pr.ts');
@@ -703,7 +705,7 @@ export async function runKiroViaAgentCore(
     // Record why first: the abort below reaches the run as an error that would otherwise read as "Cancelled".
     void recordHostTimeLimit(ctx, opts.runId, timeoutMs).finally(() => ac.abort(new Error('AgentCore run timed out')));
   }, timeoutMs);
-  const repoChanges: Array<{ repo: string; base: string; commits: number; files: number }> = [];
+  const repoChanges: RepoChanges[] = [];
 
   try {
     const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
@@ -830,9 +832,9 @@ export async function runKiroViaAgentCore(
         }
 
         case 'repo-changes': {
-          const rc = ev as { type: 'repo-changes'; repo?: unknown; base?: unknown; commits?: unknown; files?: unknown };
+          const rc = ev as { type: 'repo-changes'; repo?: unknown; base?: unknown; commits?: unknown; files?: unknown; paths?: unknown };
           if (typeof rc.repo === 'string' && typeof rc.base === 'string') {
-            repoChanges.push({ repo: rc.repo, base: rc.base, commits: Number(rc.commits) || 0, files: Number(rc.files) || 0 });
+            repoChanges.push(repoChangeOf(rc));
           }
           break;
         }

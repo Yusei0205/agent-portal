@@ -7,8 +7,23 @@
  */
 
 import { execFile } from 'node:child_process';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
-export interface RepoChanges { repo: string; base: string; commits: number; files: number }
+/** One changed file: lines added and removed against the base (0 and 0 for a binary file). */
+export interface ChangedPath { path: string; added: number; removed: number }
+
+/**
+ * `paths` is only sent by runners built with this file from Task 9 of the auto-fix work on; an older runner leaves it out, and the
+ * portal must then treat the changed file list as unknown.
+ */
+export interface RepoChanges { repo: string; base: string; commits: number; files: number; paths?: ChangedPath[] }
+
+/** At most this many paths are reported; one more than the portal's limit, so a longer list is still seen as too long. */
+export const MAX_REPORTED_PATHS = 2001;
+/** An untracked file larger than this is not read; it counts as this many added lines (enough to trip any line limit). */
+const UNTRACKED_READ_MAX = 8 * 1024 * 1024;
+const UNTRACKED_TOO_LARGE_LINES = 1_000_000;
 
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const GIT_TIMEOUT_MS = 120_000;
@@ -29,10 +44,11 @@ export function classifyPushError(text: string): PushErrorCode {
   return 'failed';
 }
 
-export function branchNameFor(opts: { ticketKey?: string | null; title: string; taken?: string[] }): string {
+/** `stem` (an auto-fix branch, already a valid name) replaces the `portal/...` name; the clash rule is the same. */
+export function branchNameFor(opts: { ticketKey?: string | null; title: string; taken?: string[]; stem?: string }): string {
   const key = String(opts.ticketKey ?? '').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   const slug = slugify(opts.title) || 'changes';
-  const stem = `portal/${key ? `${key}-` : ''}${slug}`;
+  const stem = opts.stem || `portal/${key ? `${key}-` : ''}${slug}`;
   const taken = new Set(opts.taken ?? []);
   if (!taken.has(stem)) return stem;
   for (let n = 2; ; n++) {
@@ -86,14 +102,94 @@ function runGit(cwd: string, args: string[], env: Record<string, string> = {}, a
   });
 }
 
-/** Uncommitted paths plus paths in commits ahead of `origin/<base>`, and the number of those commits. */
-export async function detectChanges(repoDir: string, base: string): Promise<{ commits: number; files: number }> {
+/**
+ * The changed paths from the portal's side of an event: a list of `{ path, added, removed }`, cut at MAX_REPORTED_PATHS, or
+ * undefined when it is missing or malformed (an older runner, or a bad event), which means "unknown".
+ */
+export function parseChangedPaths(raw: unknown): ChangedPath[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: ChangedPath[] = [];
+  for (const item of raw.slice(0, MAX_REPORTED_PATHS)) {
+    if (typeof item !== 'object' || item === null) return undefined;
+    const { path: p, added, removed } = item as Record<string, unknown>;
+    if (typeof p !== 'string' || !p) return undefined;
+    const a = Number(added);
+    const r = Number(removed);
+    if (!Number.isFinite(a) || !Number.isFinite(r) || a < 0 || r < 0) return undefined;
+    out.push({ path: p, added: a, removed: r });
+  }
+  return out;
+}
+
+/** A `repo-changes` event as the portal keeps it; `paths` only when the runner sent a well-formed list. */
+export function repoChangeOf(ev: { repo?: unknown; base?: unknown; commits?: unknown; files?: unknown; paths?: unknown }): RepoChanges {
+  const paths = parseChangedPaths(ev.paths);
+  return {
+    repo: String(ev.repo ?? ''), base: String(ev.base ?? ''), commits: Number(ev.commits) || 0, files: Number(ev.files) || 0,
+    ...(paths ? { paths } : {}),
+  };
+}
+
+/** Lines in an untracked file: 0 for a binary one, a large number for one too big to read. */
+async function untrackedLines(file: string): Promise<number> {
+  const st = await fs.stat(file);
+  if (!st.isFile()) return 0;
+  if (st.size > UNTRACKED_READ_MAX) return UNTRACKED_TOO_LARGE_LINES;
+  const buf = await fs.readFile(file);
+  if (buf.includes(0)) return 0;
+  let n = 0;
+  for (const b of buf) if (b === 10) n++;
+  return buf.length && buf[buf.length - 1] !== 10 ? n + 1 : n;
+}
+
+/**
+ * Per-file line counts of everything the session changed: tracked files against the merge base with `origin/<base>` (or HEAD
+ * when there is no such ref), from `git diff --numstat --no-renames` (so a rename shows as the old path removed and the new one
+ * added), plus untracked files. Undefined when git cannot tell.
+ */
+async function changedPaths(repoDir: string, ref: string | null, untracked: string[]): Promise<ChangedPath[] | undefined> {
+  let from = 'HEAD';
+  if (ref) {
+    const mb = await runGit(repoDir, ['merge-base', ref, 'HEAD'], {}, true);
+    if (mb.code === 0 && mb.stdout.trim()) from = mb.stdout.trim();
+  }
+  const diff = await runGit(repoDir, ['diff', '--numstat', '--no-renames', '-z', from], {}, true);
+  if (diff.code !== 0) return undefined;
+  const out: ChangedPath[] = [];
+  const seen = new Set<string>();
+  for (const rec of diff.stdout.split('\0')) {
+    if (!rec) continue;
+    const m = /^(-|\d+)\t(-|\d+)\t(.+)$/s.exec(rec);
+    if (!m) continue;
+    if (seen.has(m[3])) continue;
+    seen.add(m[3]);
+    out.push({ path: m[3], added: m[1] === '-' ? 0 : Number(m[1]), removed: m[2] === '-' ? 0 : Number(m[2]) });
+    if (out.length >= MAX_REPORTED_PATHS) return out;
+  }
+  for (const p of untracked) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    let added = 0;
+    try { added = await untrackedLines(path.join(repoDir, p)); } catch { added = 0; }
+    out.push({ path: p, added, removed: 0 });
+    if (out.length >= MAX_REPORTED_PATHS) return out;
+  }
+  return out;
+}
+
+/**
+ * Uncommitted paths plus paths in commits ahead of `origin/<base>`, the number of those commits, and (`paths`) the per-file line
+ * counts. `paths` is left out when git cannot produce it.
+ */
+export async function detectChanges(repoDir: string, base: string): Promise<{ commits: number; files: number; paths?: ChangedPath[] }> {
   const files = new Set<string>();
+  const untracked: string[] = [];
   const status = await runGit(repoDir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   const entries = status.stdout.split('\0').filter(Boolean);
   for (let i = 0; i < entries.length; i++) {
     const e = entries[i];
     files.add(e.slice(3));
+    if (e.startsWith('??')) untracked.push(e.slice(3));
     if (e[0] === 'R' || e[0] === 'C') i++; // the next entry is the rename's source path
   }
   let commits = 0;
@@ -106,7 +202,9 @@ export async function detectChanges(repoDir: string, base: string): Promise<{ co
       if (diff.code === 0) for (const f of diff.stdout.split('\0')) if (f) files.add(f);
     }
   }
-  return { commits, files: files.size };
+  let paths: ChangedPath[] | undefined;
+  try { paths = await changedPaths(repoDir, count.code === 0 ? ref : null, untracked); } catch { paths = undefined; }
+  return { commits, files: files.size, ...(paths ? { paths } : {}) };
 }
 
 /**

@@ -14,6 +14,7 @@ import { withSkillsGuidance } from './skills-guidance.ts';
 import type { CodexTurnResult } from './codex-session.ts';
 import { getCodexConfigFiles } from '../user-config.ts';
 import { parseCodexPrRequest, type CodexPrRequest } from './codex-pr-tool.ts';
+import { repoChangeOf } from './runner-finalize.ts';
 
 const allowedEvents = new Set(['assistant-text', 'tool-start', 'tool-end', 'tool-blocked', 'status', 'context-usage', 'subagent-started', 'subagent-finished', 'subagent-failed']);
 const finiteTokenCount = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0;
@@ -41,7 +42,7 @@ export async function runCodexViaAgentCore(
   if (ctx.run.projectId && ctx.run.runnerRepos?.length) {
     const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
     const workflow = await getSessionsRepository().getWorkflowById(ctx.run.workflowId);
-    finalizeCheck = await finalizeRunPayloadFlag(ctx.run.projectId, Boolean(workflow?.jira_key)).catch(() => false);
+    finalizeCheck = await finalizeRunPayloadFlag(ctx.run.projectId, Boolean(workflow?.jira_key), ctx.run.workflowId).catch(() => false);
   }
   const payload = { mode: 'codex-run', runId: ctx.run.runId, workflowId: ctx.run.workflowId, prompt: withSkillsGuidance(prompt, Boolean(ctx.run.runnerRepos?.length)), ...auth,
     codexConfig: await getCodexConfigFiles(ctx.run.credentialOwnerId), leadAgent: ctx.run.leadAgent,
@@ -77,7 +78,7 @@ export async function runCodexViaAgentCore(
       else if (event.type === 'status' && typeof event.text === 'string') ctx.emit('status', { text: event.text });
       else if (event.type === 'file') await files.handle(event);
       else if (event.type === 'check-result') ctx.emit('check-result', { ok: event.ok === true, ranAt: event.ranAt, steps: event.steps });
-      else if (event.type === 'repo-changes' && typeof event.repo === 'string') changes.push({ repo: event.repo, base: String(event.base || ''), commits: Number(event.commits) || 0, files: Number(event.files) || 0 });
+      else if (event.type === 'repo-changes' && typeof event.repo === 'string') changes.push({ ...repoChangeOf(event), repo: event.repo, base: String(event.base || '') });
       else if (event.type === 'usage') latest = usageFrom(event);
       else if (event.type === 'error') failure = String(event.message || 'Codex runner failed');
       else if (event.type === 'result') {

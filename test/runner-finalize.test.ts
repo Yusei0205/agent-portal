@@ -9,7 +9,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { slugify, branchNameFor, isProtectedBranch, detectChanges, pushBranch, classifyPushError } from '../server/agent/runner-finalize.ts';
+import {
+  slugify, branchNameFor, isProtectedBranch, detectChanges, pushBranch, classifyPushError, parseChangedPaths, repoChangeOf, MAX_REPORTED_PATHS,
+} from '../server/agent/runner-finalize.ts';
 
 const GIT_ENV = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 function git(cwd: string, ...args: string[]): string {
@@ -133,13 +135,15 @@ describe('isProtectedBranch', () => {
 describe('detectChanges', () => {
   it('reports nothing for a clean repository', async () => {
     const { work } = makeRepo();
-    assert.deepEqual(await detectChanges(work, 'main'), { commits: 0, files: 0 });
+    assert.deepEqual(await detectChanges(work, 'main'), { commits: 0, files: 0, paths: [] });
   });
   it('counts uncommitted changes (modified and untracked)', async () => {
     const { work } = makeRepo();
     fs.writeFileSync(path.join(work, 'a.txt'), 'changed\n');
     fs.writeFileSync(path.join(work, 'b.txt'), 'new\n');
-    assert.deepEqual(await detectChanges(work, 'main'), { commits: 0, files: 2 });
+    assert.deepEqual(await detectChanges(work, 'main'), {
+      commits: 0, files: 2, paths: [{ path: 'a.txt', added: 1, removed: 1 }, { path: 'b.txt', added: 1, removed: 0 }],
+    });
   });
   it('counts commits ahead and the files they touch', async () => {
     const { work } = makeRepo();
@@ -149,7 +153,9 @@ describe('detectChanges', () => {
     fs.writeFileSync(path.join(work, 'c.txt'), 'new\n');
     git(work, 'add', '-A');
     git(work, 'commit', '-m', 'c');
-    assert.deepEqual(await detectChanges(work, 'main'), { commits: 2, files: 2 });
+    assert.deepEqual(await detectChanges(work, 'main'), {
+      commits: 2, files: 2, paths: [{ path: 'b.txt', added: 1, removed: 0 }, { path: 'c.txt', added: 1, removed: 0 }],
+    });
   });
   it('counts both, without counting a file twice', async () => {
     const { work } = makeRepo();
@@ -158,7 +164,50 @@ describe('detectChanges', () => {
     git(work, 'commit', '-m', 'b');
     fs.writeFileSync(path.join(work, 'b.txt'), 'again\n');
     fs.writeFileSync(path.join(work, 'd.txt'), 'x\n');
-    assert.deepEqual(await detectChanges(work, 'main'), { commits: 1, files: 2 });
+    assert.deepEqual(await detectChanges(work, 'main'), {
+      commits: 1, files: 2, paths: [{ path: 'b.txt', added: 1, removed: 0 }, { path: 'd.txt', added: 1, removed: 0 }],
+    });
+  });
+  it('reports a rename as the old path removed and the new one added, a deletion, nested paths and a binary file', async () => {
+    const { work } = makeRepo();
+    fs.mkdirSync(path.join(work, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(work, '.github', 'workflows', 'ci.yml'), 'on: push\njobs: {}\n');
+    git(work, 'add', '-A');
+    git(work, 'commit', '-m', 'ci');
+    git(work, 'push', 'origin', 'main');
+    git(work, 'mv', '.github/workflows/ci.yml', 'ci.yml');
+    fs.rmSync(path.join(work, 'a.txt'));
+    fs.writeFileSync(path.join(work, 'img.bin'), Buffer.from([0, 1, 2, 3]));
+    const got = await detectChanges(work, 'main');
+    const byPath = Object.fromEntries((got.paths ?? []).map((p) => [p.path, [p.added, p.removed]]));
+    assert.deepEqual(byPath, { '.github/workflows/ci.yml': [0, 2], 'a.txt': [0, 1], 'ci.yml': [2, 0], 'img.bin': [0, 0] });
+  });
+  it('cuts the path list at MAX_REPORTED_PATHS', async () => {
+    const { work } = makeRepo();
+    for (let i = 0; i < MAX_REPORTED_PATHS + 5; i++) fs.writeFileSync(path.join(work, `f${i}.txt`), 'x\n');
+    const got = await detectChanges(work, 'main');
+    assert.equal(got.files, MAX_REPORTED_PATHS + 5);
+    assert.equal(got.paths?.length, MAX_REPORTED_PATHS);
+  });
+});
+
+describe('parseChangedPaths / repoChangeOf (portal side)', () => {
+  it('keeps a well-formed list and leaves paths out when it is missing or malformed (an older runner: unknown)', () => {
+    const ok = [{ path: 'a.ts', added: 1, removed: 2 }];
+    assert.deepEqual(parseChangedPaths(ok), ok);
+    for (const bad of [undefined, null, 'a.ts', [{ path: '', added: 1, removed: 0 }], [{ path: 'a', added: -1, removed: 0 }], [{ path: 'a', added: 'x', removed: 0 }], [null]]) {
+      assert.equal(parseChangedPaths(bad), undefined, JSON.stringify(bad));
+    }
+    assert.equal(parseChangedPaths(Array.from({ length: 5000 }, () => ({ path: 'a', added: 0, removed: 0 })))?.length, MAX_REPORTED_PATHS);
+    assert.deepEqual(repoChangeOf({ repo: 'web', base: 'main', commits: '2', files: 5 }), { repo: 'web', base: 'main', commits: 2, files: 5 });
+    assert.deepEqual(repoChangeOf({ repo: 'web', base: 'main', commits: 1, files: 1, paths: ok }), { repo: 'web', base: 'main', commits: 1, files: 1, paths: ok });
+  });
+});
+
+describe('branchNameFor with an auto-fix stem', () => {
+  it('uses the stem and the same clash rule', () => {
+    assert.equal(branchNameFor({ title: 'x', stem: 'autofix/tests-abcdef01' }), 'autofix/tests-abcdef01');
+    assert.equal(branchNameFor({ title: 'x', stem: 'autofix/tests-abcdef01', taken: ['autofix/tests-abcdef01'] }), 'autofix/tests-abcdef01-2');
   });
 });
 

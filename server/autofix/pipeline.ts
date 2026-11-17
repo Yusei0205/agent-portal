@@ -4,7 +4,9 @@
  * next status:
  *  - the agent reports "cannot reproduce" (the check already passed): needs_human, with a 'blocked' Inbox item;
  *  - the last check failed, or the session failed: one attempt more, back to `new` after the cooldown;
- *  - the checks passed: the finding stays `fixing`; the PR step (Task 9) reacts to the session's repo changes.
+ *  - the checks passed: the finding stays `fixing` while the PR step (delivery.ts) delivers the change it gated during the run; when
+ *    the run produced no repository change (nothing was gated and no `pull-request` event exists), needs_human ('fix produced no
+ *    changes').
  *
  * Every status change is a conditional transition, so two callers racing on one finding cannot both act on it. Findings held back
  * (deferred by triage, or a 409/429 from the portal-wide fixer spec) stay `new`; they are picked up when any fix session ends
@@ -27,6 +29,7 @@ import type { RunLifecycleDetail, RunLifecycleEvent } from '../agent/runner.ts';
 import { readLoopState } from '../workflows/loop.ts';
 import { createInboxItem } from '../inbox.ts';
 import { getAutofixPolicy, isPaused } from './policy.ts';
+import type { AutofixPolicy } from './policy.ts';
 import { triage } from './triage.ts';
 import type { TriageContext } from './triage.ts';
 
@@ -66,8 +69,35 @@ async function blockedItem(f: AutofixFinding, reason: string, workflowId: string
 }
 
 /** Move the finding from `from` to needs_human and, when this call made the move, write a 'blocked' Inbox item. */
-async function toNeedsHuman(f: AutofixFinding, from: FindingStatus[], reason: string, extra: Partial<AutofixFinding> = {}, workflowId: string | null = null): Promise<void> {
+export async function toNeedsHuman(f: AutofixFinding, from: FindingStatus[], reason: string, extra: Partial<AutofixFinding> = {}, workflowId: string | null = null): Promise<void> {
   if (await getAutofixFindingsRepository().transition(f.id, from, { ...extra, status: 'needs_human' })) await blockedItem(f, reason, workflowId);
+}
+
+/**
+ * A fix attempt failed (its checks failed, its session failed, or its push failed): count it and send the finding back to `new`
+ * after the cooldown, or, at the attempt limit, to needs_human. Applies only while the finding is in one of `from`.
+ */
+export async function recordFailedAttempt(
+  f: AutofixFinding, from: FindingStatus[], policy: AutofixPolicy, extra: Partial<AutofixFinding> = {}, workflowId: string | null = null,
+): Promise<void> {
+  const attempts = f.attempts + 1;
+  if (attempts >= policy.limits.max_attempts) {
+    // The last allowed attempt failed: straight to a person (a cooldown here would only delay the same decision in triage).
+    await toNeedsHuman(f, from, 'attempt limit reached', { ...extra, attempts }, workflowId);
+  } else {
+    const cooldown_until = new Date(Date.now() + policy.limits.cooldown_minutes * 60_000).toISOString();
+    await getAutofixFindingsRepository().transition(f.id, from, { ...extra, status: 'new', attempts, cooldown_until });
+  }
+}
+
+/**
+ * Whether delivery of a fix session's change began: the PR gate (delivery.ts) records the fix branch on the finding before anything
+ * else, and the session PR flow writes `pull-request` events. Both happen while the run is still open (before the lifecycle hook).
+ */
+async function deliveryStarted(f: AutofixFinding, workflowId: string): Promise<boolean> {
+  if (f.fix_branch) return true;
+  const rows = await getSessionsRepository().listWorkflowRunEventsByType(workflowId, ['pull-request'], 1);
+  return rows.length > 0;
 }
 
 const utcMidnight = (d: Date): string => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())).toISOString();
@@ -170,7 +200,8 @@ async function processOne(findingId: string): Promise<Outcome> {
   }
 
   if (result.ok) {
-    if (!await repo.transition(f.id, ['triaged'], { status: 'fixing', workflow_id: result.workflowId })) {
+    // fix_branch is cleared: a value left from an earlier attempt would read as "delivery began" for this session.
+    if (!await repo.transition(f.id, ['triaged'], { status: 'fixing', workflow_id: result.workflowId, fix_branch: null })) {
       // Not expected (only this call moves a finding out of 'triaged'); never start a second session for it.
       log(`finding ${f.id} left 'triaged' while session ${result.workflowId} was starting; the session is not linked to it`);
     }
@@ -281,15 +312,12 @@ export async function onFixSessionEnded(workflowId: string, opts: { cancelled?: 
     } else if (!failed && lastCheck?.ok !== false && cannotReproduce(lastSummary)) {
       await toNeedsHuman(f, ['fixing'], 'cannot reproduce', { cost_usd }, workflowId);
     } else if (failed || !lastCheck || !lastCheck.ok) {
-      const attempts = f.attempts + 1;
-      if (attempts >= policy.limits.max_attempts) {
-        // The last allowed attempt failed: straight to a person (a cooldown here would only delay the same decision in triage).
-        await toNeedsHuman(f, ['fixing'], 'attempt limit reached', { attempts, cost_usd }, workflowId);
-      } else {
-        await repo.transition(f.id, ['fixing'], { status: 'new', attempts, cost_usd, cooldown_until });
-      }
+      await recordFailedAttempt(f, ['fixing'], policy, { cost_usd }, workflowId);
+    } else if (!await deliveryStarted(f, workflowId)) {
+      // Checks passed but the runner reported no repository change for the run, so there is nothing to deliver.
+      await toNeedsHuman(f, ['fixing'], 'fix produced no changes', { cost_usd }, workflowId);
     } else {
-      // Checks passed: stays 'fixing'; the PR step takes it from the session's repo changes.
+      // Checks passed: stays 'fixing'; the PR step is delivering the change (or waits for an Inbox approval).
       await repo.transition(f.id, ['fixing'], { status: 'fixing', cost_usd });
     }
   }

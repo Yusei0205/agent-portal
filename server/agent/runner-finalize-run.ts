@@ -195,14 +195,15 @@ export async function reportRepoChanges(reposRaw: unknown[] | undefined, workDir
       const keys = Object.keys(trusted).filter((k) => /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(k));
       const saved = keys.map((k) => [k, process.env[k]] as const);
       for (const k of keys) process.env[k] = trusted[k];
-      let changes: { commits: number; files: number };
+      let changes: Awaited<ReturnType<typeof detectChanges>>;
       try {
         changes = await detectChanges(dir, base);
       } finally {
         for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
       }
       if (changes.commits > 0 || changes.files > 0) {
-        emit({ type: 'repo-changes', repo: repo.name, base, commits: changes.commits, files: changes.files });
+        // `paths` (per-file line counts) feeds the portal's auto-fix diff guardrails; left out when git could not produce it.
+        emit({ type: 'repo-changes', repo: repo.name, base, commits: changes.commits, files: changes.files, ...(changes.paths ? { paths: changes.paths } : {}) });
       }
     } catch {
       /* best effort: a repository that cannot be checked is reported as unchanged */

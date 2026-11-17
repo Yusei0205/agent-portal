@@ -24,6 +24,7 @@ import { agentCoreSessionId } from './agentcore-session.ts';
 import { waitForRepoPrep } from './repo-prep.ts';
 import { recordHostTimeLimit } from './host-limit.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import { repoChangeOf } from './runner-finalize.ts';
 
 export interface ClaudeAgentCoreOpts {
   runtimeArn: string;
@@ -75,10 +76,10 @@ export interface ClaudeAgentCoreResult {
 }
 
 /** Whether to ask the runner to report changed repositories (the pull request step). Never throws. */
-export async function finalizeCheckFor(projectId: string, hasTicket: boolean): Promise<boolean> {
+export async function finalizeCheckFor(projectId: string, hasTicket: boolean, workflowId?: string | null): Promise<boolean> {
   try {
     const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
-    return await finalizeRunPayloadFlag(projectId, hasTicket);
+    return await finalizeRunPayloadFlag(projectId, hasTicket, workflowId);
   } catch (e) {
     console.warn('[claude-agentcore] finalizeCheck flag skipped:', e);
     return false;
@@ -158,7 +159,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   let finalizeCheck = false;
   if (opts.repos?.length && ctx.run?.workflowId && ctx.run.projectId) {
     const wf = await getSessionsRepository().getWorkflowById(ctx.run.workflowId).catch(() => null);
-    finalizeCheck = await finalizeCheckFor(ctx.run.projectId, Boolean(wf?.jira_key));
+    finalizeCheck = await finalizeCheckFor(ctx.run.projectId, Boolean(wf?.jira_key), ctx.run.workflowId);
   }
   const changes: import('../session-pr.ts').RepoChange[] = [];
   const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
@@ -249,7 +250,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
         }
         case 'repo-changes':
           // Not a run event: handed to the pull request step once the run has finished.
-          changes.push({ repo: String(ev.repo ?? ''), base: String(ev.base ?? ''), commits: Number(ev.commits) || 0, files: Number(ev.files) || 0 });
+          changes.push(repoChangeOf(ev));
           break;
         case 'file':
           await receiver?.handle(ev);

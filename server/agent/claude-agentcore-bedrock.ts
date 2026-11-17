@@ -44,6 +44,7 @@ import { snapshotAccess } from './runner-snapshot-access.ts';
 import { finalizeCheckFor, submitRepoChanges } from './claude-agentcore.ts';
 import type { RepoChange } from '../session-pr.ts';
 import { RUNTIME_BEDROCK_MODELS, runApiError, explainModelError } from './runtime-models.ts';
+import { repoChangeOf } from './runner-finalize.ts';
 
 /**
  * Bedrock IDs of the models the runtime's role may call (runtime-models.ts). They must match the role's list in
@@ -212,7 +213,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
   const canDelegate = Boolean(delegation?.enabled && run.credentialOwnerId && (delegation.allowNested || !wf?.parent_id));
 
   const hasRepos = Boolean(run.runnerRepos?.length);
-  const finalizeCheck = hasRepos && run.projectId ? await finalizeCheckFor(run.projectId, Boolean(wf?.jira_key)) : false;
+  const finalizeCheck = hasRepos && run.projectId ? await finalizeCheckFor(run.projectId, Boolean(wf?.jira_key), run.workflowId) : false;
   const changes: RepoChange[] = [];
   // The runner saves the workspace after the run; the pull request step later restores it in the session's own
   // AgentCore session (this run uses a per-run session id), so the repositories are found again to push.
@@ -373,7 +374,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
           break;
         case 'repo-changes':
           // Not a run event: handed to the pull request step once the run has finished.
-          changes.push({ repo: String(ev.repo ?? ''), base: String(ev.base ?? ''), commits: Number(ev.commits) || 0, files: Number(ev.files) || 0 });
+          changes.push(repoChangeOf(ev));
           break;
         case 'error':
           throw new HttpError(502, `AgentCore run error: ${String(ev.message ?? 'unknown')}`);

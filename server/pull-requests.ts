@@ -18,7 +18,13 @@ import { getGitConnectionsRepository } from './repositories/git-connections.ts';
 import { parseCodeCommitRepoName, parseGitHubOwnerRepo } from './review.ts';
 import type { Repository } from './repos.ts';
 
-export interface CreatePrInput { repo: Repository; base: string; head: string; title: string; body: string }
+export interface CreatePrInput {
+  repo: Repository; base: string; head: string; title: string; body: string;
+  /** GitHub only: open the pull request as a draft. Other hosts ignore it. */
+  draft?: boolean;
+  /** GitHub only: labels added after the pull request is opened, best effort (a failure is logged, not thrown). */
+  labels?: string[];
+}
 export interface CreatedPr { number: number; url: string; existing: boolean }
 
 export type PullRequestErrorCode = 'no-permission' | 'unsupported' | 'failed';
@@ -224,16 +230,30 @@ async function createOnGitHub(input: CreatePrInput, title: string, body: string)
   let res: Response;
   try {
     res = await clients.fetch(api, {
-      method: 'POST', headers, body: JSON.stringify({ title, body, head, base }), signal: AbortSignal.timeout(20_000),
+      method: 'POST', headers, body: JSON.stringify({ title, body, head, base, ...(input.draft ? { draft: true } : {}) }), signal: AbortSignal.timeout(20_000),
     });
   } catch (e: any) {
     throw failed(`GitHub could not be reached: ${e?.message ?? e}`);
   }
 
+  /** Labels through the issues API, best effort: the pull request exists either way. */
+  const withLabels = async (pr: CreatedPr): Promise<CreatedPr> => {
+    const labels = (input.labels ?? []).filter((l) => typeof l === 'string' && l.trim());
+    if (!labels.length) return pr;
+    const url = `https://api.github.com/repos/${encodeURIComponent(slug.owner)}/${encodeURIComponent(slug.repo)}/issues/${pr.number}/labels`;
+    try {
+      const r = await clients.fetch(url, { method: 'POST', headers, body: JSON.stringify({ labels }), signal: AbortSignal.timeout(20_000) });
+      if (!r.ok) console.warn(`[pull-requests] adding labels to #${pr.number} failed (${r.status})`);
+    } catch (e: any) {
+      console.warn(`[pull-requests] adding labels to #${pr.number} failed: ${scrubSecrets(String(e?.message ?? e)).slice(0, 200)}`);
+    }
+    return pr;
+  };
+
   if (res.status === 201 || res.status === 200) {
     const j: any = await res.json().catch(() => ({}));
     if (!j.number || !j.html_url) throw failed('GitHub answered without a pull request number.');
-    return { number: j.number, url: j.html_url, existing: false };
+    return withLabels({ number: j.number, url: j.html_url, existing: false });
   }
   if (res.status === 401 || res.status === 403 || res.status === 404) throw noPermission(repo);
 
@@ -249,7 +269,7 @@ async function createOnGitHub(input: CreatePrInput, title: string, body: string)
     if (list.status === 401 || list.status === 403 || list.status === 404) throw noPermission(repo);
     const arr: any = await list.json().catch(() => []);
     const hit = Array.isArray(arr) ? arr[0] : null;
-    if (hit?.number && hit.html_url) return { number: hit.number, url: hit.html_url, existing: true };
+    if (hit?.number && hit.html_url) return withLabels({ number: hit.number, url: hit.html_url, existing: true });
     throw failed('A pull request for this branch already exists, but it could not be found.');
   }
   let detail = text;

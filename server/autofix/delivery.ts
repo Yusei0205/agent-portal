@@ -1,0 +1,246 @@
+/**
+ * Auto-fix delivery: how a fix session's change reaches a pull request through the existing session PR flow (session-pr.ts).
+ *
+ *  - autofixGate: called by session-pr's handleOne for every reported repository change. It acts only for a session that belongs to
+ *    a finding in 'fixing' while the project's mode is not 'off' (otherwise null: the ordinary session flow, unchanged).
+ *      wait   the run's loop check did not pass (or there was none): nothing yet; the loop goes on, or the pipeline counts the attempt
+ *      block  the diff touches a protected path: needs_human, an audit entry and a 'blocked' Inbox item; nothing is pushed
+ *      ask    propose mode, or draft_pr with a large diff, an unknown file list (older runner) or a list too big to check, or while
+ *             paused: the ordinary 'push' Inbox question, marked payload.kind 'autofix'
+ *      go     draft_pr with a clean diff: push and open a draft PR at once (the project's "open pull requests" setting is not consulted:
+ *             draft_pr is the admin's explicit opt-in)
+ *  - autofixPrPlan: the branch (`autofix/<kind>-<fp8>`), title, body, draft flag and label of the PR, used by runPullRequest on both
+ *    the 'go' path and the Inbox approval path.
+ *  - afterAutofixPullRequest: links an opened PR to the finding (pr_open) or accounts for a failed push / unopened PR.
+ */
+
+import { getAutofixFindingsRepository } from '../repositories/autofix-findings.ts';
+import type { AutofixFinding } from '../repositories/autofix-findings.ts';
+import { getAuditRepository } from '../repositories/audit.ts';
+import { getLoopSpecsRepository } from '../repositories/loop-specs.ts';
+import { scrubSecrets } from '../pull-requests.ts';
+import { readCheckResult } from '../workflows/loop.ts';
+import { formatCheckResult } from '../agent/runner-checks.ts';
+import type { RepoChange, SessionPrContext } from '../session-pr.ts';
+import { getAutofixPolicy, isPaused } from './policy.ts';
+import type { AutofixPolicy } from './policy.ts';
+import { checkDiff } from './guardrails.ts';
+import { scrubEvidence } from './scrub.ts';
+import { AUTOFIX_SPEC_BY_SOURCE, recordFailedAttempt, toNeedsHuman } from './pipeline.ts';
+
+export type GateDecision = 'go' | 'ask' | 'block' | 'wait';
+
+/**
+ * checkDiff's glob matching grows with the square of a path's segment count, so a list longer than this, or any path longer than
+ * MAX_GATE_PATH_CHARS, is not checked: it is treated as large (a person is asked; it never goes ahead on its own).
+ */
+export const MAX_GATE_FILES = 2000;
+export const MAX_GATE_PATH_CHARS = 1024;
+
+const PR_LABELS = ['autofix'];
+const BODY_EVIDENCE_MAX = 6000;
+const BODY_CHECK_MAX = 6000;
+
+let checkDiffFn: typeof checkDiff = checkDiff;
+/** Test seam: replace checkDiff (to see whether it was called). Call with null to restore it. */
+export function _setCheckDiffForTest(fn: typeof checkDiff | null): void { checkDiffFn = fn ?? checkDiff; }
+
+// ── Names and text ───────────────────────────────────────────────────────────
+
+/** `autofix/<kind>-<first 8 of fingerprint>`, lowercase and always a valid branch name. */
+export function fixBranchName(kind: string, fingerprint: string): string {
+  const k = String(kind ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '') || 'fix';
+  const fp = String(fingerprint ?? '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || '00000000';
+  return `autofix/${k}-${fp}`;
+}
+
+/** One line, no backticks: for a value from a webhook that is shown inside inline code. */
+function inline(text: string | null | undefined, max = 100): string {
+  return scrubSecrets(String(text ?? '')).replace(/[`\r\n]+/g, ' ').trim().slice(0, max);
+}
+
+/** A fenced block whose fence is longer than any backtick run in the text, so the text cannot close it. */
+function fenced(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((r) => r.length));
+  const fence = '`'.repeat(Math.max(3, longest + 1));
+  return `${fence}\n${text}\n${fence}`;
+}
+
+export function prTitleFor(f: AutofixFinding): string {
+  return `Auto-fix: ${inline(f.kind, 40) || 'failure'} failure${f.branch ? ` on ${inline(f.branch, 60)}` : ''}`;
+}
+
+/**
+ * The PR body: what failed, links to the finding and the session, the scrubbed evidence and the last loop check output. The existing
+ * session PR flow has no PR template support, so neither does this (plain sections). No raw webhook text beyond the scrubbed evidence.
+ */
+export function buildPrBody(f: AutofixFinding, checkOutput: string): string {
+  const lines: string[] = [];
+  lines.push(`Auto-fix for a \`${inline(f.kind, 40) || 'failure'}\` failure${f.branch ? ` on \`${inline(f.branch)}\`` : ''} (${inline(f.source, 40)}).`, '');
+  lines.push(`Finding: ${f.id}`);
+  const pub = (process.env.PORTAL_PUBLIC_URL ?? '').trim().replace(/\/+$/, '');
+  if (pub && /^https?:\/\//i.test(pub) && f.workflow_id) lines.push(`Session: ${pub}/#/p/${f.project_id}/sessions/${f.workflow_id}`);
+  else if (f.workflow_id) lines.push(`Session: ${f.workflow_id}`);
+  lines.push('', '### Evidence', '', fenced(scrubEvidence(f.evidence || '(none)', BODY_EVIDENCE_MAX)));
+  lines.push('', '### Last check output', '', fenced(scrubEvidence(checkOutput || '(no check output)', BODY_CHECK_MAX)));
+  lines.push('', 'Opened as a draft by Agent Portal auto-fix. Review the change before marking it ready.');
+  return lines.join('\n');
+}
+
+// ── Which sessions are auto-fix sessions ─────────────────────────────────────
+
+/** The finding this session is fixing, while it is 'fixing' and auto-fix is not off for its project. */
+async function activeFinding(workflowId: string): Promise<{ finding: AutofixFinding; policy: AutofixPolicy } | null> {
+  const f = await getAutofixFindingsRepository().getByWorkflowId(workflowId);
+  if (!f || f.status !== 'fixing' || f.workflow_id !== workflowId) return null;
+  const policy = await getAutofixPolicy(f.project_id);
+  if (policy.mode === 'off') return null;
+  return { finding: f, policy };
+}
+
+/**
+ * Whether the runner should report this session's repository changes although the project does not open PRs and there is no ticket:
+ * true for a fix session. The finding is linked to the session only after the session started, so the fixer spec's latest loop run
+ * (written before the session starts) is checked too.
+ */
+export async function isAutofixWorkflow(workflowId: string): Promise<boolean> {
+  const f = await getAutofixFindingsRepository().getByWorkflowId(workflowId);
+  if (f) return (f.status === 'triaged' || f.status === 'fixing') && (await getAutofixPolicy(f.project_id)).mode !== 'off';
+  for (const specId of new Set(Object.values(AUTOFIX_SPEC_BY_SOURCE))) {
+    if (!specId) continue;
+    const last = await getLoopSpecsRepository().getLastRunBySpec(specId);
+    if (last?.last_workflow_id === workflowId) return true;
+  }
+  return false;
+}
+
+// ── The gate ─────────────────────────────────────────────────────────────────
+
+async function audit(action: string, target: string, detail: object): Promise<void> {
+  try {
+    await getAuditRepository().append({ actorId: null, action, target, detail, ip: null });
+  } catch (e) {
+    console.error(`[autofix] audit ${action} failed:`, e instanceof Error ? e.message : e);
+  }
+}
+
+/**
+ * Decide what happens to one repository change of a session. Null when the session is not an active auto-fix session (the caller
+ * goes on as for any session). Side effects here are on the finding only; the PR flow (Inbox item, push) is the caller's.
+ */
+export async function autofixGate(ctx: SessionPrContext, change: RepoChange): Promise<GateDecision | null> {
+  const active = await activeFinding(ctx.workflowId);
+  if (!active) return null;
+  const { finding: f, policy } = active;
+
+  // Only the change of a run whose loop check passed is delivered; a later iteration reports the whole change again.
+  const check = await readCheckResult(ctx.workflowId, ctx.runId);
+  if (!check?.ok) return 'wait';
+
+  const paths = Array.isArray(change.paths) ? change.paths : null;
+  const oversize = paths !== null && (paths.length > MAX_GATE_FILES || paths.some((p) => String(p.path).length > MAX_GATE_PATH_CHARS));
+  let large = paths === null || oversize;
+  if (paths !== null && !oversize) {
+    const r = checkDiffFn(paths, policy, f.kind);
+    if (!r.ok) {
+      const reason = `the fix touches a protected path: ${r.violations[0]}`.slice(0, 300);
+      await toNeedsHuman(f, ['fixing'], reason, {}, ctx.workflowId);
+      await audit('autofix.pr.blocked', f.id, { repo: change.repo, violations: r.violations.slice(0, 20) });
+      return 'block';
+    }
+    large = r.large;
+  }
+
+  const decision: GateDecision = policy.mode === 'draft_pr' && !large && !(await isPaused(f.project_id)) ? 'go' : 'ask';
+  // Recorded before anything else, so the pipeline sees at the session's end that delivery began (see onFixSessionEnded).
+  await getAutofixFindingsRepository().transition(f.id, ['fixing'], { status: 'fixing', fix_branch: fixBranchName(f.kind, f.fingerprint) });
+  return decision;
+}
+
+/** Why a person is asked, for the Inbox question. */
+export async function askReason(ctx: SessionPrContext, change: RepoChange): Promise<string> {
+  const active = await activeFinding(ctx.workflowId);
+  if (!active) return '';
+  if (active.policy.mode === 'propose') return 'The project proposes auto-fixes for approval.';
+  if (!Array.isArray(change.paths)) return 'The runner did not report the changed files, so the diff could not be checked.';
+  if (change.paths.length > MAX_GATE_FILES || change.paths.some((p) => String(p.path).length > MAX_GATE_PATH_CHARS)) {
+    return 'The change is too large to check automatically.';
+  }
+  if (await isPaused(active.finding.project_id)) return 'Auto-fix is paused.';
+  return `The change is larger than the auto-fix limits (${active.policy.limits.max_files} files, ${active.policy.limits.max_lines} lines).`;
+}
+
+// ── The pull request ─────────────────────────────────────────────────────────
+
+export interface AutofixPrPlan {
+  findingId: string;
+  /** The branch name before the clash rule (`-2`, `-3`, ...) of branchNameFor. */
+  branchStem: string;
+  title: string;
+  body: string;
+  draft: boolean;
+  labels: string[];
+}
+
+/** How runPullRequest opens the PR of an active auto-fix session (null for any other session). */
+export async function autofixPrPlan(workflowId: string, runId: string): Promise<AutofixPrPlan | null> {
+  const active = await activeFinding(workflowId);
+  if (!active) return null;
+  const f = active.finding;
+  const check = await readCheckResult(workflowId, runId).catch(() => null);
+  return {
+    findingId: f.id,
+    branchStem: fixBranchName(f.kind, f.fingerprint),
+    title: prTitleFor(f),
+    body: buildPrBody(f, check ? formatCheckResult(check) : ''),
+    draft: true,
+    labels: [...PR_LABELS],
+  };
+}
+
+export type AutofixPrOutcome =
+  | { kind: 'opened'; number: number; url: string; branch: string; repo: string }
+  /** The runner did not push (permission, workspace, git): one attempt more, as for a failed fix. */
+  | { kind: 'push-failed'; error: string }
+  /** Nothing went wrong with the fix, but no PR was opened (protected branch name, no runtime, host refused the PR). */
+  | { kind: 'not-opened'; error: string; branch?: string }
+  /** Not attempted (a newer turn is running): the finding is left as it is. */
+  | { kind: 'skipped' };
+
+/** Record the outcome of runPullRequest for an auto-fix session on its finding. Never throws. */
+export async function afterAutofixPullRequest(findingId: string, workflowId: string, outcome: AutofixPrOutcome): Promise<void> {
+  try {
+    if (outcome.kind === 'skipped') return;
+    const repo = getAutofixFindingsRepository();
+    const f = await repo.getById(findingId);
+    if (!f || f.status !== 'fixing') return;
+    if (outcome.kind === 'opened') {
+      const linked = await repo.transition(f.id, ['fixing'], {
+        status: 'pr_open', pr_number: outcome.number, pr_url: outcome.url, fix_branch: outcome.branch,
+      });
+      if (linked) await audit('autofix.pr.opened', f.id, { prNumber: outcome.number, repo: outcome.repo });
+      return;
+    }
+    if (outcome.kind === 'push-failed') {
+      await recordFailedAttempt(f, ['fixing'], await getAutofixPolicy(f.project_id), { fix_branch: null }, workflowId);
+      return;
+    }
+    await toNeedsHuman(f, ['fixing'], `the pull request was not opened: ${outcome.error}`.slice(0, 300),
+      outcome.branch ? { fix_branch: outcome.branch } : {}, workflowId);
+  } catch (e) {
+    console.error('[autofix] recording the pull request outcome failed:', e instanceof Error ? e.message : e);
+  }
+}
+
+/** A person declined the auto-fix PR in the Inbox: the finding goes to needs_human (no second Inbox item: they just decided). */
+export async function onAutofixPullRequestDeclined(workflowId: string): Promise<void> {
+  try {
+    const active = await activeFinding(workflowId);
+    if (!active) return;
+    if (await getAutofixFindingsRepository().transition(active.finding.id, ['fixing'], { status: 'needs_human' })) {
+      await audit('autofix.pr.declined', active.finding.id, {});
+    }
+  } catch (e) {
+    console.error('[autofix] recording the declined pull request failed:', e instanceof Error ? e.message : e);
+  }
+}

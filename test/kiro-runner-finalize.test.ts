@@ -82,7 +82,10 @@ describe('Kiro runner: changes and finalize on its folder layout', () => {
     fs.appendFileSync(path.join(edited, 'README.md'), 'changed\n');
     events.length = 0;
     await reportRepoChanges([...spec('edited'), ...spec('clean')], workDir, emit);
-    assert.deepEqual(events, [{ type: 'repo-changes', repo: 'edited', base: 'main', commits: 0, files: 1 }]);
+    assert.equal(events.length, 1);
+    const { paths, ...rest } = events[0] as Record<string, unknown>;
+    assert.deepEqual(rest, { type: 'repo-changes', repo: 'edited', base: 'main', commits: 0, files: 1 });
+    assert.ok(Array.isArray(paths) && paths.length === 1, 'the changed file list (Task 9 auto-fix guardrails)');
   });
 
   it('runFinalize pushes a new branch from the warm work folder; main does not move', async () => {

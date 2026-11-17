@@ -335,11 +335,13 @@ describe('onFixSessionEnded', () => {
     assert.equal(items[0].payload.reason, 'attempt limit reached');
   });
 
-  it("a session that ends with checks passing leaves the finding 'fixing' for the PR step (Task 9)", async () => {
+  it("a session that ends with checks passing while its change is being delivered leaves the finding 'fixing' for the PR step", async () => {
     const f = await newFinding();
     await processFinding(f.id);
     const wf = calls[0].workflowId!;
     await addRun(wf, 0.1);
+    // The PR gate (delivery.ts) records the fix branch while the run is still open.
+    await repo().transition(f.id, ['fixing'], { status: 'fixing', fix_branch: 'autofix/tests-12345678' });
     await endSession(wf, 'done', { ok: true, output: 'verify: ok' });
     await onFixSessionEnded(wf);
     const got = (await repo().getById(f.id))!;
@@ -348,6 +350,40 @@ describe('onFixSessionEnded', () => {
     assert.equal(got.attempts, 0);
     assert.ok(Math.abs(got.cost_usd - 0.1) < 1e-9);
     assert.equal(inboxItems().length, 0);
+  });
+
+  it("a session that ends with checks passing but reported no repository change goes to needs_human ('fix produced no changes')", async () => {
+    const f = await newFinding();
+    await processFinding(f.id);
+    const wf = calls[0].workflowId!;
+    await addRun(wf, 0.1);
+    await endSession(wf, 'done', { ok: true, output: 'verify: ok' });
+    await onFixSessionEnded(wf);
+    const got = (await repo().getById(f.id))!;
+    assert.equal(got.status, 'needs_human');
+    assert.equal(got.attempts, 0);
+    const items = inboxItems();
+    assert.equal(items.length, 1);
+    assert.equal(items[0].type, 'blocked');
+    assert.equal(items[0].payload.reason, 'fix produced no changes');
+  });
+
+  it('a pull-request event of the session also counts as delivery under way', async () => {
+    const f = await newFinding();
+    await processFinding(f.id);
+    const wf = calls[0].workflowId!;
+    const runId = await addRun(wf, 0);
+    dbRun(`INSERT INTO p6_events (run_id, type, payload, created_at) VALUES (?,?,?,?)`, runId, 'pull-request', JSON.stringify({ repo: 'widgets', repoId, state: 'asked' }), now());
+    await endSession(wf, 'done', { ok: true, output: 'verify: ok' });
+    await onFixSessionEnded(wf);
+    assert.equal((await repo().getById(f.id))!.status, 'fixing');
+  });
+
+  it('a new fix session clears a fix branch left from an earlier attempt', async () => {
+    const f = await newFinding();
+    dbRun('UPDATE autofix_findings SET fix_branch = ? WHERE id = ?', 'autofix/tests-old', f.id);
+    await processFinding(f.id);
+    assert.equal((await repo().getById(f.id))!.fix_branch, null);
   });
 
   it('the run hook ignores an iteration after which the loop goes on, and a failure recovery is continuing', async () => {
