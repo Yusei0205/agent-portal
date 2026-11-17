@@ -6,6 +6,7 @@
  * and mobile off-canvas drawer support.
  */
 import { createPortal } from 'react-dom';
+import { m } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from './Icon.jsx';
 import { navigate, href } from '../lib/router.js';
@@ -433,6 +434,14 @@ function NavSection({
                 data-tooltip={tooltipText}
                 onClick={disabled ? (e) => e.preventDefault() : onNavigate}
               >
+                {active && (
+                  <m.span
+                    layoutId="rail-active-bar"
+                    className="rail-active-bar"
+                    aria-hidden="true"
+                    transition={{ type: 'spring', stiffness: 500, damping: 38 }}
+                  />
+                )}
                 <Icon name={item.icon} size={16} aria-hidden="true" />
                 <span>{item.label}</span>
               </a>

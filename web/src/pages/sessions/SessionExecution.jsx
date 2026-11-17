@@ -5,8 +5,48 @@
  */
 
 import { useMemo, useState } from 'react';
+import { m } from 'motion/react';
 import { summarizeExecution } from '../../lib/execution-summary.js';
+import { deriveStages } from '../../lib/execution-stages.js';
 import { formatDuration } from '../../lib/agent-timeline.js';
+import { AiCore } from '../../components/AiCore.jsx';
+
+/** The AI core's state for a session status. */
+function coreState(status) {
+  if (status === 'running' || status === 'pending') return 'running';
+  if (status === 'done') return 'success';
+  if (status === 'failed') return 'failed';
+  return 'idle';
+}
+
+/** Planning → Working → Checking → Done, from what the session really did. The fill slides to the current stage. */
+function StageStrip({ stages, progress }) {
+  return (
+    <div className="stage-strip" role="list" aria-label="Stages">
+      <span className="stage-track" aria-hidden="true" />
+      <m.span
+        className="stage-fill"
+        aria-hidden="true"
+        initial={false}
+        animate={{ scaleX: progress }}
+        transition={{ type: 'spring', stiffness: 120, damping: 20 }}
+      />
+      {stages.map((s, i) => (
+        <div key={s.key} role="listitem" className={`stage-item is-${s.state}`} aria-current={s.state === 'active' ? 'step' : undefined}>
+          <m.span
+            className="stage-dot"
+            initial={false}
+            animate={{ scale: s.state === 'active' ? 1.12 : 1 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 18 }}
+          >
+            {s.state === 'done' ? '✓' : s.state === 'failed' ? '!' : i + 1}
+          </m.span>
+          <span className="stage-label">{s.label}<span className="sr-only"> ({s.state})</span></span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 const STATUS_LABEL = { done: 'done', active: 'in progress', pending: 'pending' };
 
@@ -41,15 +81,24 @@ const SHOWN_CALLS = 60;
  *   onOpenFile?: (path: string) => void,
  * }} props
  */
-export function SessionExecution({ events, running = false, onOpenFile }) {
+export function SessionExecution({ events, running = false, status = '', planMode = false, onOpenFile }) {
   const sum = useMemo(() => summarizeExecution(events), [events]);
+  const stage = useMemo(() => deriveStages(sum, { status: status || (running ? 'running' : ''), planMode }), [sum, status, running, planMode]);
   const [all, setAll] = useState(false);
   const [filter, setFilter] = useState('all'); // all | failed | running
   const { counts, todos, byTool, files, calls } = sum;
 
+  const top = (
+    <div className="exe-top">
+      <AiCore state={coreState(status || (running ? 'running' : ''))} size={96} />
+      <StageStrip stages={stage.stages} progress={stage.progress} />
+    </div>
+  );
+
   if (!counts.total && !todos) {
     return (
       <div className="exe exe--empty" role="region" aria-label="Execution view">
+        {top}
         <p className="muted">Nothing has run yet. Tool calls, the task list and changed files appear here as the agent works.</p>
       </div>
     );
@@ -61,6 +110,7 @@ export function SessionExecution({ events, running = false, onOpenFile }) {
 
   return (
     <div className="exe" role="region" aria-label="Execution view">
+      {top}
       <div className="exe-tiles">
         <Tile label="tool calls" value={counts.total} />
         <Tile label="running" value={counts.running} tone={counts.running ? 'live' : undefined} />

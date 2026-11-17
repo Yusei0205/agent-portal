@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 const LS_LIST_COLLAPSED = 'sessions_list_collapsed';
 function loadCollapsed() { try { return localStorage.getItem(LS_LIST_COLLAPSED) === '1'; } catch { return false; } }
@@ -33,7 +33,14 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
     try { localStorage.setItem(LS_LIST_COLLAPSED, c ? '0' : '1'); } catch { /* storage unavailable: not remembered */ }
     return !c;
   });
-  const collapsed = Boolean(selectedId) && listCollapsed;
+  // Focus mode (Alt+F in the session) hides the list too, without changing the remembered choice.
+  const [focus, setFocus] = useState(false);
+  useEffect(() => {
+    const on = (e) => setFocus(Boolean(e.detail));
+    document.addEventListener('portal:session-focus', on);
+    return () => document.removeEventListener('portal:session-focus', on);
+  }, []);
+  const collapsed = Boolean(selectedId) && (listCollapsed || focus);
 
   const handleSelect = (id) => {
     navigate(href(projectId, 'sessions', id));
@@ -50,7 +57,7 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
         onInitialDialogConsumed={onInitialDialogConsumed}
       />
 
-      {selectedId && (
+      {selectedId && !focus && (
         <button
           type="button"
           className="sessions-list-toggle"

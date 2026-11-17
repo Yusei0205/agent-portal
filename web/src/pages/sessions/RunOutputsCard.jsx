@@ -15,6 +15,12 @@ import { formatBytes, getFileTypeMeta, isImageFile, isExcerptable, excerptLines 
 import { AddToVaultButton } from './AddToVaultButton.jsx';
 
 const MAX_COLLAPSED = 4;
+// A file made in the last two minutes is "new": its row slides in with a soft highlight sweep. Older files just appear.
+const FRESH_MS = 2 * 60 * 1000;
+function isFresh(file) {
+  const t = Date.parse(file?.created_at ?? '');
+  return Number.isFinite(t) && Date.now() - t < FRESH_MS;
+}
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -78,12 +84,16 @@ function FileExcerpt({ file, onOpen }) {
  *   onPreview: (file: object) => void,
  * }} props
  */
-function FileRow({ file, workflowId, onPreview }) {
+function FileRow({ file, workflowId, onPreview, index = 0 }) {
   const isImg = isImageFile(file);
+  const fresh = isFresh(file);
   const { icon, label } = getFileTypeMeta(file.mime_type, file.name);
 
   return (
-    <li className="run-outputs-card-item">
+    <li
+      className={`run-outputs-card-item${fresh ? ' is-new' : ''}`}
+      style={fresh ? { '--reveal-delay': `${Math.min(index, 6) * 80}ms` } : undefined}
+    >
       {/* Thumbnail (images) or file-type badge (everything else) */}
       {isImg ? (
         <button
@@ -194,9 +204,10 @@ export function RunOutputsCard({ files, workflowId, projectId, vaultFolder, onPr
 
       {/* File list */}
       <ul className="run-outputs-card-list" role="list" aria-label="Output files">
-        {displayFiles.map((file) => (
+        {displayFiles.map((file, i) => (
           <FileRow
             key={file.id}
+            index={i}
             file={file}
             workflowId={workflowId}
             onPreview={(f) => onPreview(f, files)}

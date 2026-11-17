@@ -262,6 +262,11 @@ function Shell({ user, onSignOut }) {
         }
       }
 
+      // Alt+F → focus mode in a session (the conversation only)
+      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && key === 'f') {
+        e.preventDefault(); triggerShortcut('ws_focus'); return;
+      }
+
       // ? → open shortcuts sheet
       // Match e.key==='?' directly (produced by Shift+/ on US layout) or the
       // Shift+/ combination for non-US / headless layouts where e.key may be '/'.
@@ -535,9 +540,12 @@ function Shell({ user, onSignOut }) {
           onSignOut={handleSignOut}
         />
 
+        {/* A new key per page replays the short fade-in (CSS only, opacity only: a transform here would become the
+            containing block of every fixed dialog inside the page, and a page must never wait for a script to show). */}
         <main
+          key={`${route.projectId || ''}:${route.tab}`}
           id="main"
-          className={`main${isSessionsRoute ? ' full-height' : ''}`}
+          className={`main main-enter${isSessionsRoute ? ' full-height' : ''}`}
           tabIndex={-1}
         >
           {isSessionsRoute ? (

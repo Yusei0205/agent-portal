@@ -11,6 +11,7 @@ import { NewSessionDialog } from './NewSessionDialog.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { statusCounts } from '../../lib/session-status.js';
+import { groupSessions, parseStarred, toggleStarred } from '../../lib/session-groups.js';
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
 
@@ -48,39 +49,9 @@ function dayLabel(iso) {
   return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: diff > 365 * DAY_MS ? 'numeric' : undefined });
 }
 
-function isActive(w) {
-  return w.status === 'running' || w.status === 'pending';
-}
-
-/**
- * Group an array of workflows into { key, label, items } buckets.
- * Active (running/pending) → "Active N", then today, yesterday, dated groups.
- */
-function groupWorkflows(workflows) {
-  const active = workflows.filter(isActive);
-  const inactive = workflows.filter((w) => !isActive(w));
-
-  // Group inactive by day label
-  const dayMap = new Map();
-  for (const w of inactive) {
-    const label = dayLabel(w.updated_at);
-    if (!dayMap.has(label)) dayMap.set(label, []);
-    dayMap.get(label).push(w);
-  }
-
-  const groups = [];
-  if (active.length) {
-    groups.push({ key: '__active', label: 'Active', items: active });
-  }
-  for (const [label, items] of dayMap) {
-    groups.push({ key: label, label, items });
-  }
-  return groups;
-}
-
 // ── Session row ────────────────────────────────────────────────────────────────
 
-function SessionRow({ w, projectName, active, checked, onCheck, onRename, selectionMode }) {
+function SessionRow({ w, projectName, active, checked, onCheck, onRename, selectionMode, starred, onToggleStar }) {
   const [hovered, setHovered] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
@@ -184,6 +155,16 @@ function SessionRow({ w, projectName, active, checked, onCheck, onRename, select
               </div>
             </div>
           </a>
+          <button
+            type="button"
+            className={`btn-icon session-star${starred ? ' is-on' : ''}`}
+            aria-label={starred ? `Remove star from ${title}` : `Star ${title}`}
+            aria-pressed={Boolean(starred)}
+            title={starred ? 'Remove star' : 'Star this session'}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onToggleStar?.(w.id); }}
+          >
+            <Icon name="star" size={13} />
+          </button>
           {/* Rename action (visible on hover) */}
           {hovered && (
             <button
@@ -225,6 +206,19 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [engineFilter, setEngineFilter] = useState('all');
+  // Starred sessions (kept in this browser, per project) and how the list is grouped.
+  const starKey = `sessions_starred:${project.id}`;
+  const [starred, setStarred] = useState(() => { try { return parseStarred(localStorage.getItem(starKey)); } catch { return []; } });
+  useEffect(() => { try { setStarred(parseStarred(localStorage.getItem(starKey))); } catch { setStarred([]); } }, [starKey]);
+  const onToggleStar = useCallback((id) => {
+    setStarred((prev) => {
+      const next = toggleStarred(prev, id);
+      try { localStorage.setItem(starKey, JSON.stringify(next)); } catch { /* storage unavailable: the star is not remembered */ }
+      return next;
+    });
+  }, [starKey]);
+  const [groupMode, setGroupMode] = useState(() => { try { const v = localStorage.getItem('sessions_group_mode'); return v === 'status' || v === 'engine' ? v : 'date'; } catch { return 'date'; } });
+  const changeGroupMode = (v) => { setGroupMode(v); try { localStorage.setItem('sessions_group_mode', v); } catch { /* not remembered */ } };
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [dialogInitialTicket, setDialogInitialTicket] = useState(null);
   const [deleting, setDeleting] = useState(false);
@@ -351,7 +345,10 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
 
   const showEngineFilter = engines.count > 1;
 
-  const groups = useMemo(() => groupWorkflows(filtered), [filtered]);
+  const groups = useMemo(
+    () => groupSessions(filtered, { mode: groupMode, starred, dayLabel, engineLabel }),
+    [filtered, groupMode, starred],
+  );
 
   const bulk = useBulkSelect(filtered);
 
@@ -465,6 +462,15 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
         )}
       </div>
 
+      <div className="sessions-group-by">
+        <label htmlFor="sessions-group-by">Group by</label>
+        <select id="sessions-group-by" value={groupMode} onChange={(e) => changeGroupMode(e.target.value)}>
+          <option value="date">Date</option>
+          <option value="status">Status</option>
+          <option value="engine">Engine</option>
+        </select>
+      </div>
+
       {/* Select all: acts on the sessions the search and filters currently show */}
       {filtered.length > 0 && (
         <label
@@ -515,7 +521,7 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
         {groups.map((g) => (
           <section key={g.key} aria-label={g.label}>
             <div className="ws-section-header">
-              {g.label}
+              {g.starred && <Icon name="star" size={11} className="ws-section-star" />}{g.label}
               <span className="muted" style={{ marginLeft: 4, fontWeight: 400 }}>{g.items.length}</span>
             </div>
             <div role="rowgroup">
@@ -528,6 +534,8 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
                   checked={bulk.selected.has(w.id)}
                   onCheck={bulk.toggle}
                   selectionMode={bulk.selected.size > 0}
+                  starred={starred.includes(w.id)}
+                  onToggleStar={onToggleStar}
                   onRename={(id, title) => {
                     setWorkflows((prev) => prev
                       ? prev.map((wf) => wf.id === id ? { ...wf, title } : wf)

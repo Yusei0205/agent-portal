@@ -23,7 +23,7 @@ import { api } from '../../lib/api.js';
 import { subscribeProject } from '../../lib/events.js';
 import { navigate } from '../../lib/router.js';
 import { reviewHandoffHref } from '../../lib/pullRequestCard.js';
-import { registerHandler, registerShortcuts } from '../../lib/shortcuts.js';
+import { registerHandler, registerShortcuts, triggerShortcut } from '../../lib/shortcuts.js';
 import { Icon } from '../../components/Icon.jsx';
 import { AttachmentPicker } from '../../components/AttachmentPicker.jsx';
 import { useAttachmentLimits, formatMb, limitsHint } from '../../lib/attachment-limits.js';
@@ -49,6 +49,7 @@ registerShortcuts([
   { id: 'ws_explore', keys: 'Ctrl Shift E', label: 'Toggle explorer',     group: 'Workspace' },
   { id: 'ws_source',  keys: 'Ctrl Shift G', label: 'Toggle source control', group: 'Workspace' },
   { id: 'ws_editor',  keys: 'Ctrl Shift B', label: 'Toggle editor panel', group: 'Workspace' },
+  { id: 'ws_focus',   keys: 'Alt F',        label: 'Focus mode (conversation only)', group: 'Workspace' },
 ]);
 
 // ── Local storage helpers ────────────────────────────────────────────────────
@@ -797,6 +798,7 @@ export function ComposerBar({
     }
     if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'm') { e.preventDefault(); toggleToolMode(); return; }
     if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'p') { e.preventDefault(); togglePlanMode(); return; }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'f') { e.preventDefault(); triggerShortcut('ws_focus'); return; }
     // Ctrl+U: clear back to the start of the line, as in a terminal.
     if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'u') {
       e.preventDefault();
@@ -1247,6 +1249,12 @@ export function IdeWorkspace({ id, project }) {
   const [panelSide, setPanelSide] = useState(savedLayout.panelSide === 'left' ? 'left' : 'right');
   // Chat: the conversation. Execution: the same session as a task list, tool counts and a timeline.
   const [sessionView, setSessionView] = useState(savedLayout.sessionView === 'execution' ? 'execution' : 'chat');
+  // Focus mode: only the conversation, full width (Alt+F). Not remembered: a new session opens with the panels back.
+  const [focusMode, setFocusMode] = useState(false);
+  useEffect(() => {
+    document.dispatchEvent(new CustomEvent('portal:session-focus', { detail: focusMode }));
+    return () => { if (focusMode) document.dispatchEvent(new CustomEvent('portal:session-focus', { detail: false })); };
+  }, [focusMode]);
   const [sidebarW, setSidebarW, onSidebarDrag] = useResize(
     savedLayout.sidebarW ?? 300, 140, 520, persistSidebar, panelSide === 'right',
   );
@@ -1460,8 +1468,9 @@ export function IdeWorkspace({ id, project }) {
     const unSource   = registerHandler('ws_source',  () => setSidebarPanel((p) => p === 'source'   ? null : 'source'));
     const unTerm     = registerHandler('ws_term',    () => setTerminalOpen((o) => !o));
     const unEditor   = registerHandler('ws_editor',  () => setEditorPanelOpen((o) => !o));
+    const unFocus    = registerHandler('ws_focus',   () => setFocusMode((f) => !f));
     // ws_save handler is registered in IdeEditor; no need to re-register here.
-    return () => { unExplore(); unSource(); unTerm(); unEditor(); };
+    return () => { unExplore(); unSource(); unTerm(); unEditor(); unFocus(); };
   }, []);
 
   // ── Error / loading states ────────────────────────────────────────────────
@@ -1496,7 +1505,7 @@ export function IdeWorkspace({ id, project }) {
   const displayTitle  = title ?? workflow?.title ?? '';
 
   return (
-    <div className="ide-workspace" aria-label="Session workspace">
+    <div className={`ide-workspace${focusMode ? ' ide-workspace--focus' : ''}`} aria-label="Session workspace">
       {/* Header */}
       <IdeHeader
         workflow={workflow ? { ...workflow, title: displayTitle } : null}
@@ -1734,7 +1743,8 @@ export function IdeWorkspace({ id, project }) {
               style={{ flex: 1, borderLeft: 'none' }}
               aria-label="Agent conversation"
             >
-              <div className="ide-view-switch" role="tablist" aria-label="Session view">
+              <div className="ide-view-switch">
+                <div className="ide-view-tabs" role="tablist" aria-label="Session view">
                 {[['chat', 'Chat'], ['execution', 'Execution']].map(([key, label]) => (
                   <button
                     key={key}
@@ -1745,6 +1755,14 @@ export function IdeWorkspace({ id, project }) {
                     onClick={() => setSessionView(key)}
                   >{label}</button>
                 ))}
+                </div>
+                <button
+                  type="button"
+                  className={`ide-view-tab ide-focus-btn${focusMode ? ' is-active' : ''}`}
+                  aria-pressed={focusMode}
+                  onClick={() => setFocusMode((f) => !f)}
+                  title={focusMode ? 'Leave focus mode (Alt+F)' : 'Focus mode (Alt+F): hide the other panels'}
+                >{focusMode ? 'Exit focus' : 'Focus'}</button>
               </div>
               <SessionLive
                 view={sessionView}

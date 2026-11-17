@@ -14,6 +14,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { applyTheme, fetchAndApplyTheme } from './lib/theme.js';
 import { App } from './App.jsx';
+import { MotionRoot } from './components/MotionRoot.jsx';
 import './styles.css';
 
 // Apply saved template + mode before React renders (second application in case
@@ -24,7 +25,9 @@ const root = document.getElementById('root');
 if (root) {
   createRoot(root).render(
     <StrictMode>
-      <App />
+      <MotionRoot>
+        <App />
+      </MotionRoot>
     </StrictMode>,
   );
 }

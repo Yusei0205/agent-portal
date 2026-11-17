@@ -1617,6 +1617,8 @@ export function SessionLive({
           <SessionExecution
             events={executionEvents}
             running={workflow?.status === 'running' || workflow?.status === 'pending'}
+            status={workflow?.status}
+            planMode={Boolean(workflow?.plan_mode)}
             onOpenFile={onOpenWorkspaceFile ? (path) => onOpenWorkspaceFile(path) : undefined}
           />
         </div>

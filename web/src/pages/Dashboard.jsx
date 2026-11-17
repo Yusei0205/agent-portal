@@ -20,6 +20,8 @@ import { api } from '../lib/api.js';
 import { subscribeGlobal } from '../lib/events.js';
 import { href } from '../lib/router.js';
 import { Icon } from '../components/Icon.jsx';
+import { AiCore } from '../components/AiCore.jsx';
+import { sparkPath } from '../lib/sparkline.js';
 import { CostPanel } from '../components/CostPanel.jsx';
 import { AttentionPanel, RunsTrendPanel } from '../components/DashboardInsights.jsx';
 import { formatRelative, formatUsage } from '../lib/util.js';
@@ -154,12 +156,32 @@ function AnimToggle({ animated, onToggle }) {
 
 // ── StatCard ──────────────────────────────────────────────────────────────────
 
-function StatCard({ icon, iconColor, label, value, rawValue, sub, deltaValue, deltaLabel, deltaDir, animated, style: cardStyle }) {
+/** A small trend line under a card, from real daily numbers. Nothing is drawn for fewer than two days. */
+function Sparkline({ values, color, label }) {
+  const p = sparkPath(values);
+  if (!p || p.max === 0) return null; // no runs in the whole period: a flat line says nothing
+  return (
+    <svg className="kpi-spark" viewBox="0 0 160 28" preserveAspectRatio="none" role="img" aria-label={label} style={color ? { '--spark': color } : undefined}>
+      <path className="kpi-spark-area" d={p.area} />
+      <path className="kpi-spark-line" d={p.line} pathLength="1" />
+      <circle className="kpi-spark-dot" cx={p.last[0]} cy={p.last[1]} r="2.2" />
+    </svg>
+  );
+}
+
+function StatCard({ icon, iconColor, label, value, rawValue, sub, deltaValue, deltaLabel, deltaDir, animated, trend, trendLabel, style: cardStyle }) {
+  // The highlight on the card follows the pointer (the CSS reads --mx and --my).
+  const follow = (e) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    e.currentTarget.style.setProperty('--mx', `${e.clientX - r.left}px`);
+    e.currentTarget.style.setProperty('--my', `${e.clientY - r.top}px`);
+  };
   return (
     <article
       className="kpi-card db-kpi-card"
       aria-label={label}
       style={cardStyle}
+      onPointerMove={animated ? follow : undefined}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
         <div className="kpi-label">{label}</div>
@@ -182,6 +204,7 @@ function StatCard({ icon, iconColor, label, value, rawValue, sub, deltaValue, de
           <span>{deltaLabel}</span>
         </div>
       )}
+      {trend && <Sparkline values={trend} color={iconColor} label={trendLabel} />}
     </article>
   );
 }
@@ -1085,6 +1108,12 @@ export function Dashboard({ user, projects }) {
     });
   }, [network.nodes, openDrill]);
 
+  // The core shows what the portal is doing: agents running, or a failed load; otherwise it idles.
+  const coreState = error ? 'failed' : (summary.runningSessions ?? 0) > 0 ? 'running' : 'idle';
+  // Daily numbers for the sparklines under two of the cards.
+  const dailyDone = (data?.daily ?? []).map((d) => d.done);
+  const dailyRate = (data?.daily ?? []).map((d) => (d.done + d.failed > 0 ? d.done / (d.done + d.failed) : null));
+
   return (
     <div
       ref={rootRef}
@@ -1093,9 +1122,12 @@ export function Dashboard({ user, projects }) {
     >
       {/* ── Header ── */}
       <section className="db-header" aria-label="Dashboard header">
-        <div>
-          <h1 className="db-greeting">{greetText}</h1>
-          <p className="muted" style={{ fontSize: '0.84rem', marginTop: 2 }}>{sub}</p>
+        <div className="db-header-core">
+          <AiCore state={coreState} size={84} animated={animated} />
+          <div>
+            <h1 className="db-greeting">{greetText}</h1>
+            <p className="muted" style={{ fontSize: '0.84rem', marginTop: 2 }}>{sub}</p>
+          </div>
         </div>
         <div className="db-controls" role="group" aria-label="Dashboard controls">
           {/* Period selector */}
@@ -1193,6 +1225,8 @@ export function Dashboard({ user, projects }) {
               rawValue={summary.completedToday}
               value={fmt(summary.completedToday)}
               sub={dayStartLabel(summary.dayStartUtc)}
+              trend={dailyDone}
+              trendLabel="Runs completed per day"
               deltaValue={completedDelta != null ? Math.abs(completedDelta) : undefined}
               deltaLabel={completedDelta != null
                 ? `${completedDelta >= 0 ? '+' : ''}${completedDelta} vs yesterday`
@@ -1212,6 +1246,8 @@ export function Dashboard({ user, projects }) {
                 ? `${srDelta >= 0 ? '+' : ''}${srDelta.toFixed(1)} pts vs prev period`
                 : undefined}
               deltaDir={!rateKnown || srDelta == null ? undefined : srDelta >= 0 ? 'up' : 'down'}
+              trend={dailyRate}
+              trendLabel="Success rate per day"
               animated={animated}
             />
           </>

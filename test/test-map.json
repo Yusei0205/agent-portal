@@ -344,7 +344,10 @@
         "test/web-output-card-excerpt.test.ts",
         "test/web-output-excerpt.test.ts",
         "test/web-session-status.test.ts",
-        "test/web-tool-groups.test.ts"
+        "test/web-tool-groups.test.ts",
+        "test/web-session-groups.test.ts",
+        "test/web-execution-stages.test.ts",
+        "test/web-sparkline.test.ts"
       ],
       "smokeIds": [
         "sessions"
