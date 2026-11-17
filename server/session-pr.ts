@@ -441,6 +441,17 @@ async function runPullRequestSteps(
       await emitEv({ state: 'failed', error: 'No cloud runtime is configured to push from.', errorCode: 'failed' });
       return { kind: 'not-opened', error: 'no cloud runtime is configured to push from' };
     }
+    // An auto-fix push pins the base: the runner refuses a fetched base that is not the commit read here from the host.
+    let baseSha: string | null = null;
+    if (plan) {
+      const { branchHeadSha } = await import('./pull-requests.ts');
+      baseSha = await branchHeadSha(repo, baseBranch);
+      if (!baseSha) {
+        const error = `The tip of the base branch ${baseBranch} could not be read from the host, so nothing was pushed.`;
+        await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'failed' });
+        return { kind: 'not-opened', error };
+      }
+    }
     await emitEv({ state: 'pushing', branch });
     const snapshot = await snapshotAccess(workflowId);
     const payload: Record<string, unknown> = {
@@ -450,7 +461,7 @@ async function runPullRequestSteps(
       ...(snapshot ? { snapshot } : {}),
       // An auto-fix push: the runner commits, checks and pushes it from a private repository, fetching the base from and pushing to
       // this URL (never the session repository's own remote configuration), and refuses it when a protected path changed.
-      ...(plan ? { denyPaths: plan.denyPaths, remoteUrl: String(repo.url ?? '') } : {}),
+      ...(plan ? { denyPaths: plan.denyPaths, remoteUrl: String(repo.url ?? ''), baseSha } : {}),
     };
     let pushed = false;
     let pushError = '';
@@ -478,7 +489,7 @@ async function runPullRequestSteps(
       await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'protected-path' });
       return { kind: 'blocked', reason: error, violations: [], repo: String(repo.name ?? '') };
     }
-    if (!pushed && plan && /Unknown field: "(denyPaths|remoteUrl)"/.test(pushError)) {
+    if (!pushed && plan && /Unknown field: "(denyPaths|remoteUrl|baseSha)"/.test(pushError)) {
       // A runner older than the auto-fix guardrails: fail closed rather than push without the check.
       const error = 'The runner is older than the portal and cannot check protected paths before a push; redeploy the runners. Nothing was pushed.';
       await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'failed' });

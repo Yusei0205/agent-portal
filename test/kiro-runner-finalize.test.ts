@@ -81,7 +81,12 @@ describe('Kiro runner: changes and finalize on its folder layout', () => {
     cloneInto(workDir, 'clean');
     fs.appendFileSync(path.join(edited, 'README.md'), 'changed\n');
     events.length = 0;
-    await reportRepoChanges([...spec('edited'), ...spec('clean')], workDir, emit);
+    // The report fetches the base from the run's https URL for the repository; here that URL stands for the local test remote.
+    const URL_HOOK = Symbol.for('agent-portal.test.remoteUrl');
+    (globalThis as Record<symbol, unknown>)[URL_HOOK] = () => remote;
+    try {
+      await reportRepoChanges([...spec('edited'), ...spec('clean')], workDir, emit);
+    } finally { delete (globalThis as Record<symbol, unknown>)[URL_HOOK]; }
     assert.equal(events.length, 1);
     const { paths, ...rest } = events[0] as Record<string, unknown>;
     assert.deepEqual(rest, { type: 'repo-changes', repo: 'edited', base: 'main', commits: 0, files: 1 });

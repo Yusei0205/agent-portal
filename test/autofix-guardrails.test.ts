@@ -151,3 +151,12 @@ test('the matcher semantics hold: ** crosses /, * and ? do not, **/ is zero or m
   assert.ok(m('A/B.PEM', '**/*.pem') && m('a+b(c).ts', 'a+b(c).ts'));
   assert.ok(m('aXbYc', 'a**b**c') && m('a/x/b/c', 'a**b**c'));
 });
+
+test('a single entry standing where a protected directory is (a symlink or gitlink at infra, .github/workflows or .github) is a violation', () => {
+  for (const path of ['infra', 'INFRA', '.github/workflows', '.github', './.github/Workflows']) {
+    const r = checkDiff([f(path)], p, 'tests');
+    assert.equal(r.ok, false, path);
+    assert.match(r.violations[0], /protected/, path);
+  }
+  for (const path of ['infrastructure', 'src/infra.ts', '.githubx', 'github', 'src']) assert.equal(checkDiff([f(path)], p, 'tests').ok, true, path);
+});

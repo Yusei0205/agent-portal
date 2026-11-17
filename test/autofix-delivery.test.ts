@@ -110,7 +110,9 @@ const blob = (p: string, id: string): TreeEntry => ({ path: p, mode: '100644', t
 let baseTree: TreeEntry[] = [];
 let headTree: TreeEntry[] = [];
 let treeTruncated = false;
+/** The answer for the pushed branch's ref, and for the base's. */
 let refStatus = 200;
+let baseRefStatus = 200;
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
 
 async function waitFor(cond: () => boolean | Promise<boolean>, ms = 3000): Promise<void> {
@@ -120,6 +122,8 @@ async function waitFor(cond: () => boolean | Promise<boolean>, ms = 3000): Promi
 
 before(async () => {
   process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN = ARN;
+  // Most tests here exercise the unattended path; the default (a person approves every push) has its own tests below.
+  process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = '1';
   ({ baseUrl } = await createTestServer());
   const r = await fetchJson(baseUrl, '/api/auth/setup', {
     method: 'POST', body: { email: `afd-${Date.now()}@example.com`, name: 'Admin', password: 'password1234', provider: 'demo' },
@@ -127,7 +131,7 @@ before(async () => {
   cookie = r.cookie ?? '';
   userId = one<{ id: string }>('SELECT id FROM users LIMIT 1')!.id;
 });
-after(async () => { delete process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN; await cleanup(); });
+after(async () => { delete process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN; delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH; await cleanup(); });
 
 beforeEach(() => {
   finalizeCalls = [];
@@ -138,6 +142,7 @@ beforeEach(() => {
   headTree = [blob('a.txt', '1'), { path: 'src', mode: '040000', type: 'tree', sha: 'a'.repeat(40) }, blob('src/cart.ts', '4'), blob('test/cart.test.ts', '5'), blob('.github/workflows/ci.yml', '3')];
   treeTruncated = false;
   refStatus = 200;
+  baseRefStatus = 200;
   pushReply = (p) => [{ type: 'repo-pushed', repo: p.repo, branch: p.branch, sha: SHA }];
   _setAgentCoreInvokerOverride(async function* (_arn, _sid, payload) {
     finalizeCalls.push(payload);
@@ -154,7 +159,7 @@ beforeEach(() => {
       const u = String(url);
       let m: RegExpExecArray | null;
       if ((m = /\/git\/ref\/heads\/(.+)$/.exec(u))) {
-        if (refStatus !== 200) return json({ message: 'Not Found' }, refStatus);
+        if (m[1] === 'main' ? baseRefStatus !== 200 : refStatus !== 200) return json({ message: 'Not Found' }, m[1] === 'main' ? baseRefStatus : refStatus);
         return json({ ref: `refs/heads/${m[1]}`, object: { type: 'commit', sha: m[1] === 'main' ? BASE_C : HEAD_C } });
       }
       if ((m = /\/git\/commits\/([0-9a-f]+)$/.exec(u))) return json({ sha: m[1], tree: { sha: m[1] === BASE_C ? BASE_T : HEAD_T } });
@@ -266,6 +271,45 @@ describe('the gate in the session PR flow', () => {
     assert.equal(f.fix_branch, branch);
   });
 
+  it('by default (AUTOFIX_ALLOW_UNATTENDED_PUSH not set) draft_pr with a clean diff asks a person instead of pushing', async () => {
+    delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH;
+    try {
+      for (const v of [undefined, '0', 'true']) {
+        if (v === undefined) delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH; else process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = v;
+        finalizeCalls = [];
+        const s = await makeFix();
+        await handleRepoChanges(ctxOf(s), [clean]);
+        assert.equal(finalizeCalls.length, 0, `nothing pushed (${v})`);
+        assert.deepEqual(states(s), ['asked']);
+        const items = inbox(s);
+        assert.equal(items.length, 1);
+        assert.equal(items[0].type, 'push');
+        assert.equal(items[0].payload.kind, 'autofix');
+        assert.match(String(items[0].payload.body), /Unattended push is disabled on this portal; approve to push/);
+        assert.equal((await finding(s)).status, 'fixing');
+        // Approval still delivers end to end.
+        const r = await fetchJson(baseUrl, `/api/inbox/${items[0].id}/resolve`, { method: 'POST', body: { response: 'approve' }, cookie });
+        assert.equal(r.status, 200);
+        await waitFor(async () => (await finding(s)).status === 'pr_open');
+        assert.equal((await finding(s)).status, 'pr_open');
+        assert.equal(finalizeCalls.length, 1);
+      }
+    } finally { process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = '1'; }
+  });
+
+  it('with AUTOFIX_ALLOW_UNATTENDED_PUSH=1 the gate goes ahead', async () => {
+    const { autofixGate, unattendedPushAllowed } = await import('../server/autofix/delivery.ts');
+    assert.equal(unattendedPushAllowed(), true);
+    const s = await makeFix();
+    assert.equal(await autofixGate(ctxOf(s), clean), 'go');
+    delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH;
+    try {
+      assert.equal(unattendedPushAllowed(), false);
+      const t = await makeFix();
+      assert.equal(await autofixGate(ctxOf(t), clean), 'ask');
+    } finally { process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = '1'; }
+  });
+
   it("writes the audit entry autofix.pr.opened with the PR number and repository when the PR is opened", async () => {
     const s = await makeFix();
     await handleRepoChanges(ctxOf(s), [clean]);
@@ -368,7 +412,7 @@ describe('the gate in the session PR flow', () => {
     assert.equal(f.attempts, 1);
     assert.ok(f.cooldown_until && Date.parse(f.cooldown_until) > Date.now());
     assert.equal(f.fix_branch, null);
-    assert.equal(ghCalls.length, 0);
+    assert.deepEqual(ghCalls.map((c) => c.url.replace(/^.*\/repos\/acme\/shop/, '')), ['/git/ref/heads/main'], 'only the base tip was read');
 
     const s2 = await makeFix({ attempts: 1 }); // max_attempts is 2
     await handleRepoChanges(ctxOf(s2), [clean]);
@@ -483,6 +527,25 @@ describe('guardrails at and after the push', () => {
     const s = await makeFix();
     await handleRepoChanges(ctxOf(s), [clean]);
     assert.equal(finalizeCalls[0].remoteUrl, 'https://github.com/acme/shop');
+    assert.equal(finalizeCalls[0].baseSha, BASE_C, 'the base tip read from GitHub just before the push');
+  });
+
+  it('when the base tip cannot be read from the host nothing is pushed (fail closed), needs_human', async () => {
+    baseRefStatus = 404;
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls.length, 0);
+    assert.equal(prPosts().length, 0);
+    assert.equal((await finding(s)).status, 'needs_human');
+    assert.match(String(prEvents(s).at(-1)!.error), /base branch/);
+  });
+
+  it('a runner too old for baseSha fails closed', async () => {
+    pushReply = () => [{ type: 'error', message: 'Unknown field: "baseSha"' }];
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal((await finding(s)).status, 'needs_human');
+    assert.match(String(prEvents(s).at(-1)!.error), /redeploy the runners/);
   });
 
   it('a runner too old for remoteUrl fails closed: nothing pushed, needs_human, no attempt counted', async () => {
@@ -563,7 +626,7 @@ describe('no way around the gate', () => {
     const s = await makeFix();
     await Promise.all([handleRepoChanges(ctxOf(s), [clean]), handleRepoChanges(ctxOf(s), [clean])]);
     assert.equal(finalizeCalls.length, 1);
-    assert.equal(ghCalls.length, 0);
+    assert.deepEqual(ghCalls.map((c) => c.url.replace(/^.*\/repos\/acme\/shop/, '')), ['/git/ref/heads/main'], 'only the base tip was read');
     assert.equal((await finding(s)).status, 'new');
   });
 });

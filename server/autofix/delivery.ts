@@ -127,6 +127,24 @@ async function audit(action: string, target: string, detail: object): Promise<vo
 }
 
 /**
+ * Whether the portal may push an auto-fix branch without a person approving it: only when its operator set
+ * AUTOFIX_ALLOW_UNATTENDED_PUSH=1 on the portal server process. Default: no, every push is asked in the Inbox (draft_pr mode still
+ * works end to end, with an approval).
+ *
+ * Why: the fix agent and the runner run as the same user in the same microVM. A process the agent leaves behind can race the runner's
+ * checks or read the push credentials from /proc while git runs, and the portal's own check of the pushed branch happens after the
+ * push, when a push-triggered workflow may already have run with the repository's secrets. Turning this on additionally requires the
+ * runners redeployed from this version, the agent's processes killed (or run as another user) before credentialed git calls, and a
+ * repository ruleset restricting pushes to `.github/workflows/**` and tags.
+ */
+export function unattendedPushAllowed(): boolean {
+  return process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH === '1';
+}
+
+/** The note added to the Inbox question when the change would otherwise have been pushed unattended. */
+export const UNATTENDED_DISABLED_NOTE = 'Unattended push is disabled on this portal; approve to push.';
+
+/**
  * Decide what happens to one repository change of a session. Null when the session is not an active auto-fix session (the caller
  * goes on as for any session). Side effects here are on the finding only; the PR flow (Inbox item, push) is the caller's.
  */
@@ -154,7 +172,9 @@ export async function autofixGate(ctx: SessionPrContext, change: RepoChange): Pr
     large = r.large;
   }
 
-  const decision: GateDecision = policy.mode === 'draft_pr' && !large && !(await isPaused(f.project_id)) ? 'go' : 'ask';
+  const clear = policy.mode === 'draft_pr' && !large && !(await isPaused(f.project_id));
+  // Downgraded to a person's approval unless the operator allowed unattended pushes (see unattendedPushAllowed).
+  const decision: GateDecision = clear && unattendedPushAllowed() ? 'go' : 'ask';
   // Recorded before anything else, so the pipeline sees at the session's end that delivery began (see onFixSessionEnded).
   await getAutofixFindingsRepository().transition(f.id, ['fixing'], { status: 'fixing', fix_branch: fixBranchName(f.kind, f.fingerprint) });
   return decision;
@@ -170,6 +190,7 @@ export async function askReason(ctx: SessionPrContext, change: RepoChange): Prom
     return 'The change is too large to check automatically.';
   }
   if (await isPaused(active.finding.project_id)) return 'Auto-fix is paused.';
+  if (!checkDiffFn(change.paths, active.policy, active.finding.kind).large) return UNATTENDED_DISABLED_NOTE;
   return `The change is larger than the auto-fix limits (${active.policy.limits.max_files} files, ${active.policy.limits.max_lines} lines).`;
 }
 

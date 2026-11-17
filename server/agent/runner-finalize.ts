@@ -7,6 +7,7 @@
  */
 
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -22,9 +23,6 @@ export interface RepoChanges { repo: string; base: string; commits: number; file
 
 /** At most this many paths are reported; one more than the portal's limit, so a longer list is still seen as too long. */
 export const MAX_REPORTED_PATHS = 2001;
-/** An untracked file larger than this is not read; it counts as this many added lines (enough to trip any line limit). */
-const UNTRACKED_READ_MAX = 8 * 1024 * 1024;
-const UNTRACKED_TOO_LARGE_LINES = 1_000_000;
 
 const BRANCH_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
 const GIT_TIMEOUT_MS = 120_000;
@@ -129,8 +127,11 @@ export const SAFE_GIT_CONFIG: readonly string[] = Object.freeze([
 ]);
 const SAFE_GIT_ARGS: string[] = SAFE_GIT_CONFIG.flatMap((c) => ['-c', c]);
 
-/** Variables of the runner's own environment that reach git; nothing else does (no GIT_*, no proxies, no ssh or askpass commands). */
-const PASS_ENV = /^(PATH|HOME|LANG|LANGUAGE|LC_[A-Z_]+|TMPDIR|TZ)$/;
+/**
+ * Variables of the runner's own environment that reach git; nothing else does (no other GIT_*, no ssh or askpass commands). The proxy
+ * and CA settings are the runner image's (the agent cannot change the runner process's environment).
+ */
+const PASS_ENV = /^(PATH|HOME|LANG|LANGUAGE|LC_[A-Z_]+|TMPDIR|TZ|HTTPS?_PROXY|https?_proxy|ALL_PROXY|all_proxy|NO_PROXY|no_proxy|SSL_CERT_FILE|SSL_CERT_DIR|CURL_CA_BUNDLE|GIT_SSL_CAINFO|GIT_SSL_CAPATH|NODE_EXTRA_CA_CERTS)$/;
 /** The request-supplied git settings (credentials as http.* options, safe.directory added by the runner). */
 const REQUEST_GIT_ENV = /^(GIT_TERMINAL_PROMPT|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_\d{1,3}|GIT_CONFIG_VALUE_\d{1,3})$/;
 
@@ -157,7 +158,7 @@ function subcommandOf(args: string[]): string {
 
 /**
  * One runner git call: SAFE_GIT_ARGS first, the allowlisted environment, never a shell. `internal` holds variables the runner itself
- * sets for this call (GIT_INDEX_FILE), added after the allowlist.
+ * sets for this call (GIT_INDEX_FILE, GIT_CONFIG_GLOBAL pointing at a private repository's own file), applied last.
  */
 function runGit(
   cwd: string, args: string[], env: Record<string, string> = {}, allowFail = false, internal: Record<string, string> = {},
@@ -165,7 +166,7 @@ function runGit(
   return new Promise((resolve, reject) => {
     execFile('git', [...SAFE_GIT_ARGS, ...args], {
       cwd,
-      env: { ...gitProcessEnv(env), ...internal, ...TRUSTED_GIT_ENV },
+      env: { ...gitProcessEnv(env), ...TRUSTED_GIT_ENV, ...internal },
       maxBuffer: 32 * 1024 * 1024,
       timeout: GIT_TIMEOUT_MS,
       windowsHide: true,
@@ -200,32 +201,11 @@ export function parseChangedPaths(raw: unknown): ChangedPath[] | undefined {
   return out;
 }
 
-/** The private ref the base branch is fetched into before paths are reported or a branch is pushed (not set up by the agent). */
+/** The ref of a runner-private repository the base branch is fetched into before paths are reported or a branch is pushed. */
 export const PRIVATE_BASE_REF = 'refs/portal/base';
 const PATH_CHECK_MAX = 1024;
 const MAX_SCANNED_COMMITS = 200;
 const MAX_SCANNED_PATHS = 20_000;
-
-/**
- * For the change report only (the push is checked in a private repository, see pushBranch): fetch `base` into PRIVATE_BASE_REF of the
- * session's repository (forced, overwriting whatever is there) and return the merge base of it and HEAD, or null when either step
- * fails. The base comes from `remoteUrl` when the caller has one, else from the session's configured push URL (the agent can
- * change that; acceptable here because this list only decides whether a person is asked, and the push is checked separately). The session's remote-tracking refs are not trusted.
- */
-async function trustedMergeBase(repoDir: string, base: string, env: Record<string, string>, remoteUrl?: string): Promise<string | null> {
-  if (!BRANCH_RE.test(base) || base.includes('..')) return null;
-  let remote = remoteUrl;
-  if (!remote) {
-    const url = await runGit(repoDir, ['remote', 'get-url', '--push', 'origin'], env, true);
-    remote = url.code === 0 && url.stdout.trim() ? url.stdout.trim() : 'origin';
-  }
-  if (remote.startsWith('-')) return null;
-  const fetched = await runGit(repoDir, ['fetch', '--no-tags', '--quiet', '--', remote, `+refs/heads/${base}:${PRIVATE_BASE_REF}`], env, true);
-  if (fetched.code !== 0) return null;
-  const mb = await runGit(repoDir, ['merge-base', PRIVATE_BASE_REF, 'HEAD'], env, true);
-  const sha = mb.stdout.trim();
-  return mb.code === 0 && /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
-}
 
 /**
  * The one glob matcher for protected paths, used by the runner before a push and by the portal's guardrails (server/autofix/
@@ -349,10 +329,28 @@ export function protectedGlobMatches(file: string, glob: string): boolean {
   return re.test(normaliseRepoPath(file).toLowerCase());
 }
 
-/** The first deny pattern `file` matches, or null. */
+/**
+ * Whether `file` is a protected DIRECTORY of `glob` itself, or one of its parents: the literal leading folders of the pattern (`infra`
+ * for `infra/**`; `.github` and `.github/workflows` for `.github/workflows/**`). A change listing such a path as one entry replaced the
+ * folder by a symlink or a submodule, which `dir/**` alone does not match; it is treated as touching the protected folder.
+ */
+export function protectedDirectoryOf(file: string, glob: string): boolean {
+  const f = normaliseRepoPath(file).toLowerCase().replace(/\/+$/, '');
+  if (!f) return false;
+  const segs = normaliseRepoPath(String(glob)).toLowerCase().split('/');
+  let prefix = '';
+  for (let i = 0; i < segs.length - 1; i++) {
+    if (/[*?]/.test(segs[i]) || !segs[i]) break;
+    prefix = prefix ? `${prefix}/${segs[i]}` : segs[i];
+    if (f === prefix) return true;
+  }
+  return false;
+}
+
+/** The first deny pattern `file` matches (as a path, or as a protected folder itself, see protectedDirectoryOf), or null. */
 export function deniedBy(file: string, patterns: GlobMatcher[], sources: string[]): string | null {
   const n = normaliseRepoPath(file).toLowerCase();
-  for (let i = 0; i < patterns.length; i++) if (patterns[i].test(n)) return sources[i];
+  for (let i = 0; i < patterns.length; i++) if (patterns[i].test(n) || protectedDirectoryOf(n, sources[i])) return sources[i];
   return null;
 }
 
@@ -371,6 +369,121 @@ export class ProtectedPathError extends Error {
   code = 'protected-path' as const;
 }
 
+/** Raised by the auto-fix push for a failure while preparing it (not a protected path, not the push itself): always `failed`. */
+export class FinalizeError extends Error {
+  code = 'failed' as const;
+}
+
+/**
+ * Tests only: a function the tests may put on globalThis under this symbol is called with a private repository's git folder at each
+ * stage ('created', 'fetched'), to stand in for a process racing the runner. Absent in the runners: a no-op.
+ */
+const TEST_PRIVATE_REPO = Symbol.for('agent-portal.test.privateRepo');
+function testPrivateRepo(gitDir: string, stage: string): void {
+  const fn = (globalThis as Record<symbol, unknown>)[TEST_PRIVATE_REPO];
+  if (typeof fn === 'function') (fn as (d: string, s: string) => void)(gitDir, stage);
+}
+
+/** Only the request's `safe.directory` settings of a git env (renumbered): for calls that must not carry credentials. */
+function withoutCredentials(env: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  const n = Number.parseInt(env.GIT_CONFIG_COUNT ?? '0', 10) || 0;
+  let k = 0;
+  for (let i = 0; i < n; i++) {
+    if (String(env[`GIT_CONFIG_KEY_${i}`] ?? '').toLowerCase() !== 'safe.directory') continue;
+    out[`GIT_CONFIG_KEY_${k}`] = 'safe.directory';
+    out[`GIT_CONFIG_VALUE_${k}`] = String(env[`GIT_CONFIG_VALUE_${i}`] ?? '');
+    k++;
+  }
+  return k ? { ...out, GIT_CONFIG_COUNT: String(k) } : {};
+}
+
+/**
+ * A runner-private bare repository, in a new 0700 folder with an unpredictable name under the temporary directory. Nothing of the
+ * session repository's configuration is read by the calls made in it. Its own "global" config file only trusts the session folder
+ * (safe.directory, needed when the workspace is a mounted file system with another owner). `intact()` checks that nothing changed its
+ * configuration, hooks, attributes or alternates since the runner wrote them (a process the agent left running could try); it cannot
+ * close the window between a check and the next git call (same user, same machine).
+ */
+interface PrivateRepo {
+  tmp: string;
+  gitDir: string;
+  /** The internal environment for its calls: its own global config file, no credentials. */
+  internal: Record<string, string>;
+  intact(stage: string): Promise<void>;
+  cleanup(): Promise<void>;
+}
+
+/** The whole configuration of a private repository (a bare SHA-1 repository), written by the runner itself. */
+const PRIVATE_REPO_CONFIG = '[core]\n\trepositoryformatversion = 0\n\tfilemode = true\n\tbare = true\n';
+
+async function readOrNull(file: string): Promise<string | null> {
+  try { return await fs.readFile(file, 'utf8'); } catch { return null; }
+}
+
+async function createPrivateRepo(sessionDir: string, opts: { alternates?: string } = {}): Promise<PrivateRepo> {
+  const tmp = path.join(os.tmpdir(), crypto.randomBytes(12).toString('hex'));
+  await fs.mkdir(tmp, { mode: 0o700 });
+  await fs.chmod(tmp, 0o700);
+  const gitDir = path.join(tmp, crypto.randomBytes(6).toString('hex'));
+  const globalCfg = path.join(tmp, 'gitconfig');
+  let real = sessionDir;
+  try { real = await fs.realpath(sessionDir); } catch { /* keep the given path */ }
+  const quote = (v: string) => `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const globalText = `[safe]\n\tdirectory = ${quote(real)}\n\tdirectory = ${quote(sessionDir)}\n`;
+  const internal = { GIT_CONFIG_GLOBAL: globalCfg };
+  const repo: PrivateRepo = {
+    tmp, gitDir, internal,
+    async intact(stage: string) {
+      testPrivateRepo(gitDir, stage);
+      const problems: string[] = [];
+      if ((await readOrNull(path.join(gitDir, 'config'))) !== expected.config) problems.push('config');
+      if ((await readOrNull(globalCfg)) !== expected.global) problems.push('global config');
+      if ((await readOrNull(path.join(gitDir, 'objects', 'info', 'alternates'))) !== expected.alternates) problems.push('alternates');
+      for (const extra of ['hooks', 'commondir', 'config.worktree', 'info/attributes', 'info/grafts', 'shallow', 'worktrees']) {
+        if ((await fs.lstat(path.join(gitDir, extra)).then(() => true, () => false))) problems.push(extra);
+      }
+      if (problems.length) throw new ProtectedPathError(`Refusing to push: the private repository was changed while the runner was using it (${problems.join(', ')})`);
+    },
+    async cleanup() { await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined); },
+  };
+  const expected = { config: '', global: '', alternates: null as string | null };
+  try {
+    await runGit(tmp, ['init', '--quiet', '--bare', '--template=', gitDir], {}, false, internal);
+    // The configuration is written by the runner, not read back from what `git init` left: something added between the two would
+    // otherwise become the "expected" content. Overwriting also drops anything added before this point.
+    expected.config = PRIVATE_REPO_CONFIG;
+    await fs.writeFile(path.join(gitDir, 'config'), expected.config);
+    expected.global = globalText;
+    await fs.writeFile(globalCfg, globalText, { mode: 0o600 });
+    if (opts.alternates) {
+      expected.alternates = `${opts.alternates}\n`;
+      await fs.writeFile(path.join(gitDir, 'objects', 'info', 'alternates'), expected.alternates);
+    } else {
+      await fs.rm(path.join(gitDir, 'objects', 'info', 'alternates'), { force: true });
+    }
+  } catch (e) {
+    await repo.cleanup();
+    throw e;
+  }
+  return repo;
+}
+
+/** The session's `.git/objects` folder when `.git` is a plain folder (for reading its objects without copying them), else undefined. */
+async function sessionObjects(repoDir: string): Promise<string | undefined> {
+  try {
+    const dotgit = path.join(repoDir, '.git');
+    if (!(await fs.lstat(dotgit)).isDirectory()) return undefined;
+    const objects = await fs.realpath(path.join(dotgit, 'objects'));
+    return (await fs.lstat(objects)).isDirectory() && !/[\r\n]/.test(objects) ? objects : undefined;
+  } catch { return undefined; }
+}
+
+/** A valid https URL for a credentialed fetch or push: no whitespace, control characters or leading dash. */
+function usableRemote(url: string | undefined): url is string {
+  return typeof url === 'string' && url.length > 0 && url.length <= 2000 && !url.startsWith('-') && !/[\s\x00-\x1f\x7f]/.test(url);
+}
+
 /** A `repo-changes` event as the portal keeps it; `paths` only when the runner sent a well-formed list. */
 export function repoChangeOf(ev: { repo?: unknown; base?: unknown; commits?: unknown; files?: unknown; paths?: unknown }): RepoChanges {
   const paths = parseChangedPaths(ev.paths);
@@ -380,91 +493,84 @@ export function repoChangeOf(ev: { repo?: unknown; base?: unknown; commits?: unk
   };
 }
 
-/** Lines in an untracked file: 0 for a binary one, a large number for one too big to read. */
-async function untrackedLines(file: string): Promise<number> {
-  const st = await fs.stat(file);
-  if (!st.isFile()) return 0;
-  if (st.size > UNTRACKED_READ_MAX) return UNTRACKED_TOO_LARGE_LINES;
-  const buf = await fs.readFile(file);
-  if (buf.includes(0)) return 0;
-  let n = 0;
-  for (const b of buf) if (b === 10) n++;
-  return buf.length && buf[buf.length - 1] !== 10 ? n + 1 : n;
-}
-
 /**
- * Per-file line counts of everything the session changed: tracked files against the merge base with `origin/<base>` (or HEAD
- * when there is no such ref), from `git diff --numstat --no-renames` (so a rename shows as the old path removed and the new one
- * added), plus untracked files. Undefined when git cannot tell.
- */
-async function changedPaths(
-  repoDir: string, base: string, untracked: string[], env: Record<string, string>, remoteUrl?: string,
-): Promise<ChangedPath[] | undefined> {
-  // Never the session's own origin/<base> (the agent can move or delete it) and never a fallback to HEAD: the base is fetched
-  // afresh into a private ref; when that or the merge base is unavailable, the list is unknown.
-  const from = await trustedMergeBase(repoDir, base, env, remoteUrl);
-  if (!from) return undefined;
-  const diff = await runGit(repoDir, ['diff', '--numstat', '--no-renames', '--no-ext-diff', '--no-textconv', '-z', from], env, true);
-  if (diff.code !== 0) return undefined;
-  const out: ChangedPath[] = [];
-  const seen = new Set<string>();
-  for (const rec of diff.stdout.split('\0')) {
-    if (!rec) continue;
-    const m = /^(-|\d+)\t(-|\d+)\t(.+)$/s.exec(rec);
-    if (!m) continue;
-    if (seen.has(m[3])) continue;
-    seen.add(m[3]);
-    out.push({ path: m[3], added: m[1] === '-' ? 0 : Number(m[1]), removed: m[2] === '-' ? 0 : Number(m[2]) });
-    if (out.length >= MAX_REPORTED_PATHS) return out;
-  }
-  for (const p of untracked) {
-    if (seen.has(p)) continue;
-    seen.add(p);
-    let added = 0;
-    try { added = await untrackedLines(path.join(repoDir, p)); } catch { added = 0; }
-    out.push({ path: p, added, removed: 0 });
-    if (out.length >= MAX_REPORTED_PATHS) return out;
-  }
-  return out;
-}
-
-/**
- * Uncommitted paths plus paths in commits ahead of `origin/<base>`, the number of those commits, and (`paths`) the per-file line
- * counts. `paths` is left out when git cannot produce it.
+ * Uncommitted paths plus paths in commits ahead of the session's `origin/<base>`, the number of those commits, and (`paths`) the
+ * per-file line counts against the merge base with the base branch freshly fetched from `opts.remoteUrl`. `paths` is left out when it
+ * cannot be produced (no URL, the base cannot be fetched, no common history).
  *
- * This is the change REPORT (it feeds the portal's gate, which only decides whether to ask a person); it reads the session's own
- * repository with the hardened settings above, but a clean or smudge filter the agent configured can still run here. The enforcement
- * is pushBranch, which does not read the session repository's configuration at all.
- * `opts.env` holds the request's git settings (credentials, safe.directory); `opts.remoteUrl`, when given, is where the base is
- * fetched from (else the session's configured push URL).
+ * This runs at the end of every run, while things the agent wrote are still around, so it is built like the auto-fix push:
+ *  - everything happens in a runner-private repository (createPrivateRepo). The session's objects are read through `alternates`
+ *    (data only); its HEAD and its own `origin/<base>` come in by local fetch; the work tree is snapshotted with
+ *    `git --git-dir=<private> --work-tree=<session> add -A` into a private index. No call reads the session repository's
+ *    configuration, `.git/info/attributes` or hooks, so no filter, textconv, fsmonitor or hook the agent set up can run;
+ *  - only the one fetch of the base from `opts.remoteUrl` carries the request's credentials (`opts.env`); every other call runs
+ *    without them, so a program the agent did manage to run would not find them in its environment.
  */
 export async function detectChanges(
   repoDir: string, base: string, opts: { env?: Record<string, string>; remoteUrl?: string } = {},
 ): Promise<{ commits: number; files: number; paths?: ChangedPath[] }> {
   const env = opts.env ?? {};
-  const files = new Set<string>();
-  const untracked: string[] = [];
-  const status = await runGit(repoDir, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], env);
-  const entries = status.stdout.split('\0').filter(Boolean);
-  for (let i = 0; i < entries.length; i++) {
-    const e = entries[i];
-    files.add(e.slice(3));
-    if (e.startsWith('??')) untracked.push(e.slice(3));
-    if (e[0] === 'R' || e[0] === 'C') i++; // the next entry is the rename's source path
-  }
-  let commits = 0;
-  const ref = `origin/${base}`;
-  const count = await runGit(repoDir, ['rev-list', '--count', `${ref}..HEAD`], env, true);
-  if (count.code === 0) {
-    commits = parseInt(count.stdout.trim(), 10) || 0;
-    if (commits > 0) {
-      const diff = await runGit(repoDir, ['diff', '--name-only', '--no-ext-diff', '-z', `${ref}...HEAD`], env, true);
-      if (diff.code === 0) for (const f of diff.stdout.split('\0')) if (f) files.add(f);
+  const pr = await createPrivateRepo(repoDir, { alternates: await sessionObjects(repoDir) });
+  try {
+    const run = (args: string[], allowFail = true, extra: Record<string, string> = {}) => runGit(pr.gitDir, args, {}, allowFail, { ...pr.internal, ...extra });
+    await run(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', repoDir, '+HEAD:refs/portal/head'], false);
+    const validBase = BRANCH_RE.test(base) && !base.includes('..');
+    const sessionBase = validBase
+      ? (await run(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', repoDir, `+refs/remotes/origin/${base}:refs/portal/session-base`])).code === 0
+      : false;
+    const headTree = (await run(['rev-parse', '--verify', '--quiet', 'refs/portal/head^{tree}'], false)).stdout.trim();
+
+    // The work tree, snapshotted into a fresh private index (the session's own index is not used: its assume-unchanged and
+    // skip-worktree bits could hide changes). Every file is hashed again, which costs time on a large repository.
+    await fs.mkdir(path.join(pr.gitDir, 'info'), { recursive: true });
+    await fs.writeFile(path.join(pr.gitDir, 'info', 'exclude'), await sessionExcludes(repoDir));
+    const wt = ['--git-dir', pr.gitDir, '--work-tree', repoDir];
+    const inTree = (args: string[]) => runGit(repoDir, [...wt, ...args], {}, true, { ...pr.internal, GIT_INDEX_FILE: path.join(pr.tmp, 'index') });
+    await pr.intact('created');
+    if ((await inTree(['read-tree', 'refs/portal/head'])).code !== 0) throw new FinalizeError('the session commit could not be read');
+    if ((await inTree(['add', '-A', '--', '.'])).code !== 0) throw new FinalizeError('the session files could not be read');
+    const tree = (await inTree(['write-tree'])).stdout.trim();
+    if (!/^[0-9a-f]{40,64}$/.test(tree)) throw new FinalizeError('the session files could not be read');
+
+    const files = new Set<string>();
+    const nameOnly = ['diff', '--name-only', '--no-ext-diff', '--no-textconv', '-z'];
+    const uncommitted = await run([...nameOnly, headTree, tree]);
+    for (const f of uncommitted.stdout.split('\0')) if (f) files.add(f);
+    let commits = 0;
+    if (sessionBase) {
+      const count = await run(['rev-list', '--count', 'refs/portal/session-base..refs/portal/head']);
+      commits = count.code === 0 ? parseInt(count.stdout.trim(), 10) || 0 : 0;
+      if (commits > 0) {
+        const diff = await run([...nameOnly, 'refs/portal/session-base...refs/portal/head']);
+        if (diff.code === 0) for (const f of diff.stdout.split('\0')) if (f) files.add(f);
+      }
     }
+
+    let paths: ChangedPath[] | undefined;
+    if (validBase && usableRemote(opts.remoteUrl)) {
+      await pr.intact('fetched');
+      // The one credentialed call: the base from the run's own URL for this repository.
+      const fetched = await runGit(pr.gitDir, ['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', opts.remoteUrl, `+refs/heads/${base}:${PRIVATE_BASE_REF}`], env, true, pr.internal);
+      await pr.intact('fetched');
+      const mb = fetched.code === 0 ? (await run(['merge-base', PRIVATE_BASE_REF, 'refs/portal/head'])).stdout.trim() : '';
+      if (/^[0-9a-f]{40,64}$/.test(mb)) {
+        const diff = await run(['diff', '--numstat', '--no-renames', '--no-ext-diff', '--no-textconv', '-z', mb, tree]);
+        if (diff.code === 0) {
+          paths = [];
+          for (const rec of diff.stdout.split('\0')) {
+            if (!rec) continue;
+            const m = /^(-|\d+)\t(-|\d+)\t(.+)$/s.exec(rec);
+            if (!m) continue;
+            paths.push({ path: m[3], added: m[1] === '-' ? 0 : Number(m[1]), removed: m[2] === '-' ? 0 : Number(m[2]) });
+            if (paths.length >= MAX_REPORTED_PATHS) break;
+          }
+        }
+      }
+    }
+    return { commits, files: files.size, ...(paths ? { paths } : {}) };
+  } finally {
+    await pr.cleanup();
   }
-  let paths: ChangedPath[] | undefined;
-  try { paths = await changedPaths(repoDir, base, untracked, env, opts.remoteUrl); } catch { paths = undefined; }
-  return { commits, files: files.size, ...(paths ? { paths } : {}) };
 }
 
 /**
@@ -484,6 +590,8 @@ export async function pushBranch(opts: {
   denyPaths?: string[];
   /** The repository's URL from the finalize request: the base is fetched from it and the branch pushed to it (required with denyPaths). */
   remoteUrl?: string;
+  /** The base branch's tip as the portal read it from the host just before the request (required with denyPaths). */
+  baseSha?: string;
 }): Promise<{ sha: string }> {
   const { repoDir, branch, env } = opts;
   if (!BRANCH_RE.test(branch) || branch.includes('..') || branch.includes('//') || branch.endsWith('/') || branch.endsWith('.lock') || branch.includes('/.')) {
@@ -498,20 +606,24 @@ export async function pushBranch(opts: {
 
   if (opts.denyPaths) return pushCheckedBranch({ ...opts, denyPaths: opts.denyPaths, ident });
 
-  const current = (await runGit(repoDir, ['rev-parse', '--abbrev-ref', 'HEAD'], env)).stdout.trim();
-  if (current !== branch) await runGit(repoDir, ['checkout', '-b', branch], env);
+  // An ordinary (not auto-fix) push, in the session repository as before. The local steps run without the request's credentials (a
+  // filter the agent configured would run in `git add`); only the push itself has them. The push still reads the session's own remote
+  // configuration: auto-fix pushes never take this path.
+  const local = withoutCredentials(env);
+  const current = (await runGit(repoDir, ['rev-parse', '--abbrev-ref', 'HEAD'], local)).stdout.trim();
+  if (current !== branch) await runGit(repoDir, ['checkout', '-b', branch], local);
 
   const pathspec = ['.', ...(opts.excludePaths ?? []).filter(Boolean).map((p) => `:(exclude,literal)${p}`)];
-  await runGit(repoDir, ['add', '-A', '--', ...pathspec], env);
-  const staged = await runGit(repoDir, ['diff', '--cached', '--quiet', '--no-ext-diff'], env, true);
+  await runGit(repoDir, ['add', '-A', '--', ...pathspec], local);
+  const staged = await runGit(repoDir, ['diff', '--cached', '--quiet', '--no-ext-diff'], local, true);
   if (staged.code === 1) {
-    await runGit(repoDir, [...ident, 'commit', '--no-verify', '-m', opts.message], env);
+    await runGit(repoDir, [...ident, 'commit', '--no-verify', '-m', opts.message], local);
   } else if (staged.code !== 0) {
     throw new Error(`git diff failed: ${redact(staged.stderr.trim(), env).slice(0, 500)}`);
   }
 
   // The commit to push, resolved once: whatever happens to the branch ref afterwards, this commit is what is pushed.
-  const resolved = await runGit(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`], env, true);
+  const resolved = await runGit(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`], local, true);
   const sha = resolved.stdout.trim();
   if (resolved.code !== 0 || !/^[0-9a-f]{40,64}$/.test(sha)) throw new Error('Refusing to push: the branch commit could not be resolved');
 
@@ -533,27 +645,35 @@ async function sessionExcludes(repoDir: string): Promise<string> {
 
 /**
  * The auto-fix push (pushBranch with denyPaths), done so that nothing the agent can write in its repository is ever read as
- * configuration or run as code by the check or the push:
- *  1. a new bare repository in a fresh temporary folder outside the workspace (no hooks, no config beyond `git init`'s own);
- *  2. the session's HEAD commit is fetched into it by local path (objects only, hash-checked by the fetch);
- *  3. the base branch is fetched from the request's `remoteUrl` (never `.git/config` or `remote get-url`);
- *  4. uncommitted work is committed there through a temporary index over the session's folder as work tree, so the session's
- *     `.git/config` (filters, fsmonitor, hooks) is not read; the session repository itself is left as it is;
+ * configuration or run as code by the check or the push, and so that the credentials only ever go to two git calls:
+ *  1. a new runner-private bare repository (createPrivateRepo: unpredictable 0700 folder, no hooks, its own config only);
+ *  2. the session's HEAD commit is fetched into it by local path (objects copied and hash-checked; no credentials in that call);
+ *  3. the base branch is fetched from the request's `remoteUrl` (never `.git/config` or `remote get-url`) WITH the credentials, and
+ *     its tip must be exactly `baseSha`, the commit the portal read from the host just before the request: a planted `insteadOf`
+ *     or a fake base repository cannot produce that commit;
+ *  4. uncommitted work is committed there through a temporary index over the session's folder as work tree (the session's
+ *     `.git/config`, `.git/info/attributes` and hooks are not read, so no filter, fsmonitor or hook runs);
  *  5. the checks: every path changed from the merge base to the commit, every path of every commit in merge-base..commit (merges
  *     against each parent), and every path that differs between the base TIP and the commit (two-dot, so a protected file deleted or
- *     changed on the base since the fork cannot ride along: such a branch must be rebased on the base);
- *  6. exactly that commit is pushed to `refs/heads/<branch>` of `remoteUrl`; the temporary folder is removed in all cases.
+ *     changed on the base since the fork cannot ride along: such a branch must be rebased on the base). A single entry standing where
+ *     a protected folder is (a symlink or submodule at `infra` or `.github/workflows`) counts as that folder (protectedDirectoryOf);
+ *  6. the private repository is checked unchanged (config, alternates, hooks, attributes) after each fetch and right before the push;
+ *  7. exactly that commit is pushed to `refs/heads/<branch>` of `remoteUrl` WITH the credentials; the folder is removed in all cases.
  *
- * RESIDUAL RISK, stated plainly: the agent shares the microVM with the runner. A process the agent left running could still race this
- * (for example write into the temporary repository, or replace the git binary or the runner's files). The portal's own check after
- * the push (server/autofix/delivery.ts verifyPushedBranch: GitHub compare and tree difference) is independent of this machine, but it
- * runs AFTER the push, so a push-triggered workflow on the fix branch may already have run with the repository's secrets before the
- * portal deletes the branch. The independent control is a repository ruleset restricting who may push changes to
- * `.github/workflows/**`; draft_pr mode also needs runners built from this file (older runners refuse the request and nothing is pushed).
+ * RESIDUAL RISK, stated plainly (structural: the agent and the runner run as the same user in the same microVM):
+ *  - a process the agent left running can still race the runner between a check and the next git call (step 6 narrows, it cannot
+ *    close this), replace the git binary or the runner's files, or read the credentials from /proc/<pid>/environ of the two
+ *    credentialed git calls; nothing here kills the agent's processes;
+ *  - the portal's own check after the push (server/autofix/delivery.ts verifyPushedBranch: GitHub compare and tree difference) is
+ *    independent of this machine, but it runs AFTER the push, so a push-triggered workflow may already have run with the
+ *    repository's secrets before the portal deletes the branch.
+ * Therefore the portal asks a person before every auto-fix push unless its operator sets AUTOFIX_ALLOW_UNATTENDED_PUSH=1
+ * (server/autofix/delivery.ts), and unattended push additionally needs these runners deployed, the agent's processes killed or run
+ * as another user before credentialed git calls, and a repository ruleset restricting pushes to `.github/workflows/**` and tags.
  */
 async function pushCheckedBranch(opts: {
   repoDir: string; base: string; branch: string; message: string; env: Record<string, string>;
-  excludePaths?: string[]; denyPaths: string[]; remoteUrl?: string; ident: string[];
+  excludePaths?: string[]; denyPaths: string[]; remoteUrl?: string; baseSha?: string; ident: string[];
 }): Promise<{ sha: string }> {
   const { repoDir, branch, env } = opts;
   const sources = opts.denyPaths.filter((p) => typeof p === 'string' && p.trim());
@@ -561,10 +681,10 @@ async function pushCheckedBranch(opts: {
     const problem = protectedPatternProblem(g);
     if (problem) throw new ProtectedPathError(`Refusing to push: unsupported protected pattern ${JSON.stringify(g)} (${problem})`);
   }
-  const remoteUrl = String(opts.remoteUrl ?? '');
-  if (!remoteUrl || remoteUrl.startsWith('-') || hasControlChar(remoteUrl)) {
-    throw new ProtectedPathError('Refusing to push: the request carries no remote URL to check the base against');
-  }
+  if (!usableRemote(opts.remoteUrl)) throw new ProtectedPathError('Refusing to push: the request carries no remote URL to check the base against');
+  const remoteUrl = opts.remoteUrl;
+  const baseSha = String(opts.baseSha ?? '');
+  if (!/^[0-9a-f]{40,64}$/.test(baseSha)) throw new ProtectedPathError('Refusing to push: the request carries no base commit to check the base against');
   if (!BRANCH_RE.test(opts.base) || opts.base.includes('..')) throw new ProtectedPathError('Refusing to push: invalid base branch name');
   const patterns = sources.map(compileGlob);
   const refuse = (f: string, where: string): void => {
@@ -574,58 +694,68 @@ async function pushCheckedBranch(opts: {
     const hit = deniedBy(f, patterns, sources);
     if (hit) throw new ProtectedPathError(`Refusing to push: ${shown} is a protected path (${hit})${where}`);
   };
+  // Anything other than a protected path or the push itself is a plain failure of the preparation (errorCode 'failed').
+  const prep = async <T>(what: string, fn: () => Promise<T>): Promise<T> => {
+    try { return await fn(); } catch (e) {
+      if (e instanceof ProtectedPathError || e instanceof FinalizeError) throw e;
+      throw new FinalizeError(`Refusing to push: ${what}: ${redact(e instanceof Error ? e.message : String(e), env).slice(0, 300)}`);
+    }
+  };
 
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'portal-push-'));
+  const pr = await prep('the private repository could not be created', () => createPrivateRepo(repoDir));
   try {
-    const repo = path.join(tmp, 'repo.git');
-    await runGit(tmp, ['init', '--quiet', '--bare', '--template=', repo], env);
-    const inRepo = (args: string[], allowFail = true, internal: Record<string, string> = {}) => runGit(repo, args, env, allowFail, internal);
-
-    // 2. The session's commit, objects only (git upload-pack in the session folder sends them; nothing there is configured for us).
-    const head = await inRepo(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', repoDir, '+HEAD:refs/portal/head']);
-    if (head.code !== 0) throw new Error(`Refusing to push: the session's commit could not be read: ${redact(head.stderr.trim(), env).slice(0, 300)}`);
-    // 3. The base, from the request's URL.
-    const fetched = await inRepo(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', remoteUrl, `+refs/heads/${opts.base}:${PRIVATE_BASE_REF}`]);
+    const run = (args: string[], allowFail = true, extra: Record<string, string> = {}) => runGit(pr.gitDir, args, {}, allowFail, { ...pr.internal, ...extra });
+    await pr.intact('created');
+    // 2. The session's commit, objects only, without credentials.
+    const head = await run(['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', repoDir, '+HEAD:refs/portal/head']);
+    if (head.code !== 0) throw new FinalizeError(`Refusing to push: the session's commit could not be read: ${redact(head.stderr.trim(), env).slice(0, 300)}`);
+    await pr.intact('fetched');
+    // 3. The base, from the request's URL, with the credentials; its tip must be the commit the portal read.
+    const fetched = await runGit(pr.gitDir, ['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', '--', remoteUrl, `+refs/heads/${opts.base}:${PRIVATE_BASE_REF}`], env, true, pr.internal);
+    await pr.intact('fetched');
     if (fetched.code !== 0) throw new ProtectedPathError('Refusing to push: the base branch could not be fetched to check the changed files');
-    const shallow = await inRepo(['rev-parse', '--is-shallow-repository']);
+    const baseTip = (await run(['rev-parse', '--verify', '--quiet', `${PRIVATE_BASE_REF}^{commit}`])).stdout.trim();
+    if (baseTip !== baseSha) {
+      throw new ProtectedPathError(`Refusing to push: the fetched base branch is not the commit the portal read (${baseSha.slice(0, 12)}); it moved, or the fetch did not reach the repository. Try again.`);
+    }
+    const shallow = await run(['rev-parse', '--is-shallow-repository']);
     if (shallow.code !== 0 || shallow.stdout.trim() !== 'false') throw new ProtectedPathError("Refusing to push: the session's history is incomplete (shallow) and cannot be checked");
-    const headSha = (await inRepo(['rev-parse', '--verify', '--quiet', 'refs/portal/head^{commit}'])).stdout.trim();
-    const baseTip = (await inRepo(['rev-parse', '--verify', '--quiet', `${PRIVATE_BASE_REF}^{commit}`])).stdout.trim();
-    if (!/^[0-9a-f]{40,64}$/.test(headSha) || !/^[0-9a-f]{40,64}$/.test(baseTip)) throw new ProtectedPathError('Refusing to push: the commits could not be resolved');
+    const headSha = (await run(['rev-parse', '--verify', '--quiet', 'refs/portal/head^{commit}'])).stdout.trim();
+    if (!/^[0-9a-f]{40,64}$/.test(headSha)) throw new ProtectedPathError('Refusing to push: the commits could not be resolved');
 
     // 4. Uncommitted work, committed here: the session folder is only read as a work tree.
-    await fs.mkdir(path.join(repo, 'info'), { recursive: true });
-    await fs.writeFile(path.join(repo, 'info', 'exclude'), await sessionExcludes(repoDir));
-    const index = { GIT_INDEX_FILE: path.join(tmp, 'index') };
-    const wt = ['--git-dir', repo, '--work-tree', repoDir];
-    const inTree = (args: string[]) => runGit(repoDir, [...wt, ...args], env, false, index);
-    await inTree(['read-tree', headSha]);
-    const pathspec = ['.', ...(opts.excludePaths ?? []).filter(Boolean).map((p) => `:(exclude,literal)${p}`)];
-    await inTree(['add', '-A', '--', ...pathspec]);
-    const tree = (await inTree(['write-tree'])).stdout.trim();
-    const headTree = (await inRepo(['rev-parse', '--verify', '--quiet', `${headSha}^{tree}`])).stdout.trim();
-    let sha = headSha;
-    if (tree !== headTree) {
-      sha = (await runGit(repo, [...opts.ident, 'commit-tree', tree, '-p', headSha, '-m', opts.message], env)).stdout.trim();
-    }
-    if (!/^[0-9a-f]{40,64}$/.test(sha)) throw new Error('Refusing to push: the branch commit could not be created');
+    const sha = await prep('the change could not be committed', async () => {
+      await fs.mkdir(path.join(pr.gitDir, 'info'), { recursive: true });
+      await fs.writeFile(path.join(pr.gitDir, 'info', 'exclude'), await sessionExcludes(repoDir));
+      const wt = ['--git-dir', pr.gitDir, '--work-tree', repoDir];
+      const inTree = (args: string[]) => runGit(repoDir, [...wt, ...args], {}, false, { ...pr.internal, GIT_INDEX_FILE: path.join(pr.tmp, 'index') });
+      await inTree(['read-tree', headSha]);
+      const pathspec = ['.', ...(opts.excludePaths ?? []).filter(Boolean).map((p) => `:(exclude,literal)${p}`)];
+      await inTree(['add', '-A', '--', ...pathspec]);
+      const tree = (await inTree(['write-tree'])).stdout.trim();
+      const headTree = (await run(['rev-parse', '--verify', '--quiet', `${headSha}^{tree}`])).stdout.trim();
+      let out = headSha;
+      if (tree !== headTree) out = (await run([...opts.ident, 'commit-tree', tree, '-p', headSha, '-m', opts.message], false)).stdout.trim();
+      if (!/^[0-9a-f]{40,64}$/.test(out)) throw new FinalizeError('Refusing to push: the branch commit could not be created');
+      return out;
+    });
 
     // 5. The checks, all in the private repository.
-    const mbRes = await inRepo(['merge-base', baseTip, sha]);
+    const mbRes = await run(['merge-base', baseTip, sha]);
     const mb = mbRes.stdout.trim();
     if (mbRes.code !== 0 || !/^[0-9a-f]{40,64}$/.test(mb)) throw new ProtectedPathError('Refusing to push: the branch has no common history with the base branch');
     const diffArgs = ['diff', '--name-only', '--no-renames', '--no-ext-diff', '--no-textconv', '-z'];
-    const diff = await inRepo([...diffArgs, mb, sha]);
+    const diff = await run([...diffArgs, mb, sha]);
     if (diff.code !== 0) throw new ProtectedPathError('Refusing to push: the changed files could not be listed');
     for (const f of diff.stdout.split('\0')) if (f) refuse(f, '');
     // Every commit that will be pushed, too: a protected file added and reverted on the way still sits in the pushed history. Merge
     // commits are listed against each parent (--diff-merges=separate), so a file a merge resolution adds is seen; a merge of the base
     // into the branch then lists the base's own changes as well, which can refuse a push that is in fact fine (fails closed).
-    const count = await inRepo(['rev-list', '--count', `${mb}..${sha}`]);
+    const count = await run(['rev-list', '--count', `${mb}..${sha}`]);
     const n = parseInt(count.stdout.trim(), 10);
     if (count.code !== 0 || !Number.isFinite(n)) throw new ProtectedPathError('Refusing to push: the commits could not be counted');
     if (n > MAX_SCANNED_COMMITS) throw new ProtectedPathError(`Refusing to push: too many commits to check (${n}, at most ${MAX_SCANNED_COMMITS})`);
-    const log = await inRepo(['log', '--name-only', '--no-renames', '--no-ext-diff', '--no-textconv', '--diff-merges=separate', '-z', '--format=', `${mb}..${sha}`]);
+    const log = await run(['log', '--name-only', '--no-renames', '--no-ext-diff', '--no-textconv', '--diff-merges=separate', '-z', '--format=', `${mb}..${sha}`]);
     if (log.code !== 0) throw new ProtectedPathError('Refusing to push: the commits could not be listed');
     const names = log.stdout.split('\0').filter(Boolean);
     if (names.length > MAX_SCANNED_PATHS) throw new ProtectedPathError(`Refusing to push: too many changed paths in the commits to check (at most ${MAX_SCANNED_PATHS})`);
@@ -633,15 +763,16 @@ async function pushCheckedBranch(opts: {
     // Two-dot: what the branch's tree differs in from the base TIP. A protected file the base deleted or changed since the fork would
     // otherwise come back with the branch. This also refuses a fine fix whose base moved a protected file after the fork: it must be
     // rebased on the base branch first (fails closed).
-    const tip = await inRepo([...diffArgs, baseTip, sha]);
+    const tip = await run([...diffArgs, baseTip, sha]);
     if (tip.code !== 0) throw new ProtectedPathError('Refusing to push: the difference from the base branch could not be listed');
     for (const f of tip.stdout.split('\0')) if (f) refuse(f, ` (it differs from the tip of ${opts.base}, which changed it since the fix branched off; rebase the fix on the base branch)`);
 
-    // 6. Exactly the checked commit, to this branch only, at the request's URL.
+    // 7. Exactly the checked commit, to this branch only, at the request's URL.
     await testBeforePush(repoDir, branch);
-    await runGit(repo, ['-c', 'push.followTags=false', 'push', '--quiet', '--no-verify', '--no-follow-tags', '--', remoteUrl, `${sha}:refs/heads/${branch}`], env);
+    await pr.intact('before-push');
+    await runGit(pr.gitDir, ['-c', 'push.followTags=false', 'push', '--quiet', '--no-verify', '--no-follow-tags', '--', remoteUrl, `${sha}:refs/heads/${branch}`], env, false, pr.internal);
     return { sha };
   } finally {
-    await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined);
+    await pr.cleanup();
   }
 }

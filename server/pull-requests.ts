@@ -323,6 +323,28 @@ export async function listBranchFiles(repo: Repository, base: string, head: stri
 }
 
 /**
+ * The commit a branch points at on the host, read just before an auto-fix push and sent to the runner as `baseSha` (the runner refuses
+ * a fetched base that is not this commit). GitHub only (`git/ref/heads/<b>`); null when it cannot be read (callers fail closed).
+ */
+export async function branchHeadSha(repo: Repository, branch: string): Promise<string | null> {
+  if (hostKind(repo) !== 'github') return null;
+  const slug = parseGitHubOwnerRepo(repo.url);
+  if (!slug) return null;
+  try {
+    const creds = await clients.credentials(repo, 'github');
+    if (creds?.kind !== 'github') return null;
+    const res = await clients.fetch(`https://api.github.com/repos/${encodeURIComponent(slug.owner)}/${encodeURIComponent(slug.repo)}/git/ref/heads/${refPath(branch)}`, {
+      headers: { Authorization: `Bearer ${creds.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) return null;
+    const j: any = await res.json().catch(() => null);
+    const sha = j?.object?.type === 'commit' ? String(j.object.sha ?? '') : '';
+    return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+  } catch { return null; }
+}
+
+/**
  * The paths whose content differs between the TIP of `base` and the head of `head` (two-dot, tree against tree), read from the host,
  * for the auto-fix check after a push: the compare API above is three-dot (from the merge base), so it misses a protected file the base
  * deleted or changed since the fix branched off, which the branch would bring back. GitHub only, through the git data API:

@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { classifyPushError, detectChanges, gitProcessEnv, pushBranch, ProtectedPathError, SAFE_GIT_CONFIG } from './runner-finalize.ts';
+import { classifyPushError, detectChanges, FinalizeError, gitProcessEnv, pushBranch, ProtectedPathError, SAFE_GIT_CONFIG } from './runner-finalize.ts';
 import type { PushErrorCode } from './runner-finalize.ts';
 import { parseRunnerRepos } from './runner-repos.ts';
 import { parseSnapshot, restoreWorkspace } from './runner-snapshot.ts';
@@ -44,11 +44,16 @@ export interface FinalizeRequest {
    * runner-private repository, never from the session repository's own remote configuration. Required with denyPaths.
    */
   remoteUrl?: string;
+  /**
+   * The base branch's tip as the portal read it from the host just before this request (auto-fix sessions): the base fetched from
+   * `remoteUrl` must be exactly this commit. Required with denyPaths.
+   */
+  baseSha?: string;
 }
 
 export type FinalizeValidation = { ok: true; request: FinalizeRequest } | { ok: false; error: string };
 
-const FINALIZE_FIELDS = new Set(['mode', 'repo', 'base', 'branch', 'message', 'protectedBranches', 'defaultBranch', 'identity', 'env', 'snapshot', 'denyPaths', 'remoteUrl']);
+const FINALIZE_FIELDS = new Set(['mode', 'repo', 'base', 'branch', 'message', 'protectedBranches', 'defaultBranch', 'identity', 'env', 'snapshot', 'denyPaths', 'remoteUrl', 'baseSha']);
 const MAX_DENY = 100;
 const MAX_DENY_LEN = 300;
 const REPO_FOLDER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -145,6 +150,11 @@ export function validateFinalizeRequest(raw: unknown): FinalizeValidation {
     }
     remoteUrl = u;
   }
+  let baseSha: string | undefined;
+  if (obj.baseSha !== undefined) {
+    if (typeof obj.baseSha !== 'string' || !/^[0-9a-f]{40,64}$/.test(obj.baseSha)) return invalid('"baseSha" must be a commit id');
+    baseSha = obj.baseSha;
+  }
   let env: Record<string, string> | undefined;
   if (obj.env !== undefined) {
     const e = validGitEnv(obj.env);
@@ -165,6 +175,7 @@ export function validateFinalizeRequest(raw: unknown): FinalizeValidation {
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       ...(denyPaths ? { denyPaths } : {}),
       ...(remoteUrl ? { remoteUrl } : {}),
+      ...(baseSha ? { baseSha } : {}),
     },
   };
 }
@@ -204,6 +215,16 @@ function scrub(text: string, env: Record<string, string> = {}): string {
 }
 
 /**
+ * Tests only: a function the tests may put on globalThis under this symbol maps a repository's https URL to a local test remote.
+ * Absent in the runners: the URL is used as given.
+ */
+const TEST_REMOTE_URL = Symbol.for('agent-portal.test.remoteUrl');
+function testRemoteUrl(url: string): string {
+  const fn = (globalThis as Record<symbol, unknown>)[TEST_REMOTE_URL];
+  return typeof fn === 'function' ? String((fn as (u: string) => string)(url)) : url;
+}
+
+/**
  * Contract A/B: for each repository this run cloned, emit one `repo-changes` event when it has changes.
  * Read-only: nothing is committed or pushed. A repository that cannot be checked is skipped.
  */
@@ -221,10 +242,9 @@ export async function reportRepoChanges(reposRaw: unknown[] | undefined, workDir
         base = head ? head.replace(/^origin\//, '') : undefined;
       }
       if (!base) continue;
-      // The repository's git settings and trust option go to each git call (git's environment is an allowlist, not process.env). The
-      // base for this report is fetched from the clone's configured push URL: the report only decides whether a person is asked; the
-      // auto-fix push itself fetches the base from the finalize request's URL in a private repository (pushBranch).
-      const changes = await detectChanges(dir, base, { env: trusted });
+      // The report is built in a runner-private repository (detectChanges): the session repository's configuration is never read, and
+      // the repository's credentials go only to the one fetch of the base from the run's own URL for it (never .git/config).
+      const changes = await detectChanges(dir, base, { env: trusted, remoteUrl: testRemoteUrl(repo.url) });
       if (changes.commits > 0 || changes.files > 0) {
         // `paths` (per-file line counts) feeds the portal's auto-fix diff guardrails; left out when git could not produce it.
         emit({ type: 'repo-changes', repo: repo.name, base, commits: changes.commits, files: changes.files, ...(changes.paths ? { paths: changes.paths } : {}) });
@@ -283,9 +303,10 @@ export async function runFinalize(req: FinalizeRequest, where: FinalizeWhere, em
       ...(req.identity ? { identity: req.identity } : {}),
       ...(req.denyPaths ? { denyPaths: req.denyPaths } : {}),
       ...(req.remoteUrl ? { remoteUrl: req.remoteUrl } : {}),
+      ...(req.baseSha ? { baseSha: req.baseSha } : {}),
     });
     emit({ type: 'repo-pushed', repo: req.repo, branch: req.branch, sha });
   } catch (e) {
-    fail(e instanceof Error ? e.message : String(e), e instanceof ProtectedPathError ? 'protected-path' : undefined);
+    fail(e instanceof Error ? e.message : String(e), e instanceof ProtectedPathError ? 'protected-path' : e instanceof FinalizeError ? 'failed' : undefined);
   }
 }

@@ -1,7 +1,7 @@
 /** Diff guardrails for auto-fix: pure checks of a proposed change against the policy. No I/O. */
 
 import type { AutofixPolicy } from './policy.ts';
-import { hasControlChar, normaliseRepoPath, protectedGlobMatches, protectedPatternProblem } from '../agent/runner-finalize.ts';
+import { hasControlChar, normaliseRepoPath, protectedDirectoryOf, protectedGlobMatches, protectedPatternProblem } from '../agent/runner-finalize.ts';
 
 /** A rename's old path is not carried here; the runner reports renames as removal + addition (--no-renames), so both paths are checked. */
 export interface DiffFile { path: string; added: number; removed: number }
@@ -30,7 +30,8 @@ export function checkDiff(files: DiffFile[], p: AutofixPolicy, kind: string): { 
     const control = hasControlChar(norm);
     const shown = control ? JSON.stringify(norm) : norm;
     if (control) violations.push(`${shown} contains a control character`);
-    let hit = usable.filter(g => protectedGlobMatches(norm, g));
+    // A single entry standing where a protected folder is (a symlink or submodule at `infra`) counts as that folder.
+    let hit = usable.filter(g => protectedGlobMatches(norm, g) || protectedDirectoryOf(norm, g));
     // For deps, the lockfile globs are exempt, but only when they are the sole globs the path matches.
     if (kind === 'deps' && hit.every(g => DEPS_LOCKFILE_GLOBS.has(g))) hit = [];
     if (hit.length) violations.push(`${shown} is a protected path (${hit[0]})`);
