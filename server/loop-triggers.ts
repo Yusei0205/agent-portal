@@ -24,6 +24,7 @@ import { getSessionsRepository } from './repositories/sessions.ts';
 import { getProjectRepository } from './repositories/projects.ts';
 import { getGitReposRepository } from './repositories/git-repos.ts';
 import { newLoopState } from './workflows/loop.ts';
+import type { CheckStep } from './agent/runner-checks.ts';
 import { startRun } from './workflows/driver.ts';
 import { requestRepoPrep } from './agent/repo-prep.ts';
 import { emit } from './events.ts';
@@ -167,6 +168,15 @@ export interface FireOptions {
   userId?: string;
   /** The project to run in, for a built-in spec (a project's own spec runs in its project). */
   projectId?: string;
+  /**
+   * Overrides for a caller that starts a spec on someone's behalf (auto-fix). When set, each replaces the value read from the spec's
+   * trigger_config (runAs, repoIds, engine) or stop_config (checks). The same rules apply to them: runAs must still be an editor or
+   * owner of the project, checks are validated, and only repositories of the project are kept.
+   */
+  runAs?: string;
+  checks?: CheckStep[];
+  repoIds?: string[];
+  engine?: string;
 }
 
 const ACTIVE = new Set(['pending', 'running']);
@@ -180,7 +190,8 @@ export async function fireLoopSpec(spec: LoopSpecRecord, opts: FireOptions): Pro
   const stop = parseJson<Record<string, unknown>>(spec.stop_config, {});
   const specs = getLoopSpecsRepository();
 
-  const runAs = opts.source === 'manual' ? opts.userId : typeof config.runAs === 'string' ? config.runAs : undefined;
+  const runAs = opts.runAs !== undefined ? opts.runAs
+    : opts.source === 'manual' ? opts.userId : typeof config.runAs === 'string' ? config.runAs : undefined;
   if (!runAs) return { ok: false, status: 409, reason: 'This trigger has no owner. Save the spec again from a signed-in browser to set one.' };
   const role = await getProjectRepository().roleOf(projectId, runAs);
   if (role !== 'owner' && role !== 'editor') {
@@ -211,13 +222,13 @@ export async function fireLoopSpec(spec: LoopSpecRecord, opts: FireOptions): Pro
 
   let loopState: string;
   try {
-    loopState = newLoopState(stop.stopRules ?? stop, { checks: stop.checks });
+    loopState = newLoopState(stop.stopRules ?? stop, { checks: opts.checks ?? stop.checks });
   } catch (e) {
     return { ok: false, status: 400, reason: `The spec's checks are not allowed: ${(e as Error).message}` };
   }
 
   // Only repositories that belong to the project.
-  const wanted = Array.isArray(config.repoIds) ? config.repoIds.map(String) : [];
+  const wanted = opts.repoIds ? opts.repoIds.map(String) : Array.isArray(config.repoIds) ? config.repoIds.map(String) : [];
   let repoIds: string[] = [];
   if (wanted.length) {
     const valid = new Set((await getGitReposRepository().listByProject(projectId)).map((r) => r.id));
@@ -226,7 +237,8 @@ export async function fireLoopSpec(spec: LoopSpecRecord, opts: FireOptions): Pro
 
   const id = generateId();
   const ts = now();
-  const engine = ENGINES.includes(String(config.engine)) ? String(config.engine) : 'demo';
+  const engineWanted = opts.engine ?? config.engine;
+  const engine = ENGINES.includes(String(engineWanted)) ? String(engineWanted) : 'demo';
   await sessions.createWorkflow({
     id, project_id: projectId, goal, status: 'pending', engine,
     trust_tools: 0,

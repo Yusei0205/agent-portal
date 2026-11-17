@@ -87,6 +87,7 @@ import { registerJiraRoutes } from './jira.ts';
 import { registerBrowserLiveRoutes, handleBrowserLiveUpgrade } from './browser-live.ts';
 import { shutdownAllBrowsers } from './agent/browser-manager.ts';
 import { registerSessionIntake } from './autofix/session-intake.ts';
+import { registerFixPipeline } from './autofix/pipeline.ts';
 import './review-lifecycle.ts'; // Register review lifecycle hook (wires run stats → review row)
 import { isServableStoragePath } from './storage-path.ts';
 
@@ -317,6 +318,7 @@ export async function startServer(
   registerEngineModelRoutes();
   registerSessionContextRoutes();
   registerSessionIntake();
+  registerFixPipeline();
   registerJiraRoutes();
   registerBrowserLiveRoutes();
 

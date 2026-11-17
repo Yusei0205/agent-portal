@@ -9,6 +9,7 @@ import { parseGitHubOwnerRepo } from '../review.ts';
 import { computeFingerprint } from './fingerprint.ts';
 import { scrubEvidence } from './scrub.ts';
 import { getAutofixPolicy } from './policy.ts';
+import { maybeProcess } from './pipeline.ts';
 import type { FindingCandidate } from './github-events.ts';
 
 type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
@@ -68,13 +69,16 @@ export async function recordFinding(projectId: string, c: FindingCandidate, evid
 
   if (created) {
     if (policy.mode === 'off') await repos.transition(finding.id, ['new'], { status: 'suppressed' });
+    else void maybeProcess(finding.id); // in the background; it never rejects
     return { finding: (await repos.getById(finding.id)) ?? finding, created };
   }
 
   const cooling = finding.cooldown_until !== null && Date.parse(finding.cooldown_until) > Date.now();
   if ((finding.status === 'dismissed' || finding.status === 'suppressed') && cooling) return { finding, created }; // counter only
   if (finding.status === 'resolved') {
-    await repos.transition(finding.id, ['resolved'], { status: 'new', evidence: clean, commit_sha: c.headSha || finding.commit_sha });
+    if (await repos.transition(finding.id, ['resolved'], { status: 'new', evidence: clean, commit_sha: c.headSha || finding.commit_sha })) {
+      void maybeProcess(finding.id); // reopened: in the background; it never rejects
+    }
   } else if (finding.status !== 'fixing' && finding.status !== 'pr_open') {
     // A finding being fixed keeps the evidence and commit the fix works from; only the counter moves.
     await repos.transition(finding.id, [finding.status], { status: finding.status, evidence: clean, commit_sha: c.headSha || finding.commit_sha });

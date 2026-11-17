@@ -134,7 +134,15 @@ export type RunLifecycleEvent = 'start' | 'done' | 'failed' | 'cancelled';
  * cannot reproduce: it keeps only the message) and the same human-event count recoverAfterInterruption uses, so it cannot race with
  * recovery appending its own "↻" event.
  */
-export interface RunLifecycleDetail { recovering?: boolean }
+export interface RunLifecycleDetail {
+  recovering?: boolean;
+  /**
+   * Only for a loop session, on 'done' and 'failed': whether the loop stopped after this run (true) or started its next iteration
+   * (false). For a loop session these two events fire after the loop has decided, so a hook can tell a finished session from one
+   * finished iteration. Absent for an ordinary session.
+   */
+  loopEnded?: boolean;
+}
 export type RunLifecycleHook = (workflowId: string, runId: string, event: RunLifecycleEvent, detail?: RunLifecycleDetail) => void | Promise<void>;
 
 const _runLifecycleHooks = new Set<{ fn: RunLifecycleHook }>();
@@ -727,8 +735,9 @@ ${agentRun.goal}`;
     // Update workflow: iteration count + 1, status done, last_turn_at
     // Use conditional to avoid overwriting a stop that arrived concurrently.
     const ts = now();
+    let wfFinished = false;
     if (runFinished) {
-      const wfFinished = await repo.updateWorkflowConditional(workflowId, 'running', {
+      wfFinished = await repo.updateWorkflowConditional(workflowId, 'running', {
         status: 'done',
         stop_reason: '',
         last_turn_at: ts,
@@ -737,8 +746,9 @@ ${agentRun.goal}`;
 
       if (wfFinished) {
         await repo.incrementWorkflowIteration(workflowId);
-        // Notify lifecycle hook (e.g. finalises associated review stats and auto-post)
-        fireHook(workflowId, runId, 'done');
+        // Notify lifecycle hook (e.g. finalises associated review stats and auto-post). A loop session's hook fires below, once the
+        // loop has decided whether to go on.
+        if (!loopState) fireHook(workflowId, runId, 'done');
       }
     }
     notifyDashboard(agentRun.projectId);
@@ -756,7 +766,10 @@ ${agentRun.goal}`;
 
     // A loop session decides here whether to go on: the next run is started, or the session stops with the reason.
     if (runFinished && loopState) {
-      try { await loopAfterRun(workflowId, { result, failed: false, runId }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
+      let decision: Awaited<ReturnType<typeof loopAfterRun>> = null;
+      try { decision = await loopAfterRun(workflowId, { result, failed: false, runId }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
+      // Without a decision (afterRun failed) no next iteration was started, so the session has ended.
+      if (wfFinished) fireHook(workflowId, runId, 'done', { loopEnded: decision ? decision.action === 'stop' : true });
     } else if (runFinished) {
       // A message the person sent while this turn was running was not part of it: read it now, in the next turn.
       await import('../workflows/driver.ts').then((d) => d.continueWithQueuedMessages(workflowId)).catch(() => undefined);
@@ -824,6 +837,7 @@ ${agentRun.goal}`;
 
     // Notify lifecycle hook — fires for both abort/cancel and real failures.
     // 'cancelled' keeps the review out of 'running' limbo; 'failed' marks actual errors.
+    let failedHookDetail: RunLifecycleDetail | null = null;
     if (aborted) {
       fireHook(workflowId, runId, 'cancelled');
     } else {
@@ -835,7 +849,9 @@ ${agentRun.goal}`;
           recovering = trailingRecoveries(bodies) < MAX_AUTO_RECOVERIES;
         } catch { /* keep false */ }
       }
-      fireHook(workflowId, runId, 'failed', { recovering });
+      // A loop session's hook fires below, once the loop has decided whether to go on.
+      if (loopState) failedHookDetail = { recovering };
+      else fireHook(workflowId, runId, 'failed', { recovering });
       // Deliver child-result to parent even on failure (F7), with why the run failed
       if (workflow.parent_id) {
         await deliverChildResult(workflowId, msg);
@@ -853,7 +869,9 @@ ${agentRun.goal}`;
       if (cutOff) interruption = { why: cutOff.why, delayMs: cutOff.kind === 'engine-connection' ? engineRetryDelayMs() : 0 };
       console.error(`[runner] Run ${runId} failed:`, e);
       if (loopState) {
-        try { await loopAfterRun(workflowId, { result: msg, failed: true }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
+        let decision: Awaited<ReturnType<typeof loopAfterRun>> = null;
+        try { decision = await loopAfterRun(workflowId, { result: msg, failed: true }); } catch (e2) { console.error('[loop] afterRun failed:', e2); }
+        if (failedHookDetail) fireHook(workflowId, runId, 'failed', { ...failedHookDetail, loopEnded: decision ? decision.action === 'stop' : true });
       }
     }
   } finally {

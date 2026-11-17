@@ -9,8 +9,12 @@ import { getSessionsRepository } from '../server/repositories/sessions.ts';
 import { saveAutofixPolicy } from '../server/autofix/policy.ts';
 import { RECOVERY_PREFIX, MAX_AUTO_RECOVERIES } from '../server/workflows/recovery.ts';
 import { now } from '../server/util.ts';
+import { getLoopSpecsRepository } from '../server/repositories/loop-specs.ts';
+import { fireLoopSpec } from '../server/loop-triggers.ts';
+import type { RunLifecycleDetail } from '../server/agent/runner.ts';
 
 let projectId = '';
+let adminId = '';
 let seq = 0;
 const tick = () => new Promise((r) => setTimeout(r, 60));
 const findings = () => getAutofixFindingsRepository().list(projectId, { limit: 50 });
@@ -36,6 +40,7 @@ before(async () => {
   await fetchJson(baseUrl, '/api/auth/setup', { body: { email: 'a@hk.test', password: 'adminpassword1', name: 'A' } });
   const cookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'a@hk.test', password: 'adminpassword1' } })).cookie ?? '';
   projectId = ((await fetchJson(baseUrl, '/api/projects', { body: { name: 'Hooks' }, cookie })).body as { project: { id: string } }).project.id;
+  adminId = String((((await fetchJson(baseUrl, '/api/auth/state', { cookie })).body as Record<string, unknown>).user as Record<string, unknown>).id);
 });
 after(() => cleanup());
 beforeEach(async () => {
@@ -168,5 +173,31 @@ describe('session_failed intake', () => {
     assert.equal(await skipCase({ kind: 'automation' }), 0);
     assert.equal(await skipCase({ noProject: true }), 0);
     assert.equal(await skipCase({}), 1, 'control: an ordinary session still creates one');
+  });
+});
+
+describe('loop sessions', () => {
+  it("a loop session's 'done' hook fires after the loop has decided, and says whether the loop ended", async () => {
+    const spec = await getLoopSpecsRepository().createSpec({
+      id: `spec-hook-${Date.now()}`, project_id: projectId, name: 'one iteration', description: null, trigger_type: 'manual', trigger_config: '{}',
+      goal_template: 'Say hello', rules: null, stop_config: '{}', max_iterations: 1, enabled: 1, is_builtin: 0, created_at: now(),
+    });
+    const seen: Array<{ event: string; detail?: RunLifecycleDetail; status: string }> = [];
+    let wfId = '';
+    const off = addRunLifecycleHook(async (w, _r, event, detail) => {
+      if (w !== wfId) return;
+      const status = String((await getSessionsRepository().getWorkflowById(w))?.status);
+      seen.push({ event, detail, status });
+    });
+    try {
+      const r = await fireLoopSpec(spec, { source: 'manual', userId: adminId, engine: 'demo' });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      wfId = (r as { workflowId: string }).workflowId;
+      for (let i = 0; i < 300 && !seen.some((s) => s.event === 'done'); i++) await new Promise((res) => setTimeout(res, 50));
+    } finally { off(); }
+    const done = seen.find((s) => s.event === 'done');
+    assert.ok(done, JSON.stringify(seen));
+    assert.equal(done.detail?.loopEnded, true, 'one iteration of one: the loop stopped');
+    assert.notEqual(done.status, 'running');
   });
 });
