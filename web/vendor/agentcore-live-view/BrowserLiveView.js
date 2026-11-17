@@ -20,11 +20,15 @@ export const BrowserLiveView = ({ signedUrl: externalSignedUrl, remoteWidth = DE
     const resizeObserverRef = useRef(null);
     const mutationObserverRef = useRef(null);
     const divIdRef = useRef(`dcv-display-${++instanceCounter}`);
+    // Portal change: the DCV client renames the whole browser tab to "<host> - Amazon DCV" when it connects, and leaves
+    // it that way. Keep the portal's own title: it is passed to DCV as customTitle, and put back on unmount.
+    const pageTitleRef = useRef(typeof document !== 'undefined' ? document.title : '');
     // Cleanup on unmount — disconnect DCV connection and observers
     useEffect(() => {
         mountedRef.current = true;
         return () => {
             mountedRef.current = false;
+            if (typeof document !== 'undefined' && /Amazon DCV$/.test(document.title)) document.title = pageTitleRef.current;
             connectionRef.current?.disconnect();
             resizeObserverRef.current?.disconnect();
             mutationObserverRef.current?.disconnect();
@@ -176,6 +180,7 @@ export const BrowserLiveView = ({ signedUrl: externalSignedUrl, remoteWidth = DE
                 logLevel: dcv.LogLevel.INFO,
                 observers: { httpExtraSearchParams: httpExtraSearchParamsCb },
                 divId: divIdRef.current,
+                customTitle: pageTitleRef.current || undefined,
             }, uiConfig: {
                 toolbar: { visible: false, fullscreenButton: false, multimonitorButton: false },
             } }) }));
