@@ -506,7 +506,7 @@ async function runPullRequestSteps(
     const { verifyPushedBranch } = await import('./autofix/delivery.ts');
     const verdict = await verifyPushedBranch(plan.findingId, repo, baseBranch, branch);
     if (!verdict.ok) {
-      const deleted = await deleteRemoteBranch(repo, branch);
+      const deleted = await deleteRemoteBranch(repo, branch).catch(() => false);
       const error = `${verdict.reason}. ${deleted ? `The branch ${branch} was deleted` : `Delete the branch ${branch}`}; no pull request was opened.`.slice(0, 500);
       await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'protected-path' });
       return { kind: 'blocked', reason: verdict.reason, violations: verdict.violations, repo: String(repo.name ?? ''), branch };

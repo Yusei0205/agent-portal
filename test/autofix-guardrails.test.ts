@@ -73,3 +73,45 @@ test('leading slash and doubled slashes are normalised', () => {
   assert.equal(checkDiff([f('/.github/workflows/ci.yml')], p, 'tests').ok, false);
   assert.equal(checkDiff([f('.github//workflows//ci.yml')], p, 'tests').ok, false);
 });
+
+// ── Round 2 of the Task 9 review: one matcher with the runner, control characters, dotfiles ──
+
+import { deniedBy, globToRegExp } from '../server/agent/runner-finalize.ts';
+
+test('a newline inside a path does not hide it from any default protected glob', () => {
+  for (const path of ['.github/workflows/a b\nc.yml', 'a\nb/.env', 'x\ny/key.pem', 'a\nb/package-lock.json', 'infra/x\ny']) {
+    const r = checkDiff([f(path)], p, 'tests');
+    assert.equal(r.ok, false, JSON.stringify(path));
+  }
+});
+test('dotfiles and dot-directories under a protected directory match', () => {
+  for (const path of ['infra/.tf', 'infra/.main\n.tf', '.github/workflows/.ci.yml', '.github/workflows/.ci\n.yml', 'infra/.a/.b']) {
+    const r = checkDiff([f(path)], p, 'tests');
+    assert.equal(r.ok, false, JSON.stringify(path));
+    assert.ok(r.violations.some((v) => /protected path/.test(v)), JSON.stringify(path));
+  }
+});
+test('a path with a control character is a violation even when no glob matches it', () => {
+  for (const path of ['src/a\nb.ts', 'src/a\rb.ts', 'src/a\tb.ts', 'src/a\x7fb.ts', 'src/\x01.ts']) {
+    const r = checkDiff([f(path)], p, 'tests');
+    assert.equal(r.ok, false, JSON.stringify(path));
+    assert.ok(r.violations.some((v) => /control character/.test(v)), JSON.stringify(path));
+  }
+  assert.equal(checkDiff([f('src/é ü.ts')], p, 'tests').ok, true, 'unicode and spaces are fine');
+});
+test('the server and the runner judge every path the same way (one matcher)', () => {
+  const res = p.protected_paths.map(globToRegExp);
+  for (const path of [
+    '.github/workflows/ci.yml', '.github/workflows/.ci.yml', '.github/ci.yml', 'infra/.tf', 'infra/.a/.b', 'src/infra/x', '.env', 'a/.env.x',
+    'a/env', 'k.pem', 'a/.b/c.PEM', 'package-lock.json', '.x/package-lock.json', 'src/a.ts', 'README.md', 'x\ny/key.pem', 'infra/x\ny',
+  ]) {
+    const server = !checkDiff([f(path)], { ...p, protected_paths: p.protected_paths }, 'tests').violations.every((v) => !/protected path/.test(v));
+    assert.equal(server, deniedBy(path, res, p.protected_paths) !== null, JSON.stringify(path));
+  }
+});
+test('the matcher stays fast on a pathological path (no suffix expansion)', () => {
+  const deep = 'a/'.repeat(20000) + 'package-lock.json';
+  const t0 = Date.now();
+  assert.equal(checkDiff([f(deep)], p, 'tests').ok, false);
+  assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
+});

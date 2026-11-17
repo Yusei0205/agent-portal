@@ -279,7 +279,7 @@ describe('pushBranch with denyPaths', () => {
     git(work, 'commit', '-m', 'sneaky');
     git(work, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
     fs.writeFileSync(path.join(work, 'a.txt'), 'trivial\n');
-    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/tests-2' }), /\.github\/workflows\/ci\.yml is a protected path/);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/tests-2' }), /"\.github\/workflows\/ci\.yml" is a protected path/);
     assert.equal(execFileSync('git', ['ls-remote', remote, 'refs/heads/autofix/tests-2'], { encoding: 'utf8' }).trim(), '');
   });
 
@@ -302,6 +302,85 @@ describe('pushBranch with denyPaths', () => {
     assert.equal(validateFinalizeRequest({ ...req, denyPaths: [''] }).ok, false);
     const none = validateFinalizeRequest(req);
     assert.ok(none.ok && none.request.denyPaths === undefined);
+  });
+});
+
+describe('round 2: newline and dotfile paths, tags and intermediate commits', () => {
+  const opts = { base: 'main', protectedPatterns: ['main'], defaultBranch: 'main', message: 'fix', env: {}, denyPaths: DEFAULT_DENY };
+  const lsRemote = (remote: string, ref: string) => execFileSync('git', ['ls-remote', remote, ref], { encoding: 'utf8' }).trim();
+
+  it('the matcher matches across newlines and dot names for each default glob', () => {
+    const res = DEFAULT_DENY.map(globToRegExp);
+    for (const p of ['.github/workflows/a b\nc.yml', 'a\nb/.env', 'x\ny/key.pem', 'a\nb/package-lock.json', 'infra/x\ny',
+      'infra/.tf', 'infra/.main\n.tf', '.github/workflows/.ci.yml', '.github/workflows/.ci\n.yml', 'infra/.a/.b']) {
+      assert.ok(deniedBy(p, res, DEFAULT_DENY), JSON.stringify(p));
+    }
+  });
+
+  for (const f of ['.github/workflows/a b\nc.yml', 'a\nb/.env', 'x\ny/key.pem', 'a\nb/package-lock.json', 'infra/x\ny',
+    'infra/.tf', 'infra/.main\n.tf', '.github/workflows/.ci.yml', '.github/workflows/.ci\n.yml', 'infra/.a/.b', 'src/a\nb.ts']) {
+    it(`refuses to push ${JSON.stringify(f)}`, async () => {
+      const { remote, work } = makeRepo();
+      fs.mkdirSync(path.dirname(path.join(work, f)), { recursive: true });
+      fs.writeFileSync(path.join(work, f), 'evil\n');
+      await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/nl-1' }),
+        (e: unknown) => e instanceof ProtectedPathError && e.message.includes(JSON.stringify(f)), JSON.stringify(f));
+      assert.equal(lsRemote(remote, 'refs/heads/autofix/nl-1'), '');
+    });
+  }
+
+  function addWorkflowThenRevert(work: string, tag: boolean): void {
+    fs.mkdirSync(path.join(work, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(work, '.github', 'workflows', 'evil.yml'), 'on: push\n');
+    git(work, 'add', '-A');
+    git(work, 'commit', '-m', 'evil');
+    if (tag) git(work, 'tag', '-a', 'v9', '-m', 't');
+    git(work, 'revert', '--no-edit', 'HEAD');
+    fs.writeFileSync(path.join(work, 'a.txt'), 'trivial\n');
+  }
+
+  it('a protected file added then reverted in an intermediate commit is refused', async () => {
+    const { remote, work } = makeRepo();
+    addWorkflowThenRevert(work, false);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/rv-1' }), /\.github\/workflows\/evil\.yml.*intermediate commit/);
+    assert.equal(lsRemote(remote, 'refs/heads/autofix/rv-1'), '');
+  });
+
+  it('push.followTags with a tag on a reverted intermediate commit: refused by the scan, and the tag never rides along', async () => {
+    const a = makeRepo();
+    addWorkflowThenRevert(a.work, true);
+    git(a.work, 'config', 'push.followTags', 'true');
+    await assert.rejects(pushBranch({ ...opts, repoDir: a.work, branch: 'autofix/tg-1' }), /intermediate commit/);
+    assert.equal(lsRemote(a.remote, 'refs/tags/v9'), '');
+    // Without the scan (no denyPaths) the branch is pushed, but the tag still is not.
+    const b = makeRepo();
+    addWorkflowThenRevert(b.work, true);
+    git(b.work, 'config', 'push.followTags', 'true');
+    await pushBranch({ ...opts, denyPaths: undefined, repoDir: b.work, branch: 'autofix/tg-2' });
+    assert.notEqual(lsRemote(b.remote, 'refs/heads/autofix/tg-2'), '');
+    assert.equal(lsRemote(b.remote, 'refs/tags/v9'), '');
+  });
+
+  it('pushes only the branch even when a tag or another ref shares its name or remote.origin.push adds a refspec', async () => {
+    const { remote, work } = makeRepo();
+    git(work, 'checkout', '-q', '-b', 'evilb');
+    fs.writeFileSync(path.join(work, 'evil.txt'), 'x\n');
+    git(work, 'add', '-A');
+    git(work, 'commit', '-m', 'evil');
+    git(work, 'tag', 'autofix/sh-1');
+    git(work, 'checkout', '-q', 'main');
+    git(work, 'config', '--add', 'remote.origin.push', 'refs/heads/evilb:refs/heads/evilb');
+    fs.writeFileSync(path.join(work, 'b.txt'), 'ok\n');
+    await pushBranch({ ...opts, repoDir: work, branch: 'autofix/sh-1' });
+    assert.equal(lsRemote(remote, 'refs/heads/evilb'), '');
+    assert.equal(lsRemote(remote, 'refs/tags/autofix/sh-1'), '');
+    assert.equal(git(remote, 'ls-tree', '-r', '--name-only', 'refs/heads/autofix/sh-1').split('\n').sort().join(','), 'a.txt,b.txt');
+  });
+
+  it('refuses when there are too many commits to scan', async () => {
+    const { work } = makeRepo();
+    for (let i = 0; i < 201; i++) git(work, 'commit', '-q', '--allow-empty', '-m', `c${i}`);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/many-1' }), /too many commits/);
   });
 });
 

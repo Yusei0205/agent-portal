@@ -9,7 +9,7 @@ import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { run, all, one } from '../server/db.ts';
 import { generateId, now } from '../server/util.ts';
 import { _setAgentCoreInvokerOverride } from '../server/agent/kiro-agentcore.ts';
-import { createPullRequest, _setPullRequestClients } from '../server/pull-requests.ts';
+import { createPullRequest, deleteRemoteBranch, _setPullRequestClients } from '../server/pull-requests.ts';
 import type { Repository } from '../server/repos.ts';
 import { setPullRequestSettings } from '../server/project-settings-pr.ts';
 import { handleRepoChanges, finalizeRunPayloadFlag, createPullRequestForSession, createRequestedSessionPullRequest, _setSessionPrDeps } from '../server/session-pr.ts';
@@ -511,5 +511,17 @@ describe("the run's in-memory check result", () => {
     await handleRepoChanges({ ...ctxOf(s), check: null }, [clean]);
     assert.equal(finalizeCalls.length, 0);
     assert.deepEqual(states(s), []);
+  });
+});
+
+describe('deleteRemoteBranch', () => {
+  const ghRepo = { id: 'r1', project_id: 'p1', name: 'shop', url: 'https://github.com/acme/shop', provider: 'github', status: 'ready', default_branch: 'main', connection_id: 'c1' } as Repository;
+  it('deletes only autofix/ branches and refuses anything else without calling GitHub', async () => {
+    for (const b of ['main', 'portal/x', 'refs/heads/autofix/x', 'autofix', 'autofix/', 'autofix/../main', 'release/autofix/x']) {
+      await assert.rejects(deleteRemoteBranch(ghRepo, b), /only autofix\/ branches/, b);
+    }
+    assert.equal(ghCalls.length, 0);
+    assert.equal(await deleteRemoteBranch(ghRepo, 'autofix/tests-abcdef01'), true);
+    assert.ok(ghCalls[0].url.endsWith('/git/refs/heads/autofix/tests-abcdef01') && ghCalls[0].method === 'DELETE');
   });
 });

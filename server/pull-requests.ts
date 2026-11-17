@@ -322,8 +322,14 @@ export async function listBranchFiles(repo: Repository, base: string, head: stri
   }
 }
 
-/** Delete a pushed branch on GitHub, best effort (true when GitHub confirmed). Other hosts: false. */
+/**
+ * Delete a pushed auto-fix branch on GitHub, best effort (true when GitHub confirmed). Other hosts: false. Throws, doing nothing, for a
+ * branch whose name does not start with `autofix/`: this is only for undoing the portal's own auto-fix pushes.
+ */
 export async function deleteRemoteBranch(repo: Repository, branch: string): Promise<boolean> {
+  if (!/^autofix\/[A-Za-z0-9._/-]+$/.test(String(branch)) || branch.includes('..')) {
+    throw new Error(`Refusing to delete ${JSON.stringify(String(branch)).slice(0, 120)}: only autofix/ branches are deleted`);
+  }
   if (hostKind(repo) !== 'github') return false;
   const slug = parseGitHubOwnerRepo(repo.url);
   if (!slug) return false;
