@@ -336,7 +336,15 @@
         "test/approval-state.test.ts",
         "test/session-composer-layout.test.ts",
         "test/model-groups.test.ts",
-        "test/session-files-vault-read.test.ts"
+        "test/session-files-vault-read.test.ts",
+        "test/plan-mode.test.ts",
+        "test/web-composer-keys.test.ts",
+        "test/web-edit-diff.test.ts",
+        "test/web-execution-summary.test.ts",
+        "test/web-output-card-excerpt.test.ts",
+        "test/web-output-excerpt.test.ts",
+        "test/web-session-status.test.ts",
+        "test/web-tool-groups.test.ts"
       ],
       "smokeIds": [
         "sessions"
