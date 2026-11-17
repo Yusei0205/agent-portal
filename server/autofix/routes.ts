@@ -8,6 +8,9 @@ import { badRequest } from '../util.ts';
 import { getMemberRow, getProjectRow } from '../project-access.ts';
 import { getAutofixPolicy, saveAutofixPolicy, setPaused } from './policy.ts';
 import type { AutofixPolicy } from './policy.ts';
+import { newWebhookSecret } from '../loop-triggers.ts';
+import { setSecret } from '../secrets.ts';
+import { registerAutofixWebhook, webhookSecretName } from './webhook.ts';
 
 /** Any project member (or an admin) may read; non-members see 404. */
 async function requireProjectMember(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
@@ -36,6 +39,16 @@ function pausedFlag(body: unknown): boolean {
 }
 
 export function registerAutofixRoutes(): void {
+  registerAutofixWebhook();
+
+  // Rotate the GitHub webhook secret. The new secret is returned once and cannot be read again.
+  router.post('/api/projects/:id/autofix/webhook-secret', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectOwnerOrAdmin(req, res, req.params.id)) return;
+    const secret = newWebhookSecret();
+    await setSecret(webhookSecretName(req.params.id), secret);
+    sendJson(res, 200, { secret });
+  });
+
   router.get('/api/projects/:id/autofix/policy', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!await requireProjectMember(req, res, req.params.id)) return;
     sendJson(res, 200, { policy: await getAutofixPolicy(req.params.id) });
