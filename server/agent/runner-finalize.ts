@@ -35,7 +35,7 @@ export function slugify(text: string, max = 40): string {
 }
 
 /** `portal/<KEY>-<slug>` or `portal/<slug>`; on a clash with `taken` append -2, -3, ... */
-export type PushErrorCode = 'no-permission' | 'no-workspace' | 'failed';
+export type PushErrorCode = 'no-permission' | 'no-workspace' | 'failed' | 'protected-path';
 
 /** Sorts a push failure into what the person should be told. Shared by the runner (which sends the code) and the portal (fallback). */
 export function classifyPushError(text: string): PushErrorCode {
@@ -121,6 +121,61 @@ export function parseChangedPaths(raw: unknown): ChangedPath[] | undefined {
   return out;
 }
 
+/** The private ref the base branch is fetched into before paths are reported or a branch is pushed (not set up by the agent). */
+export const PRIVATE_BASE_REF = 'refs/portal/base';
+const PATH_CHECK_MAX = 1024;
+
+/**
+ * Fetch `base` from the URL pushes go to into PRIVATE_BASE_REF (forced, overwriting whatever is there) and return the merge base of
+ * it and HEAD, or null when either step fails. The session's remote-tracking refs are not trusted.
+ */
+async function trustedMergeBase(repoDir: string, base: string, env: Record<string, string>): Promise<string | null> {
+  if (!BRANCH_RE.test(base) || base.includes('..')) return null;
+  const url = await runGit(repoDir, ['remote', 'get-url', '--push', 'origin'], env, true);
+  const remote = url.code === 0 && url.stdout.trim() ? url.stdout.trim() : 'origin';
+  const fetched = await runGit(repoDir, ['fetch', '--no-tags', '--quiet', remote, `+refs/heads/${base}:${PRIVATE_BASE_REF}`], env, true);
+  if (fetched.code !== 0) return null;
+  const mb = await runGit(repoDir, ['merge-base', PRIVATE_BASE_REF, 'HEAD'], env, true);
+  const sha = mb.stdout.trim();
+  return mb.code === 0 && /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+
+/**
+ * A glob as a regular expression, for the deny list checked before a push: `**` any number of directories (dot-directories
+ * included), `*` within one segment, `?` one character; everything else literal. Case-insensitive (the portal's guardrails are).
+ * Brace and bracket expressions are not supported and match literally; the portal's check after the push covers those.
+ */
+export function globToRegExp(glob: string): RegExp {
+  const g = String(glob).replace(/\\/g, '/').replace(/^(\.\/|\/)+/, '');
+  let re = '';
+  for (let i = 0; i < g.length; i++) {
+    const c = g[i];
+    if (c === '*' && g[i + 1] === '*') {
+      const atStart = i === 0 || g[i - 1] === '/';
+      const slashAfter = g[i + 2] === '/';
+      if (atStart && slashAfter) { re += '(?:.*/)?'; i += 2; continue; } // `**/`: zero or more directories
+      re += '.*'; i += 1; continue;
+    }
+    if (c === '*') { re += '[^/]*'; continue; }
+    if (c === '?') { re += '[^/]'; continue; }
+    re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`, 'i');
+}
+
+/** The first deny pattern `file` matches, or null. Paths are normalised like the portal's guardrails (forward slashes, no ./ or /). */
+export function deniedBy(file: string, patterns: RegExp[], sources: string[]): string | null {
+  let n = String(file).replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  while (n.startsWith('./') || n.startsWith('/')) n = n.startsWith('./') ? n.slice(2) : n.slice(1);
+  for (let i = 0; i < patterns.length; i++) if (patterns[i].test(n)) return sources[i];
+  return null;
+}
+
+/** Raised by pushBranch when the branch would carry a denied path. */
+export class ProtectedPathError extends Error {
+  code = 'protected-path' as const;
+}
+
 /** A `repo-changes` event as the portal keeps it; `paths` only when the runner sent a well-formed list. */
 export function repoChangeOf(ev: { repo?: unknown; base?: unknown; commits?: unknown; files?: unknown; paths?: unknown }): RepoChanges {
   const paths = parseChangedPaths(ev.paths);
@@ -147,12 +202,11 @@ async function untrackedLines(file: string): Promise<number> {
  * when there is no such ref), from `git diff --numstat --no-renames` (so a rename shows as the old path removed and the new one
  * added), plus untracked files. Undefined when git cannot tell.
  */
-async function changedPaths(repoDir: string, ref: string | null, untracked: string[]): Promise<ChangedPath[] | undefined> {
-  let from = 'HEAD';
-  if (ref) {
-    const mb = await runGit(repoDir, ['merge-base', ref, 'HEAD'], {}, true);
-    if (mb.code === 0 && mb.stdout.trim()) from = mb.stdout.trim();
-  }
+async function changedPaths(repoDir: string, base: string, untracked: string[]): Promise<ChangedPath[] | undefined> {
+  // Never the session's own origin/<base> (the agent can move or delete it) and never a fallback to HEAD: the base is fetched
+  // afresh into a private ref; when that or the merge base is unavailable, the list is unknown.
+  const from = await trustedMergeBase(repoDir, base, {});
+  if (!from) return undefined;
   const diff = await runGit(repoDir, ['diff', '--numstat', '--no-renames', '-z', from], {}, true);
   if (diff.code !== 0) return undefined;
   const out: ChangedPath[] = [];
@@ -203,7 +257,7 @@ export async function detectChanges(repoDir: string, base: string): Promise<{ co
     }
   }
   let paths: ChangedPath[] | undefined;
-  try { paths = await changedPaths(repoDir, count.code === 0 ? ref : null, untracked); } catch { paths = undefined; }
+  try { paths = await changedPaths(repoDir, base, untracked); } catch { paths = undefined; }
   return { commits, files: files.size, ...(paths ? { paths } : {}) };
 }
 
@@ -215,6 +269,11 @@ export async function pushBranch(opts: {
   repoDir: string; base: string; branch: string; message: string; env: Record<string, string>;
   protectedPatterns: string[]; defaultBranch?: string | null; identity?: { name: string; email: string };
   excludePaths?: string[];
+  /**
+   * Globs (case-insensitive) no pushed file may match. When given, the base is fetched into a private ref right before the push and
+   * every file changed from its merge base to HEAD is checked; any match, or a base that cannot be fetched, refuses the push.
+   */
+  denyPaths?: string[];
 }): Promise<{ sha: string }> {
   const { repoDir, branch, env } = opts;
   if (!BRANCH_RE.test(branch) || branch.includes('..') || branch.includes('//') || branch.endsWith('/') || branch.endsWith('.lock') || branch.includes('/.')) {
@@ -237,6 +296,21 @@ export async function pushBranch(opts: {
     await runGit(repoDir, [...ident, 'commit', '--no-verify', '-m', opts.message], env);
   } else if (staged.code !== 0) {
     throw new Error(`git diff failed: ${redact(staged.stderr.trim(), env).slice(0, 500)}`);
+  }
+
+  if (opts.denyPaths) {
+    const sources = opts.denyPaths.filter((p) => typeof p === 'string' && p.trim());
+    const patterns = sources.map(globToRegExp);
+    const mb = await trustedMergeBase(repoDir, opts.base, env);
+    if (!mb) throw new ProtectedPathError('Refusing to push: the base branch could not be fetched to check the changed files');
+    const diff = await runGit(repoDir, ['diff', '--name-only', '--no-renames', '-z', mb, 'HEAD'], env, true);
+    if (diff.code !== 0) throw new ProtectedPathError('Refusing to push: the changed files could not be listed');
+    for (const f of diff.stdout.split('\0')) {
+      if (!f) continue;
+      if (f.length > PATH_CHECK_MAX) throw new ProtectedPathError('Refusing to push: a changed path is too long to check');
+      const hit = deniedBy(f, patterns, sources);
+      if (hit) throw new ProtectedPathError(`Refusing to push: ${f} is a protected path (${hit})`);
+    }
   }
 
   await runGit(repoDir, ['push', '--no-verify', 'origin', branch], env);

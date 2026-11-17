@@ -180,6 +180,38 @@ describe('Codex hosted OAuth and durable renewal', () => {
       assert.equal(JSON.stringify(emitted).includes('short-lived-token'), false);
     } finally { _setAgentCoreInvokerOverride(null); setStorage(storage); }
   });
+  it('an auto-fix session gets no PR tool (prTool: false) and its PR requests are ignored', async () => {
+    await completeCodexOAuth(userId, await attempt());
+    const project = await fetchJson(base, '/api/projects', { method: 'POST', cookie, body: { name: 'Cloud Codex autofix' } });
+    const projectId = (project.body as any).project.id;
+    const workflowId = generateId(), runId = generateId();
+    insert('p6_workflows', { id: workflowId, project_id: projectId, goal: 'fix', engine: 'codex', status: 'running', repo_ids: '[]', created_at: now(), updated_at: now(), created_by: userId });
+    const { saveAutofixPolicy } = await import('../server/autofix/policy.ts');
+    const { getAutofixFindingsRepository } = await import('../server/repositories/autofix-findings.ts');
+    await saveAutofixPolicy(projectId, { mode: 'draft_pr', verify: { command: 'npm test', quick_commands: [] }, run_as: userId }, { actorId: userId, isAdmin: true });
+    const { finding } = await getAutofixFindingsRepository().upsertByFingerprint({ project_id: projectId, source: 'ci_failed', kind: 'tests',
+      fingerprint: 'codex-fp-1', severity: 'low', evidence: 'e', repo_id: null, branch: 'main', commit_sha: null });
+    await getAutofixFindingsRepository().transition(finding.id, ['new'], { status: 'fixing', workflow_id: workflowId });
+    const emitted: any[] = [];
+    const ctx: RunContext = { run: { workflowId, runId, projectId: null, credentialOwnerId: userId, workDir: config.dataDir,
+      permissions: { rules: [], toolRules: [], projectId }, trusted: false, goal: 'Test', kind: null, engine: 'codex',
+      dataDir: config.dataDir, repoIds: [], leadAgent: null, credentialId: null, model: null, engineSessionId: null },
+      emit: (type: string, payload: object) => emitted.push({ type, payload }), signal: null, allowed: new Set(),
+      awaitInput: async () => ({ decision: 'allow', remember: false, message: '' }) };
+    const storage = getStorage();
+    setStorage({ exists: async () => false, presign: async (key: string) => 'https://fixture.s3.amazonaws.com/' + key } as any);
+    let sent: any = null;
+    _setAgentCoreInvokerOverride(async function* (_arn, _session, payload): AsyncGenerator<any> {
+      sent = payload;
+      yield { type: 'pull-request-request', repo: 'shop', base: 'main' };
+      yield { type: 'result', exitCode: 0, stateSaved: true, text: 'Done', threadId: 'cloud-thread', model: 'fixture', inputTokens: 1, outputTokens: 1 };
+    });
+    try {
+      await runCodexViaAgentCore(ctx, 'Goal', async () => {});
+      assert.equal(sent.prTool, false);
+      assert.ok(emitted.some(e => e.type === 'status' && /ignored in auto-fix sessions/.test(e.payload.text)));
+    } finally { _setAgentCoreInvokerOverride(null); setStorage(storage); }
+  });
   it('sends cloud Portal AI requests through isolated short sessions with no renewable credentials', async () => {
     await completeCodexOAuth(userId, await attempt());
     _setAgentCoreInvokerOverride(async function* (_arn, session, payload): AsyncGenerator<any> {

@@ -706,6 +706,8 @@ export async function runKiroViaAgentCore(
     void recordHostTimeLimit(ctx, opts.runId, timeoutMs).finally(() => ac.abort(new Error('AgentCore run timed out')));
   }, timeoutMs);
   const repoChanges: RepoChanges[] = [];
+  // The run's own check result for the PR gate (the stored check-result event may not be written yet on DynamoDB).
+  let lastCheck: { ok: boolean } | null | undefined = opts.checks?.length ? null : undefined;
 
   try {
     const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
@@ -827,6 +829,7 @@ export async function runKiroViaAgentCore(
 
         case 'check-result': {
           const chk = ev as { type: 'check-result'; ok?: boolean; ranAt?: string; steps?: unknown[] };
+          lastCheck = { ok: Boolean(chk.ok) };
           emit('check-result', { ok: Boolean(chk.ok), ranAt: String(chk.ranAt ?? ''), steps: Array.isArray(chk.steps) ? chk.steps : [] });
           break;
         }
@@ -921,7 +924,8 @@ export async function runKiroViaAgentCore(
   if (repoChanges.length && ctx.run?.workflowId && ctx.run.projectId) {
     try {
       await repoChangesHooks.handle(
-        { workflowId: ctx.run.workflowId, runId: opts.runId, projectId: ctx.run.projectId, userId: ctx.run.credentialOwnerId ?? null, engine: 'kiro' },
+        { workflowId: ctx.run.workflowId, runId: opts.runId, projectId: ctx.run.projectId, userId: ctx.run.credentialOwnerId ?? null, engine: 'kiro',
+          ...(lastCheck !== undefined ? { check: lastCheck } : {}) },
         repoChanges,
       );
     } catch { /* handleRepoChanges reports its own problems as events */ }

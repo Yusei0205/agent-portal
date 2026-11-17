@@ -12,7 +12,7 @@ import { _setAgentCoreInvokerOverride } from '../server/agent/kiro-agentcore.ts'
 import { createPullRequest, _setPullRequestClients } from '../server/pull-requests.ts';
 import type { Repository } from '../server/repos.ts';
 import { setPullRequestSettings } from '../server/project-settings-pr.ts';
-import { handleRepoChanges, finalizeRunPayloadFlag, _setSessionPrDeps } from '../server/session-pr.ts';
+import { handleRepoChanges, finalizeRunPayloadFlag, createPullRequestForSession, createRequestedSessionPullRequest, _setSessionPrDeps } from '../server/session-pr.ts';
 import type { RepoChange } from '../server/session-pr.ts';
 import { getAutofixFindingsRepository } from '../server/repositories/autofix-findings.ts';
 import type { AutofixFinding } from '../server/repositories/autofix-findings.ts';
@@ -95,6 +95,10 @@ let finalizeCalls: Array<Record<string, any>> = [];
 let pushReply: (p: Record<string, any>) => Array<Record<string, unknown>>;
 let ghCalls: Array<{ url: string; method: string; body: any }> = [];
 let labelStatus = 200;
+/** What GitHub's compare API answers for the pushed branch (default: the clean change). */
+let compareReply: () => Response;
+const compareFiles = (files: Array<{ filename: string; previous_filename?: string }>) =>
+  () => new Response(JSON.stringify({ files: files.map((f) => ({ additions: 1, deletions: 0, status: 'modified', ...f })) }), { status: 200 });
 
 async function waitFor(cond: () => boolean | Promise<boolean>, ms = 3000): Promise<void> {
   const end = Date.now() + ms;
@@ -116,6 +120,7 @@ beforeEach(() => {
   finalizeCalls = [];
   ghCalls = [];
   labelStatus = 200;
+  compareReply = compareFiles([{ filename: 'src/cart.ts' }, { filename: 'test/cart.test.ts' }]);
   pushReply = (p) => [{ type: 'repo-pushed', repo: p.repo, branch: p.branch, sha: SHA }];
   _setAgentCoreInvokerOverride(async function* (_arn, _sid, payload) {
     finalizeCalls.push(payload);
@@ -127,6 +132,8 @@ beforeEach(() => {
     fetch: (async (url: any, init: any) => {
       ghCalls.push({ url: String(url), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(init.body) : null });
       if (/\/labels$/.test(String(url))) return new Response('{}', { status: labelStatus });
+      if (/\/compare\//.test(String(url))) return compareReply();
+      if (init?.method === 'DELETE') return new Response(null, { status: 204 });
       return new Response(JSON.stringify({ number: 42, html_url: 'https://github.com/acme/shop/pull/42' }), { status: 201, headers: { 'content-type': 'application/json' } });
     }) as typeof fetch,
   });
@@ -381,5 +388,128 @@ describe('the gate in the session PR flow', () => {
     assert.equal(await finalizeRunPayloadFlag(s.projectId, false), false);
     assert.equal(await finalizeRunPayloadFlag(s.projectId, false, s.workflowId), true);
     assert.equal(await finalizeRunPayloadFlag(s.projectId, false, 'not-a-fix-session'), false);
+  });
+});
+
+describe('guardrails at and after the push', () => {
+  const prPosts = () => ghCalls.filter((c) => c.method === 'POST' && /\/pulls$/.test(c.url));
+
+  it('the finalize request carries the protected paths as denyPaths (a deps fix may touch the lockfiles)', async () => {
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.ok(finalizeCalls[0].denyPaths.includes('.github/workflows/**'));
+    assert.ok(finalizeCalls[0].denyPaths.includes('package-lock.json'));
+    const { denyPathsFor } = await import('../server/autofix/delivery.ts');
+    const { DEFAULT_POLICY } = await import('../server/autofix/policy.ts');
+    const deps = denyPathsFor(DEFAULT_POLICY, 'deps');
+    assert.ok(!deps.includes('package-lock.json') && !deps.includes('**/package-lock.json') && deps.includes('**/.env*'));
+  });
+
+  it('a push the runner refuses for a protected path: needs_human, audit, blocked item, no PR', async () => {
+    pushReply = (p) => [{ type: 'repo-pushed', repo: p.repo, branch: p.branch, error: 'Refusing to push: .github/workflows/ci.yml is a protected path (.github/workflows/**)', errorCode: 'protected-path' }];
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    const f = await finding(s);
+    assert.equal(f.status, 'needs_human');
+    assert.equal(f.attempts, 0);
+    assert.equal(prPosts().length, 0);
+    assert.equal(prEvents(s).at(-1)!.errorCode, 'protected-path');
+    assert.match(String(inbox(s).find((i) => i.type === 'blocked')?.payload.reason), /ci\.yml is a protected path/);
+    assert.equal(auditFor(s.findingId, 'autofix.pr.blocked').length, 1);
+  });
+
+  it('a runner too old for denyPaths fails closed: nothing pushed, needs_human, no attempt counted', async () => {
+    pushReply = (p) => [{ type: 'error', message: 'Unknown field: "denyPaths"' }];
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    const f = await finding(s);
+    assert.equal(f.status, 'needs_human');
+    assert.equal(f.attempts, 0);
+    assert.equal(prPosts().length, 0);
+    assert.match(String(prEvents(s).at(-1)!.error), /redeploy the runners/);
+  });
+
+  for (const [name, reply, why] of [
+    ['a protected path on the pushed branch', compareFiles([{ filename: 'src/cart.ts' }, { filename: '.github/workflows/release.yml' }]), /protected path: \.github\/workflows\/release\.yml/],
+    ['a rename away from a protected path', compareFiles([{ filename: 'ci.yml', previous_filename: '.github/workflows/ci.yml' }]), /\.github\/workflows\/ci\.yml/],
+    ['a list GitHub may have cut (300 files)', compareFiles(Array.from({ length: 300 }, (_, i) => ({ filename: `src/f${i}.ts` }))), /may be cut/],
+    ['a failed compare call', () => new Response('{}', { status: 500 }), /answered 500/],
+    ['an unreachable GitHub', () => { throw new Error('ECONNRESET'); }, /could not be reached/],
+    ['an answer without a file list', () => new Response('{}', { status: 200 }), /without a file list/],
+  ] as Array<[string, () => Response, RegExp]>) {
+    it(`the server's check after the push blocks ${name}: branch deleted, no PR, needs_human`, async () => {
+      compareReply = reply;
+      const s = await makeFix();
+      await handleRepoChanges(ctxOf(s), [clean]);
+      const f = await finding(s);
+      assert.equal(finalizeCalls.length, 1, 'the push happened');
+      assert.equal(prPosts().length, 0, 'no pull request');
+      assert.ok(ghCalls.some((c) => c.method === 'DELETE' && c.url.endsWith(`/git/refs/heads/${finalizeCalls[0].branch}`)), 'branch deleted');
+      assert.equal(f.status, 'needs_human');
+      assert.match(String(inbox(s).find((i) => i.type === 'blocked')?.payload.reason), why);
+      const audit = auditFor(s.findingId, 'autofix.pr.blocked');
+      assert.equal(audit.length, 1);
+      assert.equal(audit[0].deletedBranch, finalizeCalls[0].branch);
+      assert.equal(prEvents(s).at(-1)!.errorCode, 'protected-path');
+    });
+  }
+
+  it('the compare call names the base and the pushed branch', async () => {
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    const cmp = ghCalls.find((c) => /\/compare\//.test(c.url))!;
+    assert.ok(cmp.url.includes(`/compare/main...${finalizeCalls[0].branch}`), cmp.url);
+    assert.equal((await finding(s)).status, 'pr_open');
+  });
+});
+
+describe('no way around the gate', () => {
+  it("the agent's own PR request (Codex tool) is refused for an auto-fix session", async () => {
+    const s = await makeFix();
+    await createRequestedSessionPullRequest({ ...ctxOf(s), engine: 'codex' }, { repo: 'shop', base: 'main' });
+    assert.equal(finalizeCalls.length, 0);
+    assert.equal(ghCalls.length, 0);
+    assert.match(String(prEvents(s).at(-1)!.error), /cannot open a pull request itself/);
+    assert.equal((await finding(s)).status, 'fixing');
+  });
+
+  it('createPullRequestForSession not from an Inbox approval is refused while the finding is fixing', async () => {
+    const s = await makeFix();
+    await createPullRequestForSession(s.workflowId, s.repoId);
+    assert.equal(finalizeCalls.length, 0);
+    assert.match(String(prEvents(s).at(-1)!.error), /approve its Inbox question/);
+  });
+
+  it('POST /api/sessions/:id/pull-request answers 409 while the finding is fixing', async () => {
+    const s = await makeFix();
+    const r = await fetchJson(baseUrl, `/api/sessions/${s.workflowId}/pull-request`, { method: 'POST', body: { repoId: s.repoId }, cookie });
+    assert.equal(r.status, 409);
+    assert.match(String((r.body as any).error), /Inbox question/);
+    assert.equal(finalizeCalls.length, 0);
+  });
+
+  it('a duplicate change judged go while the first push failed opens no ordinary PR', async () => {
+    pushReply = (p) => [{ type: 'repo-pushed', repo: p.repo, branch: p.branch, error: 'remote: something broke' }];
+    const s = await makeFix();
+    await Promise.all([handleRepoChanges(ctxOf(s), [clean]), handleRepoChanges(ctxOf(s), [clean])]);
+    assert.equal(finalizeCalls.length, 1);
+    assert.equal(ghCalls.length, 0);
+    assert.equal((await finding(s)).status, 'new');
+  });
+});
+
+describe("the run's in-memory check result", () => {
+  it('goes ahead on the engine\'s passing check although the stored check-result event is not written yet (DynamoDB lag)', async () => {
+    const s = await makeFix({ checkOk: null });
+    await handleRepoChanges({ ...ctxOf(s), check: { ok: true } }, [clean]);
+    assert.equal((await finding(s)).status, 'pr_open');
+  });
+
+  it('the in-memory result wins over the stored one, and null (checks ran, no result) waits', async () => {
+    const s = await makeFix({ checkOk: true });
+    await handleRepoChanges({ ...ctxOf(s), check: { ok: false } }, [clean]);
+    await handleRepoChanges({ ...ctxOf(s), check: null }, [clean]);
+    assert.equal(finalizeCalls.length, 0);
+    assert.deepEqual(states(s), []);
   });
 });

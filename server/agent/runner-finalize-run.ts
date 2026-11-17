@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { classifyPushError, detectChanges, pushBranch } from './runner-finalize.ts';
+import { classifyPushError, detectChanges, pushBranch, ProtectedPathError } from './runner-finalize.ts';
 import type { PushErrorCode } from './runner-finalize.ts';
 import { parseRunnerRepos } from './runner-repos.ts';
 import { parseSnapshot, restoreWorkspace } from './runner-snapshot.ts';
@@ -37,11 +37,15 @@ export interface FinalizeRequest {
   /** The repository's git settings (same rules as the `env` of a repo in a run's `repos`). */
   env?: Record<string, string>;
   snapshot?: unknown;
+  /** Globs no pushed file may match (auto-fix sessions): checked against a freshly fetched base right before the push. */
+  denyPaths?: string[];
 }
 
 export type FinalizeValidation = { ok: true; request: FinalizeRequest } | { ok: false; error: string };
 
-const FINALIZE_FIELDS = new Set(['mode', 'repo', 'base', 'branch', 'message', 'protectedBranches', 'defaultBranch', 'identity', 'env', 'snapshot']);
+const FINALIZE_FIELDS = new Set(['mode', 'repo', 'base', 'branch', 'message', 'protectedBranches', 'defaultBranch', 'identity', 'env', 'snapshot', 'denyPaths']);
+const MAX_DENY = 100;
+const MAX_DENY_LEN = 300;
 const REPO_FOLDER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 /** Same pattern as a repository's branch in shared/runner-repos.ts (parseRunnerRepos). */
 const REPO_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/;
@@ -118,6 +122,14 @@ export function validateFinalizeRequest(raw: unknown): FinalizeValidation {
     if (!shortLine(o.email, 200)) return invalid('"identity.email" must be a short string');
     identity = { name: o.name.trim(), email: o.email.trim() };
   }
+  let denyPaths: string[] | undefined;
+  if (obj.denyPaths !== undefined) {
+    const d = obj.denyPaths;
+    if (!Array.isArray(d) || d.length > MAX_DENY || d.some((x) => typeof x !== 'string' || !x.trim() || x.length > MAX_DENY_LEN || x.includes('\0'))) {
+      return invalid(`"denyPaths" must be an array of at most ${MAX_DENY} non-empty strings of at most ${MAX_DENY_LEN} characters`);
+    }
+    denyPaths = d as string[];
+  }
   let env: Record<string, string> | undefined;
   if (obj.env !== undefined) {
     const e = validGitEnv(obj.env);
@@ -136,6 +148,7 @@ export function validateFinalizeRequest(raw: unknown): FinalizeValidation {
       ...(identity ? { identity } : {}),
       ...(env ? { env } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
+      ...(denyPaths ? { denyPaths } : {}),
     },
   };
 }
@@ -257,9 +270,10 @@ export async function runFinalize(req: FinalizeRequest, where: FinalizeWhere, em
       protectedPatterns: req.protectedBranches,
       defaultBranch: req.defaultBranch ?? null,
       ...(req.identity ? { identity: req.identity } : {}),
+      ...(req.denyPaths ? { denyPaths: req.denyPaths } : {}),
     });
     emit({ type: 'repo-pushed', repo: req.repo, branch: req.branch, sha });
   } catch (e) {
-    fail(e instanceof Error ? e.message : String(e));
+    fail(e instanceof Error ? e.message : String(e), e instanceof ProtectedPathError ? 'protected-path' : undefined);
   }
 }

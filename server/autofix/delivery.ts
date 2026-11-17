@@ -18,13 +18,15 @@ import { getAutofixFindingsRepository } from '../repositories/autofix-findings.t
 import type { AutofixFinding } from '../repositories/autofix-findings.ts';
 import { getAuditRepository } from '../repositories/audit.ts';
 import { getLoopSpecsRepository } from '../repositories/loop-specs.ts';
-import { scrubSecrets } from '../pull-requests.ts';
+import { listBranchFiles, scrubSecrets } from '../pull-requests.ts';
 import { readCheckResult } from '../workflows/loop.ts';
 import { formatCheckResult } from '../agent/runner-checks.ts';
 import type { RepoChange, SessionPrContext } from '../session-pr.ts';
 import { getAutofixPolicy, isPaused } from './policy.ts';
 import type { AutofixPolicy } from './policy.ts';
-import { checkDiff } from './guardrails.ts';
+import { checkDiff, DEPS_LOCKFILE_GLOBS } from './guardrails.ts';
+import type { DiffFile } from './guardrails.ts';
+import type { Repository } from '../repos.ts';
 import { scrubEvidence } from './scrub.ts';
 import { AUTOFIX_SPEC_BY_SOURCE, recordFailedAttempt, toNeedsHuman } from './pipeline.ts';
 
@@ -90,7 +92,7 @@ export function buildPrBody(f: AutofixFinding, checkOutput: string): string {
 // ── Which sessions are auto-fix sessions ─────────────────────────────────────
 
 /** The finding this session is fixing, while it is 'fixing' and auto-fix is not off for its project. */
-async function activeFinding(workflowId: string): Promise<{ finding: AutofixFinding; policy: AutofixPolicy } | null> {
+export async function activeFinding(workflowId: string): Promise<{ finding: AutofixFinding; policy: AutofixPolicy } | null> {
   const f = await getAutofixFindingsRepository().getByWorkflowId(workflowId);
   if (!f || f.status !== 'fixing' || f.workflow_id !== workflowId) return null;
   const policy = await getAutofixPolicy(f.project_id);
@@ -133,9 +135,10 @@ export async function autofixGate(ctx: SessionPrContext, change: RepoChange): Pr
   if (!active) return null;
   const { finding: f, policy } = active;
 
-  // Only the change of a run whose loop check passed is delivered; a later iteration reports the whole change again.
-  const check = await readCheckResult(ctx.workflowId, ctx.runId);
-  if (!check?.ok) return 'wait';
+  // Only the change of a run whose loop check passed is delivered; a later iteration reports the whole change again. The engine's
+  // in-memory result comes first: on DynamoDB the stored check-result event is written asynchronously and may not be there yet.
+  const checkOk = ctx.check !== undefined ? ctx.check?.ok === true : (await readCheckResult(ctx.workflowId, ctx.runId))?.ok === true;
+  if (!checkOk) return 'wait';
 
   const paths = Array.isArray(change.paths) ? change.paths : null;
   const oversize = paths !== null && (paths.length > MAX_GATE_FILES || paths.some((p) => String(p.path).length > MAX_GATE_PATH_CHARS));
@@ -180,6 +183,13 @@ export interface AutofixPrPlan {
   body: string;
   draft: boolean;
   labels: string[];
+  /** Sent to the runner's finalize: globs no pushed file may match (the policy's protected paths, as checkDiff applies them). */
+  denyPaths: string[];
+}
+
+/** The protected paths as checkDiff applies them for this kind: a 'deps' fix may touch the lockfiles (and only those globs are dropped). */
+export function denyPathsFor(policy: AutofixPolicy, kind: string): string[] {
+  return policy.protected_paths.filter((g) => !(kind === 'deps' && DEPS_LOCKFILE_GLOBS.has(g)));
 }
 
 /** How runPullRequest opens the PR of an active auto-fix session (null for any other session). */
@@ -195,7 +205,27 @@ export async function autofixPrPlan(workflowId: string, runId: string): Promise<
     body: buildPrBody(f, check ? formatCheckResult(check) : ''),
     draft: true,
     labels: [...PR_LABELS],
+    denyPaths: denyPathsFor(active.policy, f.kind),
   };
+}
+
+/**
+ * The server's own check of a pushed auto-fix branch, before its PR is opened: the file list from the host (GitHub compare API), not
+ * from the runner, through checkDiff. Fails closed: a list that cannot be read, may be cut, is over the caps, or touches a protected
+ * path is a violation.
+ */
+export async function verifyPushedBranch(findingId: string, repo: Repository, base: string, branch: string): Promise<{ ok: true } | { ok: false; reason: string; violations: string[] }> {
+  const f = await getAutofixFindingsRepository().getById(findingId);
+  if (!f) return { ok: false, reason: 'the finding is gone', violations: [] };
+  const listed = await listBranchFiles(repo, base, branch);
+  if (!listed.ok) return { ok: false, reason: `the pushed files could not be checked: ${listed.reason}`, violations: [] };
+  const files: DiffFile[] = listed.files;
+  if (files.length > MAX_GATE_FILES || files.some((p) => p.path.length > MAX_GATE_PATH_CHARS)) {
+    return { ok: false, reason: 'the pushed change is too large to check', violations: [] };
+  }
+  const r = checkDiffFn(files, await getAutofixPolicy(f.project_id), f.kind);
+  if (!r.ok) return { ok: false, reason: `the pushed branch touches a protected path: ${r.violations[0]}`, violations: r.violations };
+  return { ok: true };
 }
 
 export type AutofixPrOutcome =
@@ -205,7 +235,9 @@ export type AutofixPrOutcome =
   /** Nothing went wrong with the fix, but no PR was opened (protected branch name, no runtime, host refused the PR). */
   | { kind: 'not-opened'; error: string; branch?: string }
   /** Not attempted (a newer turn is running): the finding is left as it is. */
-  | { kind: 'skipped' };
+  | { kind: 'skipped' }
+  /** A protected path (refused by the runner before the push, or found by the server's check after it): needs_human, audited. */
+  | { kind: 'blocked'; reason: string; violations: string[]; repo: string; branch?: string };
 
 /** Record the outcome of runPullRequest for an auto-fix session on its finding. Never throws. */
 export async function afterAutofixPullRequest(findingId: string, workflowId: string, outcome: AutofixPrOutcome): Promise<void> {
@@ -219,6 +251,14 @@ export async function afterAutofixPullRequest(findingId: string, workflowId: str
         status: 'pr_open', pr_number: outcome.number, pr_url: outcome.url, fix_branch: outcome.branch,
       });
       if (linked) await audit('autofix.pr.opened', f.id, { prNumber: outcome.number, repo: outcome.repo });
+      return;
+    }
+    if (outcome.kind === 'blocked') {
+      await toNeedsHuman(f, ['fixing'], outcome.reason.slice(0, 300), { fix_branch: null }, workflowId);
+      await audit('autofix.pr.blocked', f.id, {
+        repo: outcome.repo, violations: outcome.violations.slice(0, 20), reason: outcome.reason.slice(0, 300),
+        ...(outcome.branch ? { deletedBranch: outcome.branch } : {}),
+      });
       return;
     }
     if (outcome.kind === 'push-failed') {

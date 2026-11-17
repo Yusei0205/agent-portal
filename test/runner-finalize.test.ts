@@ -11,7 +11,12 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
   slugify, branchNameFor, isProtectedBranch, detectChanges, pushBranch, classifyPushError, parseChangedPaths, repoChangeOf, MAX_REPORTED_PATHS,
+  globToRegExp, deniedBy, ProtectedPathError,
 } from '../server/agent/runner-finalize.ts';
+import { validateFinalizeRequest } from '../server/agent/runner-finalize-run.ts';
+
+/** The default protected paths of the auto-fix policy (server/autofix/policy.ts REQUIRED_PROTECTED_PATHS). */
+const DEFAULT_DENY = ['.github/workflows/**', 'infra/**', '**/.env*', '**/*.pem', 'package-lock.json', '**/package-lock.json'];
 
 const GIT_ENV = { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' };
 function git(cwd: string, ...args: string[]): string {
@@ -188,6 +193,115 @@ describe('detectChanges', () => {
     const got = await detectChanges(work, 'main');
     assert.equal(got.files, MAX_REPORTED_PATHS + 5);
     assert.equal(got.paths?.length, MAX_REPORTED_PATHS);
+  });
+});
+
+describe('detectChanges does not trust the session\'s own base ref', () => {
+  function hideWorkflowCommit(): { remote: string; work: string } {
+    const r = makeRepo();
+    fs.mkdirSync(path.join(r.work, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(r.work, '.github', 'workflows', 'ci.yml'), 'on: push\n');
+    git(r.work, 'add', '-A');
+    git(r.work, 'commit', '-m', 'sneaky');
+    fs.writeFileSync(path.join(r.work, 'a.txt'), 'trivial\n');
+    return r;
+  }
+  it('origin/main moved onto HEAD by the agent: the committed workflow change is still reported', async () => {
+    const { work } = hideWorkflowCommit();
+    git(work, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    const got = await detectChanges(work, 'main');
+    assert.ok(got.paths?.some((p) => p.path === '.github/workflows/ci.yml'), JSON.stringify(got));
+  });
+  it('origin/main deleted: still reported', async () => {
+    const { work } = hideWorkflowCommit();
+    git(work, 'update-ref', '-d', 'refs/remotes/origin/main');
+    const got = await detectChanges(work, 'main');
+    assert.ok(got.paths?.some((p) => p.path === '.github/workflows/ci.yml'), JSON.stringify(got));
+  });
+  it('a base the remote does not have: paths unknown (never a fallback to HEAD)', async () => {
+    const { work } = hideWorkflowCommit();
+    const got = await detectChanges(work, 'never-fetched');
+    assert.equal(got.paths, undefined);
+  });
+  it('a remote that cannot be reached: paths unknown', async () => {
+    const { work } = hideWorkflowCommit();
+    git(work, 'remote', 'set-url', 'origin', path.join(root, 'missing.git'));
+    assert.equal((await detectChanges(work, 'main')).paths, undefined);
+  });
+});
+
+describe('globToRegExp / deniedBy', () => {
+  it('agrees with path.matchesGlob on the default protected paths, and is case-insensitive and dot-directory aware', () => {
+    const samples = [
+      '.github/workflows/ci.yml', '.github/workflows/sub/x.yaml', '.github/ci.yml', 'github/workflows/ci.yml', 'infra/main.tf', 'infra/a/b.tf',
+      'src/infra/x.tf', '.env', '.env.local', 'app/.env', 'app/.envrc', 'app/env', 'key.pem', 'a/b/c.pem', 'a.pem.txt', 'package-lock.json',
+      'web/package-lock.json', 'web/package-lock.json.bak', 'src/cart.ts', 'README.md',
+    ];
+    const res = DEFAULT_DENY.map(globToRegExp);
+    for (const p of samples) {
+      const ours = deniedBy(p, res, DEFAULT_DENY) !== null;
+      const node = DEFAULT_DENY.some((g) => path.posix.matchesGlob(p, g));
+      assert.equal(ours, node, p);
+    }
+    for (const p of ['.GitHub/Workflows/CI.yml', 'INFRA/x.tf', 'certs/Key.PEM', 'App/.ENV', 'Package-Lock.JSON', './infra/x', '/infra/x', 'x\\.env']) {
+      assert.ok(deniedBy(p, res, DEFAULT_DENY), p);
+    }
+    assert.ok(deniedBy('.hidden/dir/package-lock.json', res, DEFAULT_DENY), 'dot-directories are crossed by **');
+    assert.equal(deniedBy('src/a.ts', [globToRegExp('src/?.ts')], ['src/?.ts']), 'src/?.ts');
+    assert.equal(deniedBy('src/ab.ts', [globToRegExp('src/?.ts')], ['src/?.ts']), null);
+    assert.equal(deniedBy('a+b(c).ts', [globToRegExp('a+b(c).ts')], ['x']), 'x', 'regex characters are literal');
+  });
+});
+
+describe('pushBranch with denyPaths', () => {
+  const opts = { base: 'main', protectedPatterns: ['main'], defaultBranch: 'main', message: 'fix', env: {}, denyPaths: DEFAULT_DENY };
+
+  it('refuses each default protected path shape and its case variants; nothing reaches the remote', async () => {
+    const files = [
+      '.github/workflows/ci.yml', 'infra/main.tf', '.env', 'app/.env.local', 'certs/key.pem', 'package-lock.json', 'web/package-lock.json',
+      '.GitHub/Workflows/CI.yml', 'INFRA/Main.tf', 'App/.ENV', 'certs/KEY.PEM', 'Package-Lock.json',
+    ];
+    for (const f of files) {
+      const { remote, work } = makeRepo();
+      fs.mkdirSync(path.dirname(path.join(work, f)), { recursive: true });
+      fs.writeFileSync(path.join(work, f), 'x\n');
+      await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/tests-1' }),
+        (e: unknown) => e instanceof ProtectedPathError && e.code === 'protected-path' && e.message.includes(f), f);
+      assert.equal(execFileSync('git', ['ls-remote', remote, 'refs/heads/autofix/tests-1'], { encoding: 'utf8' }).trim(), '', f);
+    }
+  });
+
+  it("the reviewer's repro: a committed workflow hidden by moving origin/main is refused", async () => {
+    const { remote, work } = makeRepo();
+    fs.mkdirSync(path.join(work, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(work, '.github', 'workflows', 'ci.yml'), 'on: push\n');
+    git(work, 'add', '-A');
+    git(work, 'commit', '-m', 'sneaky');
+    git(work, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    fs.writeFileSync(path.join(work, 'a.txt'), 'trivial\n');
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/tests-2' }), /\.github\/workflows\/ci\.yml is a protected path/);
+    assert.equal(execFileSync('git', ['ls-remote', remote, 'refs/heads/autofix/tests-2'], { encoding: 'utf8' }).trim(), '');
+  });
+
+  it('refuses when the base cannot be fetched, and pushes an allowed change', async () => {
+    const a = makeRepo();
+    fs.writeFileSync(path.join(a.work, 'b.txt'), 'x\n');
+    await assert.rejects(pushBranch({ ...opts, base: 'gone', repoDir: a.work, branch: 'autofix/tests-3' }), /could not be fetched/);
+    const b = makeRepo();
+    fs.mkdirSync(path.join(b.work, 'src'));
+    fs.writeFileSync(path.join(b.work, 'src', 'cart.ts'), 'x\n');
+    const { sha } = await pushBranch({ ...opts, repoDir: b.work, branch: 'autofix/tests-4' });
+    assert.equal(git(b.remote, 'rev-parse', 'refs/heads/autofix/tests-4'), sha);
+  });
+
+  it('validateFinalizeRequest carries denyPaths and rejects a malformed list', () => {
+    const req = { mode: 'finalize', repo: 'shop', base: 'main', branch: 'autofix/x-1', message: 'm' };
+    const ok = validateFinalizeRequest({ ...req, denyPaths: DEFAULT_DENY });
+    assert.ok(ok.ok && ok.request.denyPaths?.length === DEFAULT_DENY.length);
+    assert.equal(validateFinalizeRequest({ ...req, denyPaths: 'x' }).ok, false);
+    assert.equal(validateFinalizeRequest({ ...req, denyPaths: [''] }).ok, false);
+    const none = validateFinalizeRequest(req);
+    assert.ok(none.ok && none.request.denyPaths === undefined);
   });
 });
 

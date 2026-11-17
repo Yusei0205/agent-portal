@@ -80,6 +80,10 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     }
     if (prompt.includes('REQUEST_PORTAL_PR')) {
       void (async () => {
+        if (!threadSetup.config.mcp_servers?.portal_pr) {
+          notify('item/agentMessage/delta', { ...scope, itemId: 'answer', delta: 'No portal_pr tool is available.' });
+          notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } }); return;
+        }
         if (threadSetup.config.mcp_servers.portal_pr.tools?.create_pull_request?.approval_mode !== 'approve') {
           notify('item/completed', { ...scope, item: { id: 'pr-denied', type: 'mcpToolCall', tool: 'create_pull_request', status: 'failed', error: { message: 'user rejected MCP tool call' } } });
           notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } }); return;

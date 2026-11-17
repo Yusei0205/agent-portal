@@ -221,7 +221,8 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
             return waiting.outcome;
           },
         };
-        if (repos.length) {
+        // The portal turns the PR tool off for auto-fix sessions (`prTool: false`): their delivery goes through its diff gate only.
+        if (repos.length && body.prTool !== false) {
           prTool = await openCodexPrTool(ctx, repos.map(r => r.name), request => send({ type: 'pull-request-request', ...request }));
           // This loopback tool enforces portal policy and exact-call approvals itself.
           // A second native MCP prompt cannot be answered by the portal's shell approval handler.

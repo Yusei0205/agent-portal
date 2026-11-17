@@ -280,6 +280,65 @@ async function createOnGitHub(input: CreatePrInput, title: string, body: string)
   throw failed(`GitHub refused the pull request (${res.status}): ${detail}`);
 }
 
+/** GitHub's compare API lists at most this many files for a comparison (only on the first page); a list this long may be cut. */
+export const GITHUB_COMPARE_FILES_MAX = 300;
+
+export type BranchFiles =
+  | { ok: true; files: Array<{ path: string; added: number; removed: number }> }
+  | { ok: false; reason: string };
+
+const refPath = (ref: string): string => ref.split('/').map(encodeURIComponent).join('/');
+
+/**
+ * The files a pushed branch changes against `base`, read from the host (not from the runner), for the auto-fix check after a push.
+ * GitHub only: `GET /compare/<base>...<head>`, whose file list comes on the first page only and holds at most 300 files, so a list of
+ * 300 or more counts as cut. A rename is listed as both the new and the previous path. Any failure is `ok: false` (callers fail closed).
+ */
+export async function listBranchFiles(repo: Repository, base: string, head: string): Promise<BranchFiles> {
+  if (hostKind(repo) !== 'github') return { ok: false, reason: 'the changed files can only be checked on GitHub' };
+  const slug = parseGitHubOwnerRepo(repo.url);
+  if (!slug) return { ok: false, reason: 'cannot read the GitHub owner and repository' };
+  try {
+    const creds = await clients.credentials(repo, 'github');
+    if (creds?.kind !== 'github') return { ok: false, reason: 'no GitHub token' };
+    const url = `https://api.github.com/repos/${encodeURIComponent(slug.owner)}/${encodeURIComponent(slug.repo)}/compare/${refPath(base)}...${refPath(head)}?per_page=1`;
+    const res = await clients.fetch(url, {
+      headers: { Authorization: `Bearer ${creds.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) return { ok: false, reason: `GitHub compare answered ${res.status}` };
+    const j: any = await res.json().catch(() => null);
+    if (!j || !Array.isArray(j.files)) return { ok: false, reason: 'GitHub compare answered without a file list' };
+    if (j.files.length >= GITHUB_COMPARE_FILES_MAX) return { ok: false, reason: 'the file list from GitHub may be cut (300 files or more)' };
+    const files: Array<{ path: string; added: number; removed: number }> = [];
+    for (const f of j.files) {
+      if (typeof f?.filename !== 'string' || !f.filename) return { ok: false, reason: 'GitHub compare answered with a malformed file' };
+      files.push({ path: f.filename, added: Number(f.additions) || 0, removed: Number(f.deletions) || 0 });
+      if (typeof f.previous_filename === 'string' && f.previous_filename) files.push({ path: f.previous_filename, added: 0, removed: 0 });
+    }
+    return { ok: true, files };
+  } catch (e: any) {
+    return { ok: false, reason: `GitHub could not be reached: ${scrubSecrets(String(e?.message ?? e)).slice(0, 200)}` };
+  }
+}
+
+/** Delete a pushed branch on GitHub, best effort (true when GitHub confirmed). Other hosts: false. */
+export async function deleteRemoteBranch(repo: Repository, branch: string): Promise<boolean> {
+  if (hostKind(repo) !== 'github') return false;
+  const slug = parseGitHubOwnerRepo(repo.url);
+  if (!slug) return false;
+  try {
+    const creds = await clients.credentials(repo, 'github');
+    if (creds?.kind !== 'github') return false;
+    const res = await clients.fetch(`https://api.github.com/repos/${encodeURIComponent(slug.owner)}/${encodeURIComponent(slug.repo)}/git/refs/heads/${refPath(branch)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${creds.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+      signal: AbortSignal.timeout(20_000),
+    });
+    return res.status === 204;
+  } catch { return false; }
+}
+
 // ── CodeCommit ────────────────────────────────────────────────────────────────
 
 function awsErrorName(e: unknown): string {

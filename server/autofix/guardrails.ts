@@ -7,7 +7,7 @@ import type { AutofixPolicy } from './policy.ts';
 export interface DiffFile { path: string; added: number; removed: number }
 
 /** The only protected globs a `deps` change may touch. */
-const DEPS_LOCKFILE_GLOBS = new Set(['package-lock.json', '**/package-lock.json']);
+export const DEPS_LOCKFILE_GLOBS: ReadonlySet<string> = new Set(['package-lock.json', '**/package-lock.json']);
 
 /**
  * path.matchesGlob lets `**` skip ordinary directories but not dot-directories (`.x/package-lock.json` does not match
