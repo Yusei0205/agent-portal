@@ -100,6 +100,19 @@ let compareReply: () => Response;
 const compareFiles = (files: Array<{ filename: string; previous_filename?: string }>) =>
   () => new Response(JSON.stringify({ files: files.map((f) => ({ additions: 1, deletions: 0, status: 'modified', ...f })) }), { status: 200 });
 
+/** The git trees GitHub answers for the base tip and the pushed branch head (server check of the two-dot tree difference). */
+const BASE_C = 'b'.repeat(40);
+const HEAD_C = 'c'.repeat(40);
+const BASE_T = 'd'.repeat(40);
+const HEAD_T = 'e'.repeat(40);
+type TreeEntry = { path: string; mode: string; type: string; sha: string };
+const blob = (p: string, id: string): TreeEntry => ({ path: p, mode: '100644', type: 'blob', sha: id.padEnd(40, '0') });
+let baseTree: TreeEntry[] = [];
+let headTree: TreeEntry[] = [];
+let treeTruncated = false;
+let refStatus = 200;
+const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
+
 async function waitFor(cond: () => boolean | Promise<boolean>, ms = 3000): Promise<void> {
   const end = Date.now() + ms;
   while (!(await cond()) && Date.now() < end) await new Promise((r) => setTimeout(r, 20));
@@ -121,6 +134,10 @@ beforeEach(() => {
   ghCalls = [];
   labelStatus = 200;
   compareReply = compareFiles([{ filename: 'src/cart.ts' }, { filename: 'test/cart.test.ts' }]);
+  baseTree = [blob('a.txt', '1'), { path: 'src', mode: '040000', type: 'tree', sha: 'f'.repeat(40) }, blob('src/cart.ts', '2'), blob('.github/workflows/ci.yml', '3')];
+  headTree = [blob('a.txt', '1'), { path: 'src', mode: '040000', type: 'tree', sha: 'a'.repeat(40) }, blob('src/cart.ts', '4'), blob('test/cart.test.ts', '5'), blob('.github/workflows/ci.yml', '3')];
+  treeTruncated = false;
+  refStatus = 200;
   pushReply = (p) => [{ type: 'repo-pushed', repo: p.repo, branch: p.branch, sha: SHA }];
   _setAgentCoreInvokerOverride(async function* (_arn, _sid, payload) {
     finalizeCalls.push(payload);
@@ -134,6 +151,14 @@ beforeEach(() => {
       if (/\/labels$/.test(String(url))) return new Response('{}', { status: labelStatus });
       if (/\/compare\//.test(String(url))) return compareReply();
       if (init?.method === 'DELETE') return new Response(null, { status: 204 });
+      const u = String(url);
+      let m: RegExpExecArray | null;
+      if ((m = /\/git\/ref\/heads\/(.+)$/.exec(u))) {
+        if (refStatus !== 200) return json({ message: 'Not Found' }, refStatus);
+        return json({ ref: `refs/heads/${m[1]}`, object: { type: 'commit', sha: m[1] === 'main' ? BASE_C : HEAD_C } });
+      }
+      if ((m = /\/git\/commits\/([0-9a-f]+)$/.exec(u))) return json({ sha: m[1], tree: { sha: m[1] === BASE_C ? BASE_T : HEAD_T } });
+      if ((m = /\/git\/trees\/([0-9a-f]+)\?recursive=1$/.exec(u))) return json({ sha: m[1], tree: m[1] === BASE_T ? baseTree : headTree, truncated: treeTruncated });
       return new Response(JSON.stringify({ number: 42, html_url: 'https://github.com/acme/shop/pull/42' }), { status: 201, headers: { 'content-type': 'application/json' } });
     }) as typeof fetch,
   });
@@ -453,6 +478,51 @@ describe('guardrails at and after the push', () => {
       assert.equal(prEvents(s).at(-1)!.errorCode, 'protected-path');
     });
   }
+
+  it('the finalize request carries the repository URL the runner fetches the base from and pushes to', async () => {
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls[0].remoteUrl, 'https://github.com/acme/shop');
+  });
+
+  it('a runner too old for remoteUrl fails closed: nothing pushed, needs_human, no attempt counted', async () => {
+    pushReply = () => [{ type: 'error', message: 'Unknown field: "remoteUrl"' }];
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    const f = await finding(s);
+    assert.equal(f.status, 'needs_human');
+    assert.equal(f.attempts, 0);
+    assert.equal(prPosts().length, 0);
+    assert.match(String(prEvents(s).at(-1)!.error), /redeploy the runners/);
+  });
+
+  for (const [name, prep, why] of [
+    ['a workflow the base deleted, resurrected on the branch (6c)', () => { headTree.push(blob('.github/workflows/old-deploy.yml', '6')); }, /old-deploy\.yml.*rebase/],
+    ['a workflow the base changed since the fork', () => { baseTree[3] = blob('.github/workflows/ci.yml', '9'); }, /ci\.yml.*rebase/],
+    ['a tree listing GitHub cut', () => { treeTruncated = true; }, /cut/],
+    ['a branch GitHub cannot resolve', () => { refStatus = 404; }, /answered 404/],
+  ] as Array<[string, () => void, RegExp]>) {
+    it(`the server's tree check (base tip vs branch head) blocks ${name}: branch deleted, no PR, needs_human`, async () => {
+      prep();
+      const s = await makeFix();
+      await handleRepoChanges(ctxOf(s), [clean]);
+      assert.equal(finalizeCalls.length, 1, 'the push happened');
+      assert.equal(prPosts().length, 0, 'no pull request');
+      assert.ok(ghCalls.some((c) => c.method === 'DELETE' && c.url.endsWith(`/git/refs/heads/${finalizeCalls[0].branch}`)), 'branch deleted');
+      assert.equal((await finding(s)).status, 'needs_human');
+      assert.match(String(inbox(s).find((i) => i.type === 'blocked')?.payload.reason), why);
+    });
+  }
+
+  it('the tree check reads the base tip and the pushed branch head', async () => {
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.ok(ghCalls.some((c) => c.url.endsWith('/git/ref/heads/main')));
+    assert.ok(ghCalls.some((c) => c.url.endsWith(`/git/ref/heads/${finalizeCalls[0].branch}`)));
+    assert.ok(ghCalls.some((c) => c.url.endsWith(`/git/trees/${BASE_T}?recursive=1`)));
+    assert.ok(ghCalls.some((c) => c.url.endsWith(`/git/trees/${HEAD_T}?recursive=1`)));
+    assert.equal((await finding(s)).status, 'pr_open');
+  });
 
   it('the compare call names the base and the pushed branch', async () => {
     const s = await makeFix();

@@ -94,8 +94,12 @@ function posNum(v: unknown, name: string): number {
   return v;
 }
 
-/** Merge a validated patch onto a policy; throws a 400 on bad input. */
-function applyPatch(base: AutofixPolicy, patch: Partial<AutofixPolicy>): AutofixPolicy {
+/**
+ * Merge a validated patch onto a policy; throws a 400 on bad input. `storedRead` (reading a policy already saved) keeps a protected
+ * pattern the matcher does not support instead of throwing: every other setting is kept and checkDiff reports "unsupported protected
+ * pattern", so nothing is pushed until an admin fixes it. Saving is always strict.
+ */
+function applyPatch(base: AutofixPolicy, patch: Partial<AutofixPolicy>, storedRead = false): AutofixPolicy {
   const out = clone(base);
   const p = patch as Record<string, unknown>;
   if (p.mode !== undefined) {
@@ -127,7 +131,7 @@ function applyPatch(base: AutofixPolicy, patch: Partial<AutofixPolicy>): Autofix
     // The protected-path matcher (agent/runner-finalize.ts compileGlob) supports only *, ** and ?; anything else would protect nothing.
     for (const g of out.protected_paths) {
       const problem = protectedPatternProblem(g);
-      if (problem) {
+      if (problem && !storedRead) {
         throw badRequest(`protected_paths entry ${JSON.stringify(g.slice(0, 80))} ${problem}; only *, ** and ? are supported, at most ${MAX_PATTERN_WILDCARD_RUNS} wildcard runs and ${MAX_PATTERN_CHARS} characters`);
       }
     }
@@ -169,7 +173,7 @@ export async function getAutofixPolicy(projectId: string): Promise<AutofixPolicy
   const raw = getSetting(getDb(), policyKey(projectId));
   if (!raw) return clone(DEFAULT_POLICY);
   try {
-    return applyPatch(DEFAULT_POLICY, JSON.parse(raw) as Partial<AutofixPolicy>);
+    return applyPatch(DEFAULT_POLICY, JSON.parse(raw) as Partial<AutofixPolicy>, true);
   } catch {
     return clone(DEFAULT_POLICY); // a corrupt document must never enable anything
   }

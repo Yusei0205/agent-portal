@@ -18,7 +18,7 @@ import { getAutofixFindingsRepository } from '../repositories/autofix-findings.t
 import type { AutofixFinding } from '../repositories/autofix-findings.ts';
 import { getAuditRepository } from '../repositories/audit.ts';
 import { getLoopSpecsRepository } from '../repositories/loop-specs.ts';
-import { listBranchFiles, scrubSecrets } from '../pull-requests.ts';
+import { listBranchFiles, listTreeDifference, scrubSecrets } from '../pull-requests.ts';
 import { readCheckResult } from '../workflows/loop.ts';
 import { formatCheckResult } from '../agent/runner-checks.ts';
 import type { RepoChange, SessionPrContext } from '../session-pr.ts';
@@ -210,9 +210,15 @@ export async function autofixPrPlan(workflowId: string, runId: string): Promise<
 }
 
 /**
- * The server's own check of a pushed auto-fix branch, before its PR is opened: the file list from the host (GitHub compare API), not
- * from the runner, through checkDiff. Fails closed: a list that cannot be read, may be cut, is over the caps, or touches a protected
- * path is a violation.
+ * The server's own check of a pushed auto-fix branch, before its PR is opened: the file lists from the host, not from the runner,
+ * through checkDiff. Two lists: the GitHub compare API (three-dot, what the branch changed since the merge base; caps and protected
+ * paths) and the tree difference between the base TIP and the branch head (two-dot; protected paths only), so a protected file the
+ * base deleted or changed since the fork cannot ride along. Fails closed: a list that cannot be read, may be cut, is over the caps, or
+ * touches a protected path is a violation.
+ *
+ * This runs AFTER the push (the runner pushes before the portal can look): a workflow triggered by the push itself may already have
+ * run. The runner's own check before the push is the first line; a repository ruleset restricting pushes to `.github/workflows/**` is
+ * the independent control.
  */
 export async function verifyPushedBranch(findingId: string, repo: Repository, base: string, branch: string): Promise<{ ok: true } | { ok: false; reason: string; violations: string[] }> {
   const f = await getAutofixFindingsRepository().getById(findingId);
@@ -223,8 +229,20 @@ export async function verifyPushedBranch(findingId: string, repo: Repository, ba
   if (files.length > MAX_GATE_FILES || files.some((p) => p.path.length > MAX_GATE_PATH_CHARS)) {
     return { ok: false, reason: 'the pushed change is too large to check', violations: [] };
   }
-  const r = checkDiffFn(files, await getAutofixPolicy(f.project_id), f.kind);
+  const policy = await getAutofixPolicy(f.project_id);
+  const r = checkDiffFn(files, policy, f.kind);
   if (!r.ok) return { ok: false, reason: `the pushed branch touches a protected path: ${r.violations[0]}`, violations: r.violations };
+  const tree = await listTreeDifference(repo, base, branch);
+  if (!tree.ok) return { ok: false, reason: `the pushed branch could not be compared with the tip of ${base}: ${tree.reason}`, violations: [] };
+  if (tree.files.some((p) => p.path.length > MAX_GATE_PATH_CHARS)) return { ok: false, reason: 'the pushed branch has a path too long to check', violations: [] };
+  // Size does not matter here (the base may have moved a lot since the fork); protected paths and control characters do.
+  const t = checkDiffFn(tree.files, policy, f.kind);
+  if (!t.ok) {
+    return {
+      ok: false, violations: t.violations,
+      reason: `the pushed branch differs from the tip of ${base} in a protected path: ${t.violations[0]} (rebase the fix on the base branch)`,
+    };
+  }
   return { ok: true };
 }
 

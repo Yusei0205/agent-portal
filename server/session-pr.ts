@@ -448,8 +448,9 @@ async function runPullRequestSteps(
       message: title, protectedBranches: settings.protectedBranches,
       defaultBranch: repo.default_branch || baseBranch, identity: IDENTITY, env: r.env,
       ...(snapshot ? { snapshot } : {}),
-      // An auto-fix push: the runner refuses it when a file changed since the freshly fetched base matches a protected path.
-      ...(plan ? { denyPaths: plan.denyPaths } : {}),
+      // An auto-fix push: the runner commits, checks and pushes it from a private repository, fetching the base from and pushing to
+      // this URL (never the session repository's own remote configuration), and refuses it when a protected path changed.
+      ...(plan ? { denyPaths: plan.denyPaths, remoteUrl: String(repo.url ?? '') } : {}),
     };
     let pushed = false;
     let pushError = '';
@@ -477,7 +478,7 @@ async function runPullRequestSteps(
       await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'protected-path' });
       return { kind: 'blocked', reason: error, violations: [], repo: String(repo.name ?? '') };
     }
-    if (!pushed && plan && /Unknown field: "denyPaths"/.test(pushError)) {
+    if (!pushed && plan && /Unknown field: "(denyPaths|remoteUrl)"/.test(pushError)) {
       // A runner older than the auto-fix guardrails: fail closed rather than push without the check.
       const error = 'The runner is older than the portal and cannot check protected paths before a push; redeploy the runners. Nothing was pushed.';
       await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'failed' });

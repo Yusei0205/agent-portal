@@ -11,8 +11,14 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
   slugify, branchNameFor, isProtectedBranch, detectChanges, pushBranch, classifyPushError, parseChangedPaths, repoChangeOf, MAX_REPORTED_PATHS,
-  compileGlob, deniedBy, ProtectedPathError, _setBeforePushHookForTest,
+  compileGlob, deniedBy, ProtectedPathError, gitProcessEnv, SAFE_GIT_CONFIG,
 } from '../server/agent/runner-finalize.ts';
+
+/** Tests only: the runner reads this global hook (no export in the runner module); it runs after the checks and before the push. */
+const BEFORE_PUSH = Symbol.for('agent-portal.test.beforePush');
+function _setBeforePushHookForTest(fn: ((repoDir: string, branch: string) => Promise<void>) | null): void {
+  if (fn) (globalThis as Record<symbol, unknown>)[BEFORE_PUSH] = fn; else delete (globalThis as Record<symbol, unknown>)[BEFORE_PUSH];
+}
 import { validateFinalizeRequest } from '../server/agent/runner-finalize-run.ts';
 
 /** The default protected paths of the auto-fix policy (server/autofix/policy.ts REQUIRED_PROTECTED_PATHS). */
@@ -265,7 +271,7 @@ describe('pushBranch with denyPaths', () => {
       const { remote, work } = makeRepo();
       fs.mkdirSync(path.dirname(path.join(work, f)), { recursive: true });
       fs.writeFileSync(path.join(work, f), 'x\n');
-      await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/tests-1' }),
+      await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/tests-1' }),
         (e: unknown) => e instanceof ProtectedPathError && e.code === 'protected-path' && e.message.includes(f), f);
       assert.equal(execFileSync('git', ['ls-remote', remote, 'refs/heads/autofix/tests-1'], { encoding: 'utf8' }).trim(), '', f);
     }
@@ -279,18 +285,18 @@ describe('pushBranch with denyPaths', () => {
     git(work, 'commit', '-m', 'sneaky');
     git(work, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
     fs.writeFileSync(path.join(work, 'a.txt'), 'trivial\n');
-    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/tests-2' }), /"\.github\/workflows\/ci\.yml" is a protected path/);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/tests-2' }), /"\.github\/workflows\/ci\.yml" is a protected path/);
     assert.equal(execFileSync('git', ['ls-remote', remote, 'refs/heads/autofix/tests-2'], { encoding: 'utf8' }).trim(), '');
   });
 
   it('refuses when the base cannot be fetched, and pushes an allowed change', async () => {
     const a = makeRepo();
     fs.writeFileSync(path.join(a.work, 'b.txt'), 'x\n');
-    await assert.rejects(pushBranch({ ...opts, base: 'gone', repoDir: a.work, branch: 'autofix/tests-3' }), /could not be fetched/);
+    await assert.rejects(pushBranch({ ...opts, base: 'gone', repoDir: a.work, remoteUrl: a.remote, branch: 'autofix/tests-3' }), /could not be fetched/);
     const b = makeRepo();
     fs.mkdirSync(path.join(b.work, 'src'));
     fs.writeFileSync(path.join(b.work, 'src', 'cart.ts'), 'x\n');
-    const { sha } = await pushBranch({ ...opts, repoDir: b.work, branch: 'autofix/tests-4' });
+    const { sha } = await pushBranch({ ...opts, repoDir: b.work, remoteUrl: b.remote, branch: 'autofix/tests-4' });
     assert.equal(git(b.remote, 'rev-parse', 'refs/heads/autofix/tests-4'), sha);
   });
 
@@ -323,7 +329,7 @@ describe('round 2: newline and dotfile paths, tags and intermediate commits', ()
       const { remote, work } = makeRepo();
       fs.mkdirSync(path.dirname(path.join(work, f)), { recursive: true });
       fs.writeFileSync(path.join(work, f), 'evil\n');
-      await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/nl-1' }),
+      await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/nl-1' }),
         (e: unknown) => e instanceof ProtectedPathError && e.message.includes(JSON.stringify(f)), JSON.stringify(f));
       assert.equal(lsRemote(remote, 'refs/heads/autofix/nl-1'), '');
     });
@@ -342,7 +348,7 @@ describe('round 2: newline and dotfile paths, tags and intermediate commits', ()
   it('a protected file added then reverted in an intermediate commit is refused', async () => {
     const { remote, work } = makeRepo();
     addWorkflowThenRevert(work, false);
-    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/rv-1' }), /\.github\/workflows\/evil\.yml.*intermediate commit/);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/rv-1' }), /\.github\/workflows\/evil\.yml.*intermediate commit/);
     assert.equal(lsRemote(remote, 'refs/heads/autofix/rv-1'), '');
   });
 
@@ -350,7 +356,7 @@ describe('round 2: newline and dotfile paths, tags and intermediate commits', ()
     const a = makeRepo();
     addWorkflowThenRevert(a.work, true);
     git(a.work, 'config', 'push.followTags', 'true');
-    await assert.rejects(pushBranch({ ...opts, repoDir: a.work, branch: 'autofix/tg-1' }), /intermediate commit/);
+    await assert.rejects(pushBranch({ ...opts, repoDir: a.work, remoteUrl: a.remote, branch: 'autofix/tg-1' }), /intermediate commit/);
     assert.equal(lsRemote(a.remote, 'refs/tags/v9'), '');
     // Without the scan (no denyPaths) the branch is pushed, but the tag still is not.
     const b = makeRepo();
@@ -371,16 +377,16 @@ describe('round 2: newline and dotfile paths, tags and intermediate commits', ()
     git(work, 'checkout', '-q', 'main');
     git(work, 'config', '--add', 'remote.origin.push', 'refs/heads/evilb:refs/heads/evilb');
     fs.writeFileSync(path.join(work, 'b.txt'), 'ok\n');
-    await pushBranch({ ...opts, repoDir: work, branch: 'autofix/sh-1' });
+    await pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/sh-1' });
     assert.equal(lsRemote(remote, 'refs/heads/evilb'), '');
     assert.equal(lsRemote(remote, 'refs/tags/autofix/sh-1'), '');
     assert.equal(git(remote, 'ls-tree', '-r', '--name-only', 'refs/heads/autofix/sh-1').split('\n').sort().join(','), 'a.txt,b.txt');
   });
 
   it('refuses when there are too many commits to scan', async () => {
-    const { work } = makeRepo();
+    const { remote, work } = makeRepo();
     for (let i = 0; i < 201; i++) git(work, 'commit', '-q', '--allow-empty', '-m', `c${i}`);
-    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/many-1' }), /too many commits/);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/many-1' }), /too many commits/);
   });
 });
 
@@ -402,7 +408,7 @@ describe('round 3: replace objects, merge resolutions, check-then-push, unsuppor
     const evil = git(work, 'rev-parse', 'HEAD');
     git(work, 'replace', evil, clean);
     git(work, 'reset', '-q', '--hard');
-    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/rp-1' }), /evil\.yml/);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/rp-1' }), /evil\.yml/);
     assert.equal(execFileSync('git', ['ls-remote', remote, 'refs/heads/autofix/rp-1'], { encoding: 'utf8' }).trim(), '');
   });
 
@@ -417,7 +423,7 @@ describe('round 3: replace objects, merge resolutions, check-then-push, unsuppor
     git(work, 'add', '-A'); git(work, 'commit', '-qm', 'M1');
     git(work, 'merge', '-q', '--no-ff', '--no-commit', 's2');
     git(work, 'rm', '-qr', '.github'); git(work, 'commit', '-qm', 'M2');
-    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/mg-1' }), /evil\.yml.*intermediate commit/);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/mg-1' }), /evil\.yml.*intermediate commit/);
     assert.equal(execFileSync('git', ['ls-remote', remote, 'refs/heads/autofix/mg-1'], { encoding: 'utf8' }).trim(), '');
   });
 
@@ -434,7 +440,7 @@ describe('round 3: replace objects, merge resolutions, check-then-push, unsuppor
       git(repoDir, 'update-ref', `refs/heads/${branch}`, evil);
     });
     try {
-      const { sha } = await pushBranch({ ...opts, repoDir: work, branch: 'autofix/tt-1' });
+      const { sha } = await pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/tt-1' });
       assert.notEqual(sha, evil);
       assert.equal(git(remote, 'rev-parse', 'refs/heads/autofix/tt-1'), sha);
       assert.deepEqual(lsTree(remote, 'refs/heads/autofix/tt-1'), ['a.txt', 'b.txt']);
@@ -443,9 +449,9 @@ describe('round 3: replace objects, merge resolutions, check-then-push, unsuppor
 
   it('refuses to push when a deny pattern is unsupported or too complex (fail closed)', async () => {
     for (const bad of ['**/*.{key,pem}', 'secrets/[ab]/**', '*a*a*a*a*a*a*b']) {
-      const { work } = makeRepo();
+      const { remote, work } = makeRepo();
       fs.writeFileSync(path.join(work, 'b.txt'), 'ok\n');
-      await assert.rejects(pushBranch({ ...opts, denyPaths: [...DEFAULT_DENY, bad], repoDir: work, branch: 'autofix/up-1' }), /unsupported protected pattern/, bad);
+      await assert.rejects(pushBranch({ ...opts, denyPaths: [...DEFAULT_DENY, bad], repoDir: work, remoteUrl: remote, branch: 'autofix/up-1' }), /unsupported protected pattern/, bad);
     }
   });
 });
@@ -562,5 +568,218 @@ describe('pushBranch', () => {
     git(work, 'remote', 'set-url', 'origin', 'https://127.0.0.1:1/tok-ABCDEF123456.git');
     fs.writeFileSync(path.join(work, 'b.txt'), 'new\n');
     await assert.rejects(pushBranch({ ...base, repoDir: work, branch: 'portal/fail3', env: { GIT_TOKEN: 'tok-ABCDEF123456' } }), (e: Error) => !e.message.includes('tok-ABCDEF123456'));
+  });
+});
+
+describe('round 4: the check and the push run in a runner-private repository', () => {
+  const opts = { base: 'main', protectedPatterns: ['main'], defaultBranch: 'main', message: 'fix', env: {}, denyPaths: DEFAULT_DENY };
+  const lsRemote = (remote: string, ref: string) => execFileSync('git', ['ls-remote', remote, ref], { encoding: 'utf8' }).trim();
+  const lsTree = (remote: string, ref: string) => git(remote, 'ls-tree', '-r', '--name-only', ref).split('\n').filter(Boolean).sort();
+  const workflow = (work: string, name = 'evil.yml') => {
+    fs.mkdirSync(path.join(work, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(work, '.github', 'workflows', name), `on: push\n# ${name}\n`);
+  };
+  const commitEvil = (work: string) => {
+    git(work, 'checkout', '-q', '-b', 'autofix/x-1');
+    workflow(work);
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'evil');
+  };
+  /** A hook script that leaves a marker file when it runs and, for reference-transaction, moves the private base ref onto the branch. */
+  function refTxHook(work: string, dir: string, marker: string): void {
+    fs.mkdirSync(path.join(work, dir), { recursive: true });
+    fs.writeFileSync(path.join(work, dir, 'reference-transaction'), `#!/bin/sh
+echo ran >> ${JSON.stringify(marker)}
+[ "$1" = committed ] || exit 0
+[ -n "$IN_HOOK" ] && exit 0
+if grep -q refs/portal/base; then IN_HOOK=1 git update-ref refs/portal/base refs/heads/autofix/x-1; fi
+exit 0
+`, { mode: 0o755 });
+  }
+
+  it('D1: a .git/hooks/reference-transaction hook never runs and cannot hide a workflow (refused, remote untouched)', async () => {
+    const { remote, work } = makeRepo();
+    const marker = path.join(work, '..', 'd1.marker');
+    commitEvil(work);
+    refTxHook(work, '.git/hooks', marker);
+    fs.rmSync(marker, { force: true });
+    await detectChanges(work, 'main', { remoteUrl: remote });
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/x-1' }), /evil\.yml/);
+    assert.equal(lsRemote(remote, 'refs/heads/autofix/x-1'), '');
+    assert.equal(fs.existsSync(marker), false, 'the hook ran inside a runner git call');
+  });
+
+  it('D2: core.hooksPath pointing at an agent hook is ignored (refused, hook never runs)', async () => {
+    const { remote, work } = makeRepo();
+    const marker = path.join(work, '..', 'd2.marker');
+    commitEvil(work);
+    refTxHook(work, 'myhooks', marker);
+    git(work, 'config', 'core.hooksPath', 'myhooks');
+    fs.rmSync(marker, { force: true });
+    await detectChanges(work, 'main', { remoteUrl: remote });
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/x-1' }), /evil\.yml/);
+    assert.equal(lsRemote(remote, 'refs/heads/autofix/x-1'), '');
+    assert.equal(fs.existsSync(marker), false);
+  });
+
+  it('E1: url.<fake>.insteadOf + pushInsteadOf in .git/config cannot redirect the base fetch (refused)', async () => {
+    const { remote, work } = makeRepo();
+    commitEvil(work);
+    const fake = path.join(work, '..', 'fake.git');
+    execFileSync('git', ['init', '-q', '--bare', fake]);
+    git(work, 'push', '-q', fake, 'HEAD:refs/heads/main');
+    git(work, 'config', `url.${fake}.insteadOf`, remote);
+    git(work, 'config', `url.${remote}.pushInsteadOf`, remote);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/x-1' }), /evil\.yml/);
+    assert.equal(lsRemote(remote, 'refs/heads/autofix/x-1'), '');
+  });
+
+  it('E2: remote.origin.url = fake, pushurl = real is not read: the base comes from the request URL (refused)', async () => {
+    const { remote, work } = makeRepo();
+    commitEvil(work);
+    const fake = path.join(work, '..', 'fake2.git');
+    execFileSync('git', ['init', '-q', '--bare', fake]);
+    git(work, 'push', '-q', fake, 'HEAD:refs/heads/main');
+    git(work, 'config', 'remote.origin.url', fake);
+    git(work, 'config', 'remote.origin.pushurl', remote);
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/x-1' }), /evil\.yml/);
+    assert.equal(lsRemote(remote, 'refs/heads/autofix/x-1'), '');
+  });
+
+  it('F1: core.fsmonitor and a clean filter in the agent repo never run in the runner (change report and push)', async () => {
+    const { remote, work } = makeRepo();
+    const marker = path.join(work, '..', 'f1.marker');
+    const script = path.join(work, '..', 'f1.sh');
+    fs.writeFileSync(script, `#!/bin/sh\necho ran >> ${JSON.stringify(marker)}\ncat\n`, { mode: 0o755 });
+    git(work, 'config', 'core.fsmonitor', script);
+    git(work, 'config', 'filter.evil.clean', script);
+    git(work, 'config', 'filter.evil.smudge', script);
+    git(work, 'config', 'filter.evil.process', script);
+    fs.writeFileSync(path.join(work, 'b.txt'), 'ok\n');
+    fs.rmSync(marker, { force: true });
+    await detectChanges(work, 'main', { remoteUrl: remote });
+    assert.equal(fs.existsSync(marker), false, 'fsmonitor ran in the change report');
+    // The filter attribute is committed only now, so the change report above did not see it; the push must not run it either.
+    fs.writeFileSync(path.join(work, '.gitattributes'), '* filter=evil\n');
+    const { sha } = await pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/f1-1' });
+    assert.equal(git(remote, 'rev-parse', 'refs/heads/autofix/f1-1'), sha);
+    assert.equal(fs.existsSync(marker), false, 'fsmonitor or a filter ran in the push');
+  });
+
+  it('6c: a workflow the base deleted since the fork, carried by a branch from an old base commit, is refused with "rebase"', async () => {
+    const { remote, work } = makeRepo();
+    workflow(work, 'old-deploy.yml');
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'old wf');
+    const old = git(work, 'rev-parse', 'HEAD');
+    git(work, 'rm', '-rq', '.github'); git(work, 'commit', '-qm', 'remove wf'); git(work, 'push', '-q', 'origin', 'main');
+    git(work, 'checkout', '-q', '-b', 'autofix/x-1', old);
+    fs.writeFileSync(path.join(work, 'fix.txt'), 'fix\n');
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'fix');
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/x-1' }),
+      (e: unknown) => e instanceof ProtectedPathError && /old-deploy\.yml/.test(e.message) && /rebase/i.test(e.message));
+    assert.equal(lsRemote(remote, 'refs/heads/autofix/x-1'), '');
+  });
+
+  it('a fix on top of the current base (which changed a workflow) still pushes', async () => {
+    const { remote, work } = makeRepo();
+    workflow(work, 'ci.yml');
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'base ci'); git(work, 'push', '-q', 'origin', 'main');
+    fs.writeFileSync(path.join(work, 'fix.txt'), 'fix\n');
+    const { sha } = await pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/ok-1' });
+    assert.equal(git(remote, 'rev-parse', 'refs/heads/autofix/ok-1'), sha);
+  });
+
+  it('the push goes to the request URL, never to the remote in .git/config, and leaves the agent repo as it was', async () => {
+    const { remote, work } = makeRepo();
+    const decoy = path.join(work, '..', 'decoy.git');
+    execFileSync('git', ['init', '-q', '--bare', decoy]);
+    git(work, 'remote', 'set-url', 'origin', decoy);
+    fs.mkdirSync(path.join(work, 'src'));
+    fs.writeFileSync(path.join(work, 'src', 'cart.ts'), 'x\n');
+    fs.mkdirSync(path.join(work, 'graphify-out'));
+    fs.writeFileSync(path.join(work, 'graphify-out', 'g.json'), '{}');
+    fs.appendFileSync(path.join(work, '.git', 'info', 'exclude'), 'graphify-out/\n');
+    const head = git(work, 'rev-parse', 'HEAD');
+    const { sha } = await pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/url-1' });
+    assert.equal(git(remote, 'rev-parse', 'refs/heads/autofix/url-1'), sha);
+    assert.deepEqual(lsTree(remote, 'refs/heads/autofix/url-1'), ['a.txt', 'src/cart.ts'], 'committed the change; the excluded folder stayed out');
+    assert.equal(git(remote, 'log', '-1', '--format=%s', 'refs/heads/autofix/url-1'), 'fix');
+    assert.equal(lsRemote(decoy, 'refs/heads/autofix/url-1'), '');
+    assert.equal(git(work, 'rev-parse', 'HEAD'), head, 'the agent repo is not committed to');
+  });
+
+  it('reuses the agent commit when nothing is left uncommitted', async () => {
+    const { remote, work } = makeRepo();
+    fs.writeFileSync(path.join(work, 'b.txt'), 'x\n');
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'agent commit');
+    const head = git(work, 'rev-parse', 'HEAD');
+    const { sha } = await pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/re-1' });
+    assert.equal(sha, head);
+  });
+
+  it('a request with denyPaths but no remote URL is refused (fail closed)', async () => {
+    const { remote, work } = makeRepo();
+    fs.writeFileSync(path.join(work, 'b.txt'), 'x\n');
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/nourl-1' }), (e: unknown) => e instanceof ProtectedPathError && /remote URL/.test(e.message));
+    assert.equal(lsRemote(remote, 'refs/heads/autofix/nourl-1'), '');
+  });
+
+  it('a shallow agent repository whose history cannot be checked is refused', async () => {
+    const { remote, work } = makeRepo();
+    for (let i = 0; i < 3; i++) { fs.writeFileSync(path.join(work, `s${i}.txt`), 'x'); git(work, 'add', '-A'); git(work, 'commit', '-qm', `s${i}`); }
+    fs.writeFileSync(path.join(work, '.git', 'shallow'), git(work, 'rev-parse', 'HEAD~1') + '\n');
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/sh-9' }), ProtectedPathError);
+    assert.equal(lsRemote(remote, 'refs/heads/autofix/sh-9'), '');
+  });
+
+  it('the git environment is an allowlist: GIT_TRACE and GIT_SSH_COMMAND in the runner env never reach git', async () => {
+    const env = gitProcessEnv({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.extraheader', GIT_CONFIG_VALUE_0: 'Authorization: x', GIT_DIR: '/x', GIT_TOKEN: 't' });
+    assert.equal(env.GIT_CONFIG_KEY_0, 'http.extraheader');
+    assert.equal(env.GIT_CONFIG_GLOBAL, '/dev/null');
+    assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
+    for (const k of ['GIT_DIR', 'GIT_TOKEN']) assert.equal(env[k], undefined, k);
+    for (const c of ['core.hooksPath=/dev/null', 'core.fsmonitor=false']) assert.ok(SAFE_GIT_CONFIG.includes(c), c);
+    const { remote, work } = makeRepo();
+    const trace = path.join(work, '..', 'trace.log');
+    const saved = { t: process.env.GIT_TRACE, s: process.env.GIT_SSH_COMMAND, e: process.env.GIT_EXTERNAL_DIFF };
+    process.env.GIT_TRACE = trace;
+    process.env.GIT_SSH_COMMAND = `touch ${trace}`;
+    process.env.GIT_EXTERNAL_DIFF = `touch ${trace}`;
+    try {
+      assert.equal(gitProcessEnv({}).GIT_SSH_COMMAND, undefined);
+      fs.writeFileSync(path.join(work, 'b.txt'), 'x\n');
+      await detectChanges(work, 'main', { remoteUrl: remote });
+      await pushBranch({ ...opts, repoDir: work, remoteUrl: remote, branch: 'autofix/env-1' });
+      await pushBranch({ ...opts, denyPaths: undefined, repoDir: work, branch: 'portal/env-2' });
+    } finally {
+      for (const [k, v] of [['GIT_TRACE', saved.t], ['GIT_SSH_COMMAND', saved.s], ['GIT_EXTERNAL_DIFF', saved.e]] as const) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
+    assert.equal(fs.existsSync(trace), false, 'a variable from the runner env reached git');
+    assert.notEqual(lsRemote(remote, 'refs/heads/autofix/env-1'), '');
+  });
+
+  it('validateFinalizeRequest carries an https remoteUrl and rejects anything else', () => {
+    const req = { mode: 'finalize', repo: 'shop', base: 'main', branch: 'autofix/x-1', message: 'm' };
+    const ok = validateFinalizeRequest({ ...req, remoteUrl: 'https://github.com/acme/shop' });
+    assert.ok(ok.ok && ok.request.remoteUrl === 'https://github.com/acme/shop');
+    for (const bad of ['http://github.com/a/b', 'git@github.com:a/b', 'ext::sh -c x', 'https://x/a b', 'https://x/a\nb', '', 5, 'https://' + 'a'.repeat(2100)]) {
+      assert.equal(validateFinalizeRequest({ ...req, remoteUrl: bad }).ok, false, JSON.stringify(bad));
+    }
+  });
+});
+
+describe('round 4: isProtectedBranch uses the linear matcher', () => {
+  it('a pathological pattern on a 48-character name is fast, and the defaults behave as before', () => {
+    const name = 'autofix/' + 'a'.repeat(40);
+    const t = performance.now();
+    for (const k of [6, 8, 10, 12]) assert.equal(isProtectedBranch(name, ['*a'.repeat(k) + '*b']), false);
+    assert.ok(performance.now() - t < 200, `took ${performance.now() - t} ms`);
+    const defaults = ['main', 'master', 'develop', 'release/*'];
+    assert.equal(isProtectedBranch('release/1.2/hotfix', defaults), true);
+    assert.equal(isProtectedBranch('Release/1.2', defaults), false, 'case-sensitive as before');
+    assert.equal(isProtectedBranch('release?x', ['release?x']), true);
+    assert.equal(isProtectedBranch('releaseYx', ['release?x']), false, '? is literal in branch patterns, as before');
+    assert.equal(isProtectedBranch('a/b/c', ['a*c']), true, '* crosses / in branch patterns, as before');
   });
 });

@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { classifyPushError, detectChanges, pushBranch, ProtectedPathError, TRUSTED_GIT_ENV } from './runner-finalize.ts';
+import { classifyPushError, detectChanges, gitProcessEnv, pushBranch, ProtectedPathError, SAFE_GIT_CONFIG } from './runner-finalize.ts';
 import type { PushErrorCode } from './runner-finalize.ts';
 import { parseRunnerRepos } from './runner-repos.ts';
 import { parseSnapshot, restoreWorkspace } from './runner-snapshot.ts';
@@ -39,11 +39,16 @@ export interface FinalizeRequest {
   snapshot?: unknown;
   /** Globs no pushed file may match (auto-fix sessions): checked against a freshly fetched base right before the push. */
   denyPaths?: string[];
+  /**
+   * The repository's https URL (auto-fix sessions): with denyPaths, the base is fetched from it and the branch pushed to it from a
+   * runner-private repository, never from the session repository's own remote configuration. Required with denyPaths.
+   */
+  remoteUrl?: string;
 }
 
 export type FinalizeValidation = { ok: true; request: FinalizeRequest } | { ok: false; error: string };
 
-const FINALIZE_FIELDS = new Set(['mode', 'repo', 'base', 'branch', 'message', 'protectedBranches', 'defaultBranch', 'identity', 'env', 'snapshot', 'denyPaths']);
+const FINALIZE_FIELDS = new Set(['mode', 'repo', 'base', 'branch', 'message', 'protectedBranches', 'defaultBranch', 'identity', 'env', 'snapshot', 'denyPaths', 'remoteUrl']);
 const MAX_DENY = 100;
 const MAX_DENY_LEN = 300;
 const REPO_FOLDER = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -54,6 +59,7 @@ const GIT_ENV_KEY = /^(GIT_TERMINAL_PROMPT|GIT_CONFIG_COUNT|GIT_CONFIG_KEY_\d{1,
 const MAX_PROTECTED = 50;
 const MAX_PROTECTED_LEN = 200;
 const MAX_FINALIZE_MESSAGE = 2_000;
+const MAX_REMOTE_URL = 2_000;
 
 function validGitEnv(raw: unknown): Record<string, string> | string {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return '"env" must be an object';
@@ -130,6 +136,15 @@ export function validateFinalizeRequest(raw: unknown): FinalizeValidation {
     }
     denyPaths = d as string[];
   }
+  let remoteUrl: string | undefined;
+  if (obj.remoteUrl !== undefined) {
+    const u = obj.remoteUrl;
+    // Same rule as a repository's url in runner-repos.ts (https only), and no whitespace or control characters.
+    if (typeof u !== 'string' || !u.startsWith('https://') || u.length > MAX_REMOTE_URL || /[\s\x00-\x1f\x7f]/.test(u)) {
+      return invalid('"remoteUrl" must be an https URL');
+    }
+    remoteUrl = u;
+  }
   let env: Record<string, string> | undefined;
   if (obj.env !== undefined) {
     const e = validGitEnv(obj.env);
@@ -149,6 +164,7 @@ export function validateFinalizeRequest(raw: unknown): FinalizeValidation {
       ...(env ? { env } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       ...(denyPaths ? { denyPaths } : {}),
+      ...(remoteUrl ? { remoteUrl } : {}),
     },
   };
 }
@@ -161,8 +177,8 @@ export const WORKSPACE_GONE = "The session's saved files could not be restored, 
  * folder (a mounted workspace reports another owner, and git then refuses to work in it).
  */
 function withGitOption(env: Record<string, string>, key: string, value: string): Record<string, string> {
-  const merged = { ...process.env, ...env } as Record<string, string | undefined>;
-  const n = Number.parseInt(merged.GIT_CONFIG_COUNT ?? '0', 10) || 0;
+  // Only the request's own settings count: git's environment is an allowlist (gitProcessEnv), so none from process.env reach it.
+  const n = Number.parseInt(env.GIT_CONFIG_COUNT ?? '0', 10) || 0;
   return { ...env, GIT_CONFIG_COUNT: String(n + 1), [`GIT_CONFIG_KEY_${n}`]: key, [`GIT_CONFIG_VALUE_${n}`]: value };
 }
 
@@ -170,9 +186,11 @@ function realDir(dir: string): string {
   try { return fs.realpathSync.native(dir); } catch { return dir; }
 }
 
+/** A read-only git call with the same hardening as runner-finalize.ts (the `-c` overrides and the allowlisted environment). */
 function gitText(cwd: string, args: string[], env: Record<string, string>): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, env: { ...process.env, ...env, ...TRUSTED_GIT_ENV }, timeout: 30_000, windowsHide: true }, (err, stdout) => {
+    const safe = SAFE_GIT_CONFIG.flatMap((c) => ['-c', c]);
+    execFile('git', [...safe, ...args], { cwd, env: gitProcessEnv(env), timeout: 30_000, windowsHide: true }, (err, stdout) => {
       resolve(err ? null : String(stdout).trim());
     });
   });
@@ -203,17 +221,10 @@ export async function reportRepoChanges(reposRaw: unknown[] | undefined, workDir
         base = head ? head.replace(/^origin\//, '') : undefined;
       }
       if (!base) continue;
-      // detectChanges has no env argument; its git calls read the process environment, so set the trust option there
-      // for the duration of the call (one run at a time per machine).
-      const keys = Object.keys(trusted).filter((k) => /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(k));
-      const saved = keys.map((k) => [k, process.env[k]] as const);
-      for (const k of keys) process.env[k] = trusted[k];
-      let changes: Awaited<ReturnType<typeof detectChanges>>;
-      try {
-        changes = await detectChanges(dir, base);
-      } finally {
-        for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
-      }
+      // The repository's git settings and trust option go to each git call (git's environment is an allowlist, not process.env). The
+      // base for this report is fetched from the clone's configured push URL: the report only decides whether a person is asked; the
+      // auto-fix push itself fetches the base from the finalize request's URL in a private repository (pushBranch).
+      const changes = await detectChanges(dir, base, { env: trusted });
       if (changes.commits > 0 || changes.files > 0) {
         // `paths` (per-file line counts) feeds the portal's auto-fix diff guardrails; left out when git could not produce it.
         emit({ type: 'repo-changes', repo: repo.name, base, commits: changes.commits, files: changes.files, ...(changes.paths ? { paths: changes.paths } : {}) });
@@ -271,6 +282,7 @@ export async function runFinalize(req: FinalizeRequest, where: FinalizeWhere, em
       defaultBranch: req.defaultBranch ?? null,
       ...(req.identity ? { identity: req.identity } : {}),
       ...(req.denyPaths ? { denyPaths: req.denyPaths } : {}),
+      ...(req.remoteUrl ? { remoteUrl: req.remoteUrl } : {}),
     });
     emit({ type: 'repo-pushed', repo: req.repo, branch: req.branch, sha });
   } catch (e) {

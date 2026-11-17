@@ -80,9 +80,35 @@ describe('policy store', () => {
       await assert.rejects(saveAutofixPolicy('p-glob', { protected_paths: [bad] }), (e: any) => e.status === 400 && /protected_paths/.test(e.message), bad);
     }
     await assert.rejects(saveAutofixPolicy('p-glob', { protected_paths: ['**/*.{key,pem}'] }), /only \*, \*\* and \? are supported/);
+    await assert.rejects(saveAutofixPolicy('p-glob', { protected_paths: ['**/*.{key,pem}'] }), (e: any) => (e.message.match(/are supported/g) ?? []).length === 1,
+      'the supported syntax is named once');
     const ok = await saveAutofixPolicy('p-glob', { protected_paths: [...DEFAULT_POLICY.protected_paths, 'secrets/**', '*a*a*a*a*a*b'] });
     assert.ok(ok.protected_paths.includes('*a*a*a*a*a*b'));
   });
+  it('a stored policy with an unsupported protected pattern keeps its other settings; the pattern stays and checkDiff flags it', async () => {
+    const { getDb } = await import('../server/db.ts');
+    const { setSetting } = await import('../server/settings.ts');
+    const { checkDiff } = await import('../server/autofix/guardrails.ts');
+    await setSetting(getDb(), 'autofix.policy.p-stored', JSON.stringify({
+      mode: 'draft_pr', protected_paths: ['.github/workflows/**', 'secrets/[ab]/**'], limits: { max_files: 7 }, run_as: 'u-1',
+    }));
+    const p = await getAutofixPolicy('p-stored');
+    assert.equal(p.mode, 'draft_pr');
+    assert.equal(p.limits.max_files, 7);
+    assert.equal(p.run_as, 'u-1');
+    assert.ok(p.protected_paths.includes('secrets/[ab]/**'));
+    for (const d of DEFAULT_POLICY.protected_paths) assert.ok(p.protected_paths.includes(d), d);
+    const r = checkDiff([{ path: 'src/a.ts', added: 1, removed: 0 }], p, 'tests');
+    assert.equal(r.ok, false);
+    assert.ok(r.violations.some((v) => /unsupported protected pattern: secrets\/\[ab\]\/\*\*/.test(v)), JSON.stringify(r.violations));
+    // Saving stays strict, and a corrupt document still reads as the defaults.
+    await assert.rejects(saveAutofixPolicy('p-stored2', { protected_paths: ['secrets/[ab]/**'] }), (e: any) => e.status === 400);
+    await setSetting(getDb(), 'autofix.policy.p-corrupt', '{not json');
+    assert.equal((await getAutofixPolicy('p-corrupt')).mode, 'off');
+    await setSetting(getDb(), 'autofix.policy.p-badmode', JSON.stringify({ mode: 'yolo', limits: { max_files: 7 } }));
+    assert.equal((await getAutofixPolicy('p-badmode')).mode, 'off');
+  });
+
   it('protected_paths cannot lose the default entries', async () => {
     const saved = await saveAutofixPolicy('p-paths', { protected_paths: ['secrets/**'] });
     for (const d of DEFAULT_POLICY.protected_paths) assert.ok(saved.protected_paths.includes(d), d);

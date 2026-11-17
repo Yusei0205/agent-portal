@@ -323,6 +323,59 @@ export async function listBranchFiles(repo: Repository, base: string, head: stri
 }
 
 /**
+ * The paths whose content differs between the TIP of `base` and the head of `head` (two-dot, tree against tree), read from the host,
+ * for the auto-fix check after a push: the compare API above is three-dot (from the merge base), so it misses a protected file the base
+ * deleted or changed since the fix branched off, which the branch would bring back. GitHub only, through the git data API:
+ * `git/ref/heads/<b>` -> commit -> `git/commits/<sha>` -> tree -> `git/trees/<tree>?recursive=1` for each side. A listing GitHub cut
+ * (`truncated`, about 100,000 entries or 7 MB), any failed or malformed answer is `ok: false` (callers fail closed), so a very large
+ * repository cannot pass this check.
+ */
+export async function listTreeDifference(repo: Repository, base: string, head: string): Promise<BranchFiles> {
+  if (hostKind(repo) !== 'github') return { ok: false, reason: 'the branch tree can only be checked on GitHub' };
+  const slug = parseGitHubOwnerRepo(repo.url);
+  if (!slug) return { ok: false, reason: 'cannot read the GitHub owner and repository' };
+  const SHA = /^[0-9a-f]{40,64}$/;
+  try {
+    const creds = await clients.credentials(repo, 'github');
+    if (creds?.kind !== 'github') return { ok: false, reason: 'no GitHub token' };
+    const api = `https://api.github.com/repos/${encodeURIComponent(slug.owner)}/${encodeURIComponent(slug.repo)}`;
+    const get = async (path: string): Promise<any> => {
+      const res = await clients.fetch(`${api}/${path}`, {
+        headers: { Authorization: `Bearer ${creds.token}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' },
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!res.ok) throw new Error(`GitHub answered ${res.status} for ${path.split('?')[0]}`);
+      return res.json();
+    };
+    const treeOf = async (branch: string): Promise<Map<string, string>> => {
+      const ref = await get(`git/ref/heads/${refPath(branch)}`);
+      const commit = ref?.object?.type === 'commit' ? String(ref.object.sha ?? '') : '';
+      if (!SHA.test(commit)) throw new Error(`GitHub answered without a commit for ${branch}`);
+      const c = await get(`git/commits/${commit}`);
+      const treeSha = String(c?.tree?.sha ?? '');
+      if (!SHA.test(treeSha)) throw new Error(`GitHub answered without a tree for ${branch}`);
+      const t = await get(`git/trees/${treeSha}?recursive=1`);
+      if (!t || !Array.isArray(t.tree)) throw new Error(`GitHub answered without a tree listing for ${branch}`);
+      if (t.truncated !== false) throw new Error(`the tree listing of ${branch} from GitHub was cut`);
+      const out = new Map<string, string>();
+      for (const e of t.tree) {
+        if (typeof e?.path !== 'string' || !e.path || typeof e.type !== 'string') throw new Error('GitHub answered with a malformed tree entry');
+        if (e.type === 'tree') continue; // directories: their files are listed themselves
+        out.set(e.path, `${e.mode} ${e.type} ${e.sha}`);
+      }
+      return out;
+    };
+    const [b, h] = [await treeOf(base), await treeOf(head)];
+    const files: Array<{ path: string; added: number; removed: number }> = [];
+    for (const [p, v] of h) if (b.get(p) !== v) files.push({ path: p, added: 0, removed: 0 });
+    for (const p of b.keys()) if (!h.has(p)) files.push({ path: p, added: 0, removed: 0 });
+    return { ok: true, files };
+  } catch (e: any) {
+    return { ok: false, reason: scrubSecrets(String(e?.message ?? e)).slice(0, 200) };
+  }
+}
+
+/**
  * Delete a pushed auto-fix branch on GitHub, best effort (true when GitHub confirmed). Other hosts: false. Throws, doing nothing, for a
  * branch whose name does not start with `autofix/`: this is only for undoing the portal's own auto-fix pushes.
  */
