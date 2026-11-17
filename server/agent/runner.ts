@@ -62,7 +62,7 @@ import { buildRunnerMcpServers, parseSessionIntegrations, pendingMcpSignIns } fr
 import { mcpSignedIn, mcpSkippedForRun } from '../mcp-oauth.ts';
 import { readLoopState, loopPrompt, afterRun as loopAfterRun } from '../workflows/loop.ts';
 import { eventPrompt, goalPrompt } from '../workflows/session-commands.ts';
-import { interruptionOf, recoverAfterInterruption, engineRetryDelayMs } from '../workflows/recovery.ts';
+import { interruptionOf, recoverAfterInterruption, engineRetryDelayMs, trailingRecoveries, MAX_AUTO_RECOVERIES } from '../workflows/recovery.ts';
 import { runCheckSteps } from './runner-checks.ts';
 
 // ── Dashboard change notifications ────────────────────────────────────────────
@@ -129,11 +129,12 @@ export function shutdownMessage(): string {
  */
 export type RunLifecycleEvent = 'start' | 'done' | 'failed' | 'cancelled';
 /**
- * Extra facts about the event. `cutOff` (only on 'failed'): the failure is an interruption (interruptionOf(error) !== null), the kind
- * of failure the runner's recovery may continue. It is computed from the live error, before recovery decides, because the stored run
- * error is only its message and loses the error name and status interruptionOf also reads.
+ * Extra facts about the event. `recovering` (only on 'failed'): the runner's recovery is going to continue this failure, so it is not
+ * a final failure. The runner decides it BEFORE firing the hook, from the live error (interruptionOf(e), which the stored run error
+ * cannot reproduce: it keeps only the message) and the same human-event count recoverAfterInterruption uses, so it cannot race with
+ * recovery appending its own "↻" event.
  */
-export interface RunLifecycleDetail { cutOff?: boolean }
+export interface RunLifecycleDetail { recovering?: boolean }
 export type RunLifecycleHook = (workflowId: string, runId: string, event: RunLifecycleEvent, detail?: RunLifecycleDetail) => void | Promise<void>;
 
 const _runLifecycleHooks = new Set<{ fn: RunLifecycleHook }>();
@@ -826,7 +827,15 @@ ${agentRun.goal}`;
     if (aborted) {
       fireHook(workflowId, runId, 'cancelled');
     } else {
-      fireHook(workflowId, runId, 'failed', { cutOff: interruptionOf(e) !== null });
+      let recovering = false;
+      if (interruptionOf(e) !== null) {
+        // Same rule as recoverAfterInterruption (auto: true). A read error counts as "not recovering": a finding beats a lost failure.
+        try {
+          const bodies = (await repo.listHumanWorkflowEvents(workflowId, null, null, null)).map((m) => String(m.body));
+          recovering = trailingRecoveries(bodies) < MAX_AUTO_RECOVERIES;
+        } catch { /* keep false */ }
+      }
+      fireHook(workflowId, runId, 'failed', { recovering });
       // Deliver child-result to parent even on failure (F7), with why the run failed
       if (workflow.parent_id) {
         await deliverChildResult(workflowId, msg);

@@ -86,7 +86,7 @@ describe('session_failed intake', () => {
 
   it('a failed ordinary session creates a session_failed finding', async () => {
     const { wf, run } = await makeFailedRun('boom: Bearer abcdef1234567890abcdef');
-    fireRunLifecycleHook(wf, run, 'failed', { cutOff: false });
+    fireRunLifecycleHook(wf, run, 'failed', { recovering: false });
     await tick();
     const all = await findings();
     assert.equal(all.length, 1);
@@ -117,16 +117,56 @@ describe('session_failed intake', () => {
     assert.equal((await findings()).filter((f) => f.source === 'session_failed').length, 0);
   });
 
-  it('a failure that recovery is continuing does not, and the same failure after the recovery cap does', async () => {
+  it('a failure the runner says is being recovered does not create a finding; the same failure not recovered does', async () => {
     const { wf, run } = await makeFailedRun('ACP error: kiro-cli process exited');
-    await addHuman(wf, 'please do the thing');
-    fireRunLifecycleHook(wf, run, 'failed', { cutOff: true });
+    fireRunLifecycleHook(wf, run, 'failed', { recovering: true });
     await tick();
-    assert.equal((await findings()).length, 0, 'recovery will continue');
+    assert.equal((await findings()).length, 0);
+    fireRunLifecycleHook(wf, run, 'failed', { recovering: false });
+    await tick();
+    assert.equal((await findings()).length, 1);
+  });
 
-    for (let i = 0; i < MAX_AUTO_RECOVERIES; i++) await addHuman(wf, `${RECOVERY_PREFIX} Continue where you left off`);
-    fireRunLifecycleHook(wf, run, 'failed', { cutOff: true });
+  it('the intake does not read human events itself', async () => {
+    const { wf, run } = await makeFailedRun('ACP error: kiro-cli process exited');
+    const repo = getSessionsRepository();
+    const orig = repo.listHumanWorkflowEvents.bind(repo);
+    let reads = 0;
+    (repo as { listHumanWorkflowEvents: unknown }).listHumanWorkflowEvents = (...a: Parameters<typeof orig>) => { reads++; return orig(...a); };
+    try {
+      for (let i = 0; i < MAX_AUTO_RECOVERIES; i++) await addHuman(wf, `${RECOVERY_PREFIX} Continue`);
+      fireRunLifecycleHook(wf, run, 'failed', { recovering: true });
+      await tick();
+    } finally { (repo as { listHumanWorkflowEvents: unknown }).listHumanWorkflowEvents = orig; }
+    assert.equal(reads, 0);
+    assert.equal((await findings()).length, 0);
+  });
+
+  it('different error messages give different findings; the same message with other timestamps and ids gives one', async () => {
+    const a = await makeFailedRun('Tool crashed at 2026-01-01T10:00:00Z id deadbeef12345678');
+    const b = await makeFailedRun('Tool crashed at 2026-02-02T11:11:11Z id 0123456789abcdef');
+    const c = await makeFailedRun('Totally different failure');
+    for (const x of [a, b, c]) { fireRunLifecycleHook(x.wf, x.run, 'failed', { recovering: false }); await tick(); }
+    const all = await findings();
+    assert.equal(all.length, 2);
+    const same = all.find((f) => f.evidence.includes('Tool crashed'))!;
+    assert.equal(same.occurrences, 2);
+    const other = all.find((f) => f.evidence.includes('Totally different'))!;
+    assert.ok(other.evidence.includes(c.wf) && other.evidence.includes(c.run));
+  });
+
+  async function skipCase(over: { kind?: string; noProject?: boolean; review?: boolean }): Promise<number> {
+    const { wf, run } = await makeFailedRun();
+    if (over.kind) dbRun('UPDATE p6_workflows SET kind = ? WHERE id = ?', over.kind, wf);
+    if (over.noProject) dbRun('UPDATE p6_workflows SET project_id = NULL WHERE id = ?', wf);
+    fireRunLifecycleHook(wf, run, 'failed', { recovering: false });
     await tick();
-    assert.equal((await findings()).length, 1, 'recovery cap reached');
+    return (await findings()).length;
+  }
+  it('skips review sessions, automation workflows and workflows without a project', async () => {
+    assert.equal(await skipCase({ kind: 'review' }), 0);
+    assert.equal(await skipCase({ kind: 'automation' }), 0);
+    assert.equal(await skipCase({ noProject: true }), 0);
+    assert.equal(await skipCase({}), 1, 'control: an ordinary session still creates one');
   });
 });

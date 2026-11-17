@@ -5,27 +5,17 @@ import type { RunLifecycleDetail, RunLifecycleEvent } from '../agent/runner.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { getReviewsRepository } from '../repositories/reviews.ts';
 import { getAutofixFindingsRepository } from '../repositories/autofix-findings.ts';
-import { interruptionOf, trailingRecoveries, MAX_AUTO_RECOVERIES } from '../workflows/recovery.ts';
 import { recordFinding } from './intake.ts';
 
-/**
- * Whether the runner's recovery is going to continue this failure, so it is not a failure yet.
+/*
+ * Whether recovery is continuing this failure is decided by the runner, not here. In runner.ts the 'failed' hook fires in the catch
+ * block and recoverAfterInterruption runs later in the finally block, and the hook is fire-and-forget: reading the human events here
+ * would race with recovery appending its own "↻" event (it would see the cap reached for a session that is being continued). So the
+ * runner reads the trailing recovery count before firing the hook and passes `detail.recovering`; this intake reads no human events.
  *
- * Order in runner.ts: fireHook('failed') runs in the catch block; recoverAfterInterruption runs later, in the finally block. So the
- * hook fires BEFORE recovery decides, and the decision is re-derived here from the same inputs recovery uses:
- *   - "is it an interruption": `detail.cutOff`, which the runner computes as interruptionOf(e) from the live error. The stored run
- *     error is only e.message, which loses the error name (AgentCoreStallError) and status (504) that interruptionOf also reads, so
- *     the stored text alone would miss two of its five kinds. (Without detail, fall back to interruptionOf on the stored message.)
- *   - "is there room": trailingRecoveries(human events) < MAX_AUTO_RECOVERIES, counted exactly as recoverAfterInterruption does.
- * Nothing appends a human event between the hook and that decision, so both see the same count. At the cap, recovery stops and the
- * failure is real, so a finding is created.
+ * Known gap: failures closed by the lost-run sweep (workflows/lost-runs.ts) and by driver-level catches (workflows/driver.ts) fire no
+ * 'failed' hook, so they are out of scope for this intake.
  */
-async function recoveryWillContinue(workflowId: string, storedError: string, detail?: RunLifecycleDetail): Promise<boolean> {
-  const cutOff = detail?.cutOff ?? interruptionOf({ message: storedError }) !== null;
-  if (!cutOff) return false;
-  const bodies = (await getSessionsRepository().listHumanWorkflowEvents(workflowId, null, null, null)).map((m) => String(m.body));
-  return trailingRecoveries(bodies) < MAX_AUTO_RECOVERIES;
-}
 
 export async function handleSessionFailed(workflowId: string, runId: string, event: RunLifecycleEvent, detail?: RunLifecycleDetail): Promise<void> {
   if (event !== 'failed') return;
@@ -38,15 +28,19 @@ export async function handleSessionFailed(workflowId: string, runId: string, eve
   const run = await sessions.getRunById(runId);
   const error = String(run?.error ?? '').trim();
   const stop = String(run?.stop_reason ?? '').trim();
-  if (await recoveryWillContinue(workflowId, error, detail)) return;
+  if (detail?.recovering) return;
 
   const projectId = String(workflow.project_id);
-  // The stable part is the stop reason (or the failure's class), never the raw error text, so one finding covers repeat failures.
-  const errorClass = stop || (interruptionOf({ message: error })?.kind ?? 'run failed');
+  // computeFingerprint normalises the error (timestamps, ids, paths, line numbers), so the same failure is one finding and different
+  // failures are different findings.
+  const header = `Session ${workflowId}, run ${runId}. Goal: ${String(workflow.goal ?? '').slice(0, 200)}`;
   await recordFinding(
     projectId,
-    { repoFullName: `session:${projectId}`, branch: 'sessions', headSha: '', source: 'session_failed', kind: 'session', severity: 'medium', errorText: errorClass },
-    [stop && `Stop reason: ${stop}`, error && `Error: ${error}`].filter(Boolean).join('\n') || 'The session run failed.',
+    {
+      repoFullName: `session:${projectId}`, branch: 'sessions', headSha: '', source: 'session_failed', kind: 'session', severity: 'medium',
+      errorText: [stop, error].filter(Boolean).join(' ') || 'run failed',
+    },
+    [header, stop && `Stop reason: ${stop}`, error && `Error: ${error}`].filter(Boolean).join('\n'),
   );
 }
 
