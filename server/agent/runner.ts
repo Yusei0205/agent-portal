@@ -127,26 +127,44 @@ export function shutdownMessage(): string {
  *        'failed'    — run failed (non-abort error)
  *        'cancelled' — run was aborted / cancelled by the user
  */
-let _runLifecycleHook: (
-  (workflowId: string, runId: string, event: 'start' | 'done' | 'failed' | 'cancelled') => void
-) | null = null;
+export type RunLifecycleEvent = 'start' | 'done' | 'failed' | 'cancelled';
+/**
+ * Extra facts about the event. `cutOff` (only on 'failed'): the failure is an interruption (interruptionOf(error) !== null), the kind
+ * of failure the runner's recovery may continue. It is computed from the live error, before recovery decides, because the stored run
+ * error is only its message and loses the error name and status interruptionOf also reads.
+ */
+export interface RunLifecycleDetail { cutOff?: boolean }
+export type RunLifecycleHook = (workflowId: string, runId: string, event: RunLifecycleEvent, detail?: RunLifecycleDetail) => void | Promise<void>;
 
-export function setRunLifecycleHook(
-  fn: (workflowId: string, runId: string, event: 'start' | 'done' | 'failed' | 'cancelled') => void,
-): void {
-  _runLifecycleHook = fn;
+const _runLifecycleHooks = new Set<{ fn: RunLifecycleHook }>();
+let _singleHook: { fn: RunLifecycleHook } | null = null;
+
+/** Register a hook for every run's lifecycle events. Returns a function that removes it again. */
+export function addRunLifecycleHook(fn: RunLifecycleHook): () => void {
+  const entry = { fn };
+  _runLifecycleHooks.add(entry);
+  return () => { _runLifecycleHooks.delete(entry); };
 }
 
-function fireHook(workflowId: string, runId: string, event: 'start' | 'done' | 'failed' | 'cancelled'): void {
-  if (!_runLifecycleHook) return;
-  // The hook is async (it returns a promise although typed void): a rejection must not escape as an unhandled one.
-  try {
-    const pending: unknown = _runLifecycleHook(workflowId, runId, event);
-    if (pending && typeof (pending as Promise<unknown>).catch === 'function') {
-      (pending as Promise<unknown>).catch((e) => console.error('[runner] lifecycle hook failed:', e instanceof Error ? e.message : e));
-    }
-  } catch { /* hook errors must not crash the runner */ }
+/** Register the one hook of this kind; a later call replaces only the hook this function registered earlier. */
+export function setRunLifecycleHook(fn: RunLifecycleHook): void {
+  if (_singleHook) _runLifecycleHooks.delete(_singleHook);
+  _singleHook = { fn };
+  _runLifecycleHooks.add(_singleHook);
 }
+
+export function fireRunLifecycleHook(workflowId: string, runId: string, event: RunLifecycleEvent, detail?: RunLifecycleDetail): void {
+  for (const { fn } of [..._runLifecycleHooks]) {
+    // A hook may be async (it returns a promise although typed void): a rejection must not escape as an unhandled one.
+    try {
+      const pending: unknown = fn(workflowId, runId, event, detail);
+      if (pending && typeof (pending as Promise<unknown>).catch === 'function') {
+        (pending as Promise<unknown>).catch((e) => console.error('[runner] lifecycle hook failed:', e instanceof Error ? e.message : e));
+      }
+    } catch (e) { console.error('[runner] lifecycle hook failed:', e instanceof Error ? e.message : e); }
+  }
+}
+const fireHook = fireRunLifecycleHook;
 
 // ── Fingerprinting (FR-GUARD-8) ───────────────────────────────────────────────
 // The helpers live in tool-policy.ts so the AgentCore runners use the same code.
@@ -808,7 +826,7 @@ ${agentRun.goal}`;
     if (aborted) {
       fireHook(workflowId, runId, 'cancelled');
     } else {
-      fireHook(workflowId, runId, 'failed');
+      fireHook(workflowId, runId, 'failed', { cutOff: interruptionOf(e) !== null });
       // Deliver child-result to parent even on failure (F7), with why the run failed
       if (workflow.parent_id) {
         await deliverChildResult(workflowId, msg);
