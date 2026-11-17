@@ -158,3 +158,28 @@ policy and a filterable finding list; a project counter of open, resolved and di
 - Fix PRs trigger more CI runs; bounded by the open-PR cap and the attempt cap.
 - Webhook-driven runs make the portal's public webhook endpoints more important; signature
   verification is mandatory and tested.
+
+## 10. Corrections after reading the code (2026-11-17)
+
+Reading the code while writing the plan showed that some parts the spec calls "existing" are not in
+the code yet. Loop specs are stored and can be run by hand, but nothing dispatches the `github`,
+`cron`, `interval` or `jira` triggers. There is no webhook route, no server-run verification
+pipeline and no branch-push or PR-creation step for sessions. The README describes more than the
+code does. A and B therefore build these pieces themselves, as part of the auto-fix modules:
+
+- **Webhook intake** is new: a raw-body route (`router.rawPost`) that checks the GitHub HMAC signature.
+- **Dispatch** is direct. The pipeline starts the seeded session itself; there is no general trigger
+  dispatcher. The seeded specs use `trigger_type = 'webhook'` with
+  `trigger_config = {"finding_kind": ...}`. A new `finding` trigger type would need a rebuild of the
+  `p10_loop_specs` table (a SQLite CHECK constraint), and nothing needs it yet.
+- **Verification and delivery** are new server modules (`verify.ts`, `delivery.ts`).
+- **Table name.** `findings` and `p10_findings` already hold code-review findings, so the new table
+  is `autofix_findings`.
+- **Inbox types** are limited by a CHECK constraint, so auto-fix items reuse `review-ready` ("PR
+  ready") and `blocked` ("needs a human") with `payload.kind = 'autofix'`.
+- **Run hook.** `setRunLifecycleHook` holds one function, which `review-lifecycle.ts` already uses,
+  so it becomes a list of hooks.
+- **Reproduce command.** v1 uses the per-project `verify.command` only. Deriving the command from the
+  failing CI job is deferred.
+- **Numeric defaults** the spec left open: 3 open PRs, 2 attempts, $2 per finding, $10 per day, 60
+  minute cooldown, 10 files, 300 lines.
