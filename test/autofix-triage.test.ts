@@ -14,7 +14,7 @@ const finding = (o: Partial<AutofixFinding> = {}): AutofixFinding => ({
 const ctx = (o: Partial<TriageContext> = {}): TriageContext => ({ paused: false, openPrCount: 0, costTodayUsd: 0, defaultBranch: 'main', portalPrBranches: ['portal/pr-1'], now: NOW, ...o });
 
 test('mode off is suppressed', () => {
-  assert.deepEqual(triage(finding(), policy({ mode: 'off' }), ctx()).decision, 'suppressed');
+  assert.equal(triage(finding(), policy({ mode: 'off' }), ctx()).decision, 'suppressed');
 });
 test('paused is deferred', () => {
   assert.equal(triage(finding(), policy(), ctx({ paused: true })).decision, 'deferred');
@@ -35,6 +35,12 @@ test('branch eligibility: null is default, portal PR branches, extra globs', () 
   const extra = policy(); extra.branches.extra = ['release/*']; extra.branches.default_branch = false; extra.branches.portal_prs = false;
   assert.equal(triage(finding({ branch: 'release/1.0' }), extra, ctx()).decision, 'triaged');
   assert.equal(triage(finding({ branch: 'hotfix/1' }), extra, ctx()).decision, 'suppressed');
+});
+test('a null branch that is not eligible gives a no-branch reason', () => {
+  const p = policy(); p.branches.default_branch = false;
+  const r = triage(finding({ branch: null }), p, ctx());
+  assert.equal(r.decision, 'suppressed');
+  assert.match((r as { reason: string }).reason, /no branch recorded/);
 });
 test('future cooldown_until is deferred, past cooldown is not', () => {
   const r = triage(finding({ cooldown_until: '2026-11-17T13:00:00Z' }), policy(), ctx());

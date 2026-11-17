@@ -50,3 +50,23 @@ test('301 changed lines sets large; 300 does not', () => {
 test('an empty diff is ok and not large', () => {
   assert.deepEqual(checkDiff([], p, 'tests'), { ok: true, large: false, violations: [] });
 });
+test('deps exemption covers only the lockfile globs', () => {
+  assert.equal(checkDiff([f('infra/package-lock.json')], p, 'deps').ok, false);
+  assert.equal(checkDiff([f('.github/workflows/package-lock.json')], p, 'deps').ok, false);
+  assert.equal(checkDiff([f('.env/package-lock.json')], p, 'deps').ok, false);
+  assert.equal(checkDiff([f('package-lock.json'), f('web/package-lock.json')], p, 'deps').ok, true);
+});
+test('yarn.lock matches no default glob: not blocked, not specially exempted', () => {
+  assert.equal(checkDiff([f('yarn.lock')], p, 'tests').ok, true);
+  const strict = { ...p, protected_paths: [...p.protected_paths, 'yarn.lock'] };
+  assert.equal(checkDiff([f('yarn.lock')], strict, 'deps').ok, false);
+});
+test('matching is case-insensitive', () => {
+  assert.equal(checkDiff([f('.GitHub/Workflows/x.yml')], p, 'tests').ok, false);
+  assert.equal(checkDiff([f('Infra/a.tf')], p, 'tests').ok, false);
+  assert.equal(checkDiff([f('a/B.PEM')], p, 'tests').ok, false);
+});
+test('leading slash and doubled slashes are normalised', () => {
+  assert.equal(checkDiff([f('/.github/workflows/ci.yml')], p, 'tests').ok, false);
+  assert.equal(checkDiff([f('.github//workflows//ci.yml')], p, 'tests').ok, false);
+});

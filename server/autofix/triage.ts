@@ -33,7 +33,7 @@ export function triage(f: AutofixFinding, p: AutofixPolicy, ctx: TriageContext):
   if (p.mode === 'off') return { decision: 'suppressed', reason: 'auto-fix mode is off' };
   if (ctx.paused) return { decision: 'deferred', reason: 'auto-fix is paused' };
   if (!p.classes.includes(f.kind)) return { decision: 'suppressed', reason: `class '${f.kind}' is not allowed by policy` };
-  if (!branchEligible(f, p, ctx)) return { decision: 'suppressed', reason: `branch '${f.branch}' is not eligible` };
+  if (!branchEligible(f, p, ctx)) return { decision: 'suppressed', reason: f.branch === null ? 'no branch recorded and the default branch is not eligible' : `branch '${f.branch}' is not eligible` };
   if (f.cooldown_until && new Date(f.cooldown_until).getTime() > ctx.now.getTime()) {
     return { decision: 'deferred', reason: `cooldown until ${f.cooldown_until}` };
   }
