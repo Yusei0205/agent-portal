@@ -56,6 +56,22 @@ describe('slash commands', () => {
     assert.equal(one<{ trust_tools: number }>('SELECT trust_tools FROM p6_workflows WHERE id = ?', wfId)?.trust_tools, 0);
   });
 
+  it('/plan turns plan mode on and off, and the session shows it', async () => {
+    const { planMode } = await import('../server/agent/plan-guidance.ts');
+    assert.equal(planMode(wfId), false);
+    const on = await send('/plan on');
+    assert.equal((on.body as Record<string, unknown>).handled, true);
+    assert.equal(planMode(wfId), true);
+    const view = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${wfId}`, { cookie });
+    assert.equal(((view.body as { workflow: { plan_mode: boolean } }).workflow).plan_mode, true);
+    await send('/status');
+    assert.match(await lastCommandResult(), /Plan mode: on/);
+    await send('/plan');
+    assert.match(await lastCommandResult(), /Plan mode: on/);
+    await send('/plan off');
+    assert.equal(planMode(wfId), false);
+  });
+
   it('/rename changes the title, and the answer is saved with the command', async () => {
     const { one } = await import('../server/db.ts');
     await send('/rename Better title');

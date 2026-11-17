@@ -174,6 +174,13 @@ async function test(name: string, fn: (page: Page) => Promise<void>, page: Page)
     failures.push({ name, msg });
     if (sr) { sr.failed++; sr.failures.push({ name, message: msg }); }
     console.log(`✗\n    ${msg.split('\n')[0]}`);
+    // Debug aid: SMOKE_SHOTS=<dir> saves a screenshot of every failing test.
+    if (process.env.SMOKE_SHOTS) {
+      try {
+        fs.mkdirSync(process.env.SMOKE_SHOTS, { recursive: true });
+        await page.screenshot({ path: path.join(process.env.SMOKE_SHOTS, `${name.replace(/[^a-z0-9]+/gi, '_').slice(0, 80)}.png`) });
+      } catch { /* best effort */ }
+    }
   }
 }
 
@@ -270,7 +277,7 @@ async function waitForServer(maxWait = 8_000): Promise<void> {
 
 let sessionCookie = '';
 
-async function apiPost(urlPath: string, body: unknown): Promise<any> {
+async function apiPost(urlPath: string, body: unknown, retried = false): Promise<any> {
   const headers: Record<string, string> = {
     'content-type': 'application/json',
     'x-requested-with': 'agent-portal',
@@ -282,6 +289,23 @@ async function apiPost(urlPath: string, body: unknown): Promise<any> {
     headers,
     body: JSON.stringify(body),
   });
+
+  // Changes to what the portal trusts ask for the password again; confirm it once and repeat, as the page does.
+  if (res.status === 403 && !retried && urlPath !== '/api/auth/confirm') {
+    const again = await res.clone().json().catch(() => null) as any;
+    if (again?.code === 'reauth_required') {
+      const confirm = await fetch(`${BASE}/api/auth/confirm`, {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: JSON.stringify({ password: ADMIN_PASSWORD }),
+      });
+      if (!confirm.ok) throw new Error(`POST /api/auth/confirm: HTTP ${confirm.status}`);
+      // The confirmation is a second cookie next to the session cookie: keep both.
+      const reauth = confirm.headers.get('set-cookie')?.split(';')[0];
+      if (reauth) sessionCookie = `${sessionCookie}; ${reauth}`;
+      return apiPost(urlPath, body, true);
+    }
+  }
 
   const ct = res.headers.get('content-type') ?? '';
   const data = ct.includes('application/json') ? await res.json() : await res.text();
@@ -505,6 +529,15 @@ async function main() {
     context = await browser.newContext({ baseURL: BASE });
     page    = await context.newPage();
 
+    // Changes to what the portal trusts (credentials, tools, ...) ask the person for their password.
+    // Answer that prompt the way a person would, whenever it appears, so every test can go on.
+    await page.addLocatorHandler(page.locator('#reauth-title'), async () => {
+      const box = page.getByRole('dialog', { name: 'Confirm your password' });
+      await box.getByLabel('Password').fill(ADMIN_PASSWORD);
+      await box.getByRole('button', { name: 'Confirm', exact: true }).click();
+      await box.waitFor({ state: 'detached', timeout: 5000 }).catch(() => {});
+    });
+
     // Capture JS errors
     const jsErrors: string[] = [];
     page.on('console', msg => { if (msg.type() === 'error') jsErrors.push(msg.text()); });
@@ -568,7 +601,7 @@ async function main() {
       await newBtn.click();
       await p.waitForSelector('#np-name', { timeout: 5000 });
       // Verify modal open — don't actually submit (project already created via API)
-      const modalHeading = await p.locator('#new-project-title, h2').first().textContent();
+      const modalHeading = await p.locator('#new-project-title').first().textContent();
       if (!modalHeading?.toLowerCase().includes('project')) {
         throw new Error(`Modal heading unexpected: ${modalHeading}`);
       }
@@ -632,7 +665,7 @@ async function main() {
     currentSectionId = '7';
     await test('Old Insights link opens the Dashboard with the Cost panel', async (p) => {
       await goto(p, `/p/${projectId}/insights`);
-      await p.waitForSelector('[aria-label="Cost"]', { timeout: 8000 });
+      await p.waitForSelector('[aria-label="Cost and usage"]', { timeout: 8000 });
     }, page);
     } // end §7 insights
 
@@ -689,11 +722,8 @@ async function main() {
         });
       });
 
-      await goto(p, `/p/${projectId}/setup`, 1000);
-      // Click the Repositories tab
-      const reposTab = p.locator('[role="tab"]').filter({ hasText: /repositories/i });
-      await reposTab.waitFor({ timeout: 6_000 });
-      await reposTab.click();
+      // Repositories are a tab of Workspaces now
+      await goto(p, `/p/${projectId}/workspaces/repositories`, 1000);
       await p.waitForTimeout(700);
 
       // The progress bar element should be present
@@ -790,8 +820,8 @@ async function main() {
     console.log('\n10. Connections');
     currentSectionId = '10';
     await test('Connections page Git tab renders', async (p) => {
-      await goto(p, '/connections/git');
-      await assertHeading(p, 'Connections');
+      await goto(p, '/connect/git');
+      await assertHeading(p, 'Connect');
       
     }, page);
     } // end §10 connections
@@ -801,8 +831,8 @@ async function main() {
     console.log('\n11. Integrations');
     currentSectionId = '11';
     await test('Integrations page renders', async (p) => {
-      await goto(p, '/integrations');
-      await assertHeading(p, 'Integrations');
+      await goto(p, '/connect/tools');
+      await assertHeading(p, 'Connect');
     }, page);
     } // end §11 integrations
 
@@ -811,8 +841,8 @@ async function main() {
     console.log('\n12. Connections / AWS accounts');
     currentSectionId = '12';
     await test('Connections page renders', async (p) => {
-      await goto(p, '/connections/git');
-      await assertHeading(p, 'Connections');
+      await goto(p, '/connect/git');
+      await assertHeading(p, 'Connect');
       
     }, page);
     } // end §12 connections/aws-accounts
@@ -831,11 +861,11 @@ async function main() {
     if (sectionEnabled('settings')) {
     console.log('\n14. Settings');
     currentSectionId = '14';
-    await test('Settings page — heading and Portal AI provider/Tools/Permissions tabs', async (p) => {
+    await test('Settings page — heading and Portal AI provider/Tools/Budget tabs', async (p) => {
       await goto(p, '/settings', 1200);
       await assertHeading(p, 'Settings');
       await p.waitForSelector('.tabs, [role="tablist"]', { timeout: 8000 });
-      await assertTabsExist(p, ['Portal AI provider', 'Tools', 'Permissions']);
+      await assertTabsExist(p, ['Portal AI provider', 'Tools', 'Budget']);
     }, page);
     } // end §14 settings
 
@@ -1083,7 +1113,9 @@ async function main() {
       await newBtn.click();
       await p.waitForSelector('[role="dialog"][aria-label="New code review"]', { timeout: 6000 });
       // Fill required head branch
-      await p.fill('input[placeholder="feature/my-branch"]', 'feature/smoke-test');
+      // The head branch is a dropdown of the repository's branches; "Enter a ref instead" turns it into a text field.
+      await p.getByRole('button', { name: 'Enter a ref instead' }).nth(1).click();
+      await p.fill('#nr-head', 'feature/smoke-test');
       // Fill optional Jira key
       await p.fill('[aria-describedby="jira-key-hint"]', 'SMOKE-1');
       // Submit and wait for API response
@@ -1238,31 +1270,19 @@ async function main() {
     if (sectionEnabled('integrations')) {
     console.log('\n22. Integrations');
     currentSectionId = '22';
-    await test('Atlassian integration type shows Account email field', async (p) => {
-      // The Integrations component needs a projectId to show "Add integration".
-      // App.jsx only routes #/integrations (global, no project) to <Integrations projectId={null}>,
-      // where the button is hidden. Navigating #/p/:pid/integrations falls through to a Placeholder.
-      // This test attempts the project-scoped URL to surface that routing gap.
+    await test('Atlassian MCP preset signs in with OAuth (no secret header)', async (p) => {
+      // Tools & services lives under Connect. The old per-type form (account email + API token) is gone:
+      // Atlassian is now an MCP server preset that you sign in to when a session starts.
       await goto(p, `/p/${projectId}/integrations`, 800);
-      // Detect placeholder (Coming soon. is in a <p>, not a heading)
-      const pageBody = await p.evaluate(() => document.body.innerText);
-      const hasComingSoon = /coming soon/i.test(pageBody);
-      if (hasComingSoon) {
-        throw new Error(
-          'APP BUG: #/p/:projectId/integrations shows "Coming soon" placeholder. ' +
-          'App.jsx routes integrations only for the global case (!route.projectId), ' +
-          'so a project-scoped URL falls through to Placeholder instead of ' +
-          '<Integrations projectId={projectId} />. ' +
-          'Fix: add `route.projectId && route.tab === "integrations"` as a route in App.jsx.',
-        );
-      }
-      // If page renders correctly, test the Atlassian modal
-      const addBtn = p.locator('button').filter({ hasText: /Add integration/i }).first();
+      if (!p.url().includes('/connect/tools')) throw new Error(`Expected /connect/tools, got: ${p.url()}`);
+      const addBtn = p.locator('button').filter({ hasText: /New MCP server/i }).first();
       await addBtn.waitFor({ timeout: 5000 });
       await addBtn.click();
-      await p.selectOption('#int-type', 'atlassian');
-      await p.waitForTimeout(400);
-      await p.locator('#int-jira-email').waitFor({ timeout: 4000 });
+      await p.getByRole('button', { name: 'Atlassian', exact: true }).click();
+      await p.getByText(/No secret needed/i).first().waitFor({ timeout: 4000 });
+      if (await p.locator('fieldset').filter({ hasText: /Secret headers/i }).count()) {
+        throw new Error('An OAuth preset should not ask for a secret header');
+      }
       await p.keyboard.press('Escape');
     }, page);
     } // end §22 integrations
@@ -1419,6 +1439,9 @@ async function main() {
       const systemBtn = p.locator('.account-theme-btn').filter({ hasText: /^System$/i }).first();
       await systemBtn.waitFor({ timeout: 3000 });
       await systemBtn.click();
+      // The account menu stays open after a theme pick; close it so it does not sit over the next page's top-right corner.
+      await p.keyboard.press('Escape');
+      await p.mouse.click(5, 400);
     }, page);
     } // end §25 theme
 
@@ -1567,8 +1590,8 @@ async function main() {
     currentSectionId = '29';
 
     await test('Credentials page renders with engine sections', async (p) => {
-      await goto(p, '/credentials', 1000);
-      await assertHeading(p, 'Connect');
+      await goto(p, '/config/sign-ins', 1000);
+      await assertHeading(p, 'Agent setup');
       // Should show both engine sections
       const bodyText = await p.evaluate(() => document.body.innerText);
       const hasKiro = /kiro/i.test(bodyText);
@@ -1590,7 +1613,7 @@ async function main() {
         status: 'pending', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'TEST-1234',
       } }));
       try {
-        await goto(p, '/credentials', 500);
+        await goto(p, '/config/sign-ins', 500);
         const section = p.locator('section[aria-labelledby="codex-credentials-title"]');
         await section.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
         await section.getByText('TEST-1234', { exact: true }).waitFor();
@@ -1610,7 +1633,8 @@ async function main() {
         code: 'codex_worker_required', error: 'Codex requires an AgentCore runner for this deployment.',
       } }));
       try {
-        await goto(p, '/credentials', 500);
+        await goto(p, '/projects', 300); // leave the page so it loads again with this mock
+        await goto(p, '/config/sign-ins', 500);
         const section = p.locator('section[aria-labelledby="codex-credentials-title"]');
         await section.locator('.cred-card').waitFor();
         await section.getByRole('alert').filter({ hasText: 'Codex requires an AgentCore runner' }).waitFor();
@@ -1641,7 +1665,7 @@ async function main() {
     }, page);
 
     await test('Add a Claude API key credential and see last 4 only', async (p) => {
-      await goto(p, '/credentials', 1000);
+      await goto(p, '/config/sign-ins', 1000);
       // Open the "Add Claude Code credential" dialog
       const addBtn = p.locator('button').filter({ hasText: /add claude code/i }).first();
       await addBtn.waitFor({ timeout: 8000 });
@@ -1662,7 +1686,7 @@ async function main() {
       await p.fill('input#cred-name', 'Smoke test key');
 
       // Submit
-      const submitBtn = p.locator('[role="dialog"] .btn-primary').first();
+      const submitBtn = p.locator('[role="dialog"] button[type="submit"]').first();
       await submitBtn.click();
 
       // Dialog should close
@@ -1676,7 +1700,10 @@ async function main() {
       // Should show "ABCD" (last 4) — not the full key
       const hasLast4 = credText.includes('ABCD');
       const hasFullKey = credText.includes('test-anthropic-key-ABCD');
-      if (!hasLast4) throw new Error('Last 4 chars not shown in credentials list');
+      if (!hasLast4) {
+        const dlg = await p.locator('[role="dialog"]').first().innerText().catch(() => '(no dialog)');
+        throw new Error('Last 4 chars not shown in credentials list. Dialog: ' + dlg.slice(0, 300).replace(/\s+/g, ' '));
+      }
       if (hasFullKey) throw new Error('Full secret key should not be visible in UI');
     }, page);
 
@@ -1718,7 +1745,7 @@ async function main() {
       });
 
       try {
-        await goto(p, '/credentials', 1200);
+        await goto(p, '/config/sign-ins', 1200);
 
         // The Refresh button should be visible and enabled
         const refreshBtn = p.locator('button[aria-label*="Refresh"]').first();
@@ -1760,7 +1787,7 @@ async function main() {
       await test('Codex pack installs and opens its native lead agent file', async (p) => {
         await goto(p, '/config/kiro', 800);
         await p.getByRole('tab', { name: 'Codex (~/.codex)', exact: true }).click();
-        await p.getByRole('button', { name: 'Add agent pack', exact: true }).click();
+        await p.getByRole('button', { name: 'Add or update the agent pack', exact: true }).click();
         await p.getByRole('dialog').getByRole('button', { name: 'Add agent pack', exact: true }).click();
         await p.getByLabel('Editing agents/lead-orchestrator.toml', { exact: true }).waitFor({ timeout: 15000 });
         const response = await p.request.get(BASE + '/api/user-config/agents?engine=codex');
@@ -1783,21 +1810,13 @@ async function main() {
     console.log('\n30. Configuration page (F5)');
     currentSectionId = '30';
 
-    await test('Configuration page renders with Kiro/Claude/AWS tabs', async (p) => {
+    await test('Agent setup page renders with Sign-ins/Codex/Kiro/Claude tabs', async (p) => {
       await goto(p, '/config/kiro', 1200);
-      await assertHeading(p, 'Configuration');
+      await assertHeading(p, 'Agent setup');
       await p.waitForSelector('.tabs, [role="tablist"]', { timeout: 8000 });
-      await assertTabsExist(p, ['~/.kiro', '~/.claude', '~/.aws']);
-    }, page);
-
-    await test('AWS tab shows credential warning', async (p) => {
-      await goto(p, '/config/kiro', 1200);
-      await p.waitForSelector('#cfg-tab-aws', { timeout: 8000 });
-      await p.click('#cfg-tab-aws');
-      await p.waitForTimeout(500);
-      const bodyText = await p.evaluate(() => document.body.innerText);
-      const hasWarning = /aws credentials|encrypted at rest|keys/i.test(bodyText);
-      if (!hasWarning) throw new Error('AWS tab should show credential warning');
+      await assertTabsExist(p, ['Sign-ins', '~/.codex', '~/.kiro', '~/.claude']);
+      // AWS access is set per project (Workspaces), so there is no ~/.aws tab here any more.
+      if (await p.locator('#cfg-tab-aws').count()) throw new Error('Agent setup should not have an AWS tab');
     }, page);
 
     await test('Create a JSON file and verify invalid-JSON error path', async (p) => {
@@ -1965,8 +1984,13 @@ async function main() {
       }
 
       // Wait for the loading spinner to clear — endpoint may return an error in test env, that's OK
-      await p.waitForSelector('[aria-label="Loading models…"]', { state: 'detached', timeout: 6000 }).catch(() => {});
+      await p.waitForSelector('[aria-label="Loading models…"]', { state: 'detached', timeout: 20000 }).catch(() => {});
       await p.waitForTimeout(300);
+      // A fake key cannot list models, and that call can outlast the wait: the field showing its spinner is enough then.
+      if (await p.locator('[aria-label="Loading models…"]').count()) {
+        await p.keyboard.press('Escape');
+        return;
+      }
 
       // After loading, the select must be present and "Engine default" must be the first option
       const modelSelect = p.locator('#ns-model').first();
@@ -2721,8 +2745,9 @@ async function main() {
     await test('Delegation settings tab is read-only for non-admin (admin sees editable form)', async (p) => {
       // As admin, delegation tab should show editable form
       await goto(p, '/settings', 1200);
-      await p.waitForSelector('[id="tab-delegation"]', { timeout: 8000 });
-      await p.click('[id="tab-delegation"]');
+      // Delegation settings now sit on the Sessions tab, under the session settings.
+      await p.waitForSelector('[id="tab-sessions"]', { timeout: 8000 });
+      await p.click('[id="tab-sessions"]');
       await p.waitForTimeout(800);
       const bodyText = await p.evaluate(() => document.body.innerText);
       if (!/delegation|delegated sessions/i.test(bodyText)) {
@@ -2998,6 +3023,15 @@ async function main() {
         await p.waitForSelector('.tabs, [role="tablist"]', { timeout: 8000 });
         await p.click('[id="tp-tab-scripts"]');
         await p.waitForTimeout(600);
+
+        // A failed generation from an earlier test stays on the page until it is dismissed, and it
+        // shares the "Generation progress" label this test waits on. Clear it first.
+        for (let i = 0; i < 5; i++) {
+          const dismiss = p.locator('[aria-label="Generation progress"] button[aria-label="Dismiss"]').first();
+          if (!(await dismiss.count())) break;
+          await dismiss.click();
+          await p.waitForTimeout(200);
+        }
 
         // Open dialog
         const genBtn = p.locator('button').filter({ hasText: /generate with ai/i }).first();
@@ -3692,12 +3726,12 @@ async function main() {
       console.log('\n44. Rail navigation — Work/Connect/Quality/Account sections, project picker');
       currentSectionId = '44';
 
-      await test('Rail: Work/Connect/Quality/Account sections visible, no Inbox in rail', async (p) => {
+      await test('Rail: Work/Knowledge/Connect/Agents/Portal sections visible, no Inbox in rail', async (p) => {
         await goto(p, `/p/${projectId}/sessions`, 800);
         await p.waitForSelector('.rail', { timeout: 5000 });
         const railText = await p.locator('.rail').textContent();
         // New section labels
-        const sections = ['Work', 'Connect', 'Quality', 'Account'];
+        const sections = ['Work', 'Knowledge', 'Connect', 'Agents', 'Portal'];
         for (const s of sections) {
           if (!railText?.includes(s)) throw new Error(`Rail section "${s}" not found`);
         }
@@ -3705,18 +3739,17 @@ async function main() {
         const inboxLinks = await p.locator('.rail .rail-link').filter({ hasText: /^Inbox$/i }).count();
         if (inboxLinks > 0) throw new Error('Inbox should NOT be in the rail (moved to top bar)');
         // Work items
-        const workItems = ['Sessions', 'Workspaces', 'Knowledge', 'Create', 'Insights'];
+        const workItems = ['Dashboard', 'Sessions', 'Workspaces', 'Knowledge', 'Create'];
         for (const item of workItems) {
           if (!railText?.includes(item)) throw new Error(`Work item "${item}" not in rail`);
         }
         // Connect items
         if (!railText?.includes('Connections')) throw new Error('"Connections" not in rail (Connect section)');
-        if (!railText?.includes('Repositories')) throw new Error('"Repositories" not in rail (Connect section)');
-        // Quality items
-        if (!railText?.includes('Reviews')) throw new Error('"Reviews" not in rail (Quality section)');
-        if (!railText?.includes('Tests')) throw new Error('"Tests" not in rail (Quality section)');
-        // Account items
-        const accountItems = ['Credentials', 'Configuration', 'API access', 'Settings'];
+        // Review and test items live under Work
+        if (!railText?.includes('Reviews')) throw new Error('"Reviews" not in rail (Work section)');
+        if (!railText?.includes('Tests')) throw new Error('"Tests" not in rail (Work section)');
+        // Agent setup and portal items (agent sign-ins now live inside Agent setup)
+        const accountItems = ['Agent setup', 'API access', 'Settings'];
         for (const item of accountItems) {
           if (!railText?.includes(item)) throw new Error(`Account item "${item}" not in rail`);
         }
@@ -3727,14 +3760,14 @@ async function main() {
         if (setupLinks > 0) throw new Error('Setup should NOT be in the rail (moved to project picker)');
       }, page);
 
-      await test('Connections rail item links to /connections/git', async (p) => {
+      await test('Connections rail item links to /connect/code-hosts', async (p) => {
         await goto(p, `/p/${projectId}/sessions`, 800);
         await p.waitForSelector('.rail', { timeout: 5000 });
         const connectionsLink = p.locator('.rail .rail-link').filter({ hasText: /^Connections$/i }).first();
         await connectionsLink.waitFor({ timeout: 3000 });
         const href = await connectionsLink.getAttribute('href');
-        if (!href?.includes('/connections/git')) {
-          throw new Error(`Connections link should point to /connections/git, got: ${href}`);
+        if (!href?.includes('/connect/code-hosts')) {
+          throw new Error(`Connections link should point to /connect/code-hosts, got: ${href}`);
         }
       }, page);
 
@@ -3749,17 +3782,11 @@ async function main() {
         }
       }, page);
 
-      await test('Repositories rail item links to /p/:pid/setup/repositories and navigates there', async (p) => {
-        await goto(p, `/p/${projectId}/sessions`, 800);
-        await p.waitForSelector('.rail', { timeout: 5000 });
-        const reposLink = p.locator('.rail .rail-link').filter({ hasText: /^Repositories$/i }).first();
-        await reposLink.waitFor({ timeout: 3000 });
-        const href = await reposLink.getAttribute('href');
-        if (!href?.includes('/setup/repositories')) {
-          throw new Error(`Repositories link should point to /setup/repositories, got: ${href}`);
+      await test('Repositories are a Workspaces tab: the old /setup/repositories URL redirects there', async (p) => {
+        await goto(p, `/p/${projectId}/setup/repositories`, 1200);
+        if (!p.url().includes(`/p/${projectId}/workspaces/repositories`)) {
+          throw new Error(`Expected redirect to /workspaces/repositories, got: ${p.url()}`);
         }
-        // Click and verify we land on the Repositories tab
-        await reposLink.click();
         await p.waitForTimeout(1000);
         const bodyText = await p.evaluate(() => document.body.innerText);
         if (!/repositories/i.test(bodyText)) {
@@ -3841,19 +3868,19 @@ async function main() {
       console.log('\n45. Old URL redirects');
       currentSectionId = '45';
 
-      await test('/connections redirects to /connections/git', async (p) => {
+      await test('/connections redirects to /connect/git', async (p) => {
         await goto(p, '/connections', 1200);
         const url = p.url();
-        if (!url.includes('/connections/git')) {
-          throw new Error(`Expected redirect to /connections/git, got: ${url}`);
+        if (!url.includes('/connect/git')) {
+          throw new Error(`Expected redirect to /connect/git, got: ${url}`);
         }
       }, page);
 
-      await test('/aws redirects to /connections/git', async (p) => {
+      await test('/aws redirects to /connect/git', async (p) => {
         await goto(p, '/aws', 1200);
         const url = p.url();
-        if (!url.includes('/connections/git')) {
-          throw new Error(`Expected redirect to /connections/git, got: ${url}`);
+        if (!url.includes('/connect/git')) {
+          throw new Error(`Expected redirect to /connect/git, got: ${url}`);
         }
       }, page);
 
@@ -3892,8 +3919,8 @@ async function main() {
         // pressing Back must return to /projects, not loop back to /aws.
         await goto(p, '/aws', 1200);
         const afterUrl = p.url();
-        if (!afterUrl.includes('/connections/git')) {
-          throw new Error(`Expected redirect to /connections/git, got: ${afterUrl}`);
+        if (!afterUrl.includes('/connect/git')) {
+          throw new Error(`Expected redirect to /connect/git, got: ${afterUrl}`);
         }
 
         // Press browser Back — should land on /projects, not on /aws again.
@@ -5003,9 +5030,9 @@ async function main() {
         }
       }, page);
 
-      // ── 47.10  Node positioned at SVG centre (not top-left 0,0) ───────
+      // ── 47.10  Single agent renders as a card inside the Agent Network panel ──
 
-      await test('Agent Network single node sits at SVG centre, not at top-left corner', async (p) => {
+      await test('Agent Network single agent shows as one card inside the panel', async (p) => {
         const singleNodeData = {
           ...dashMockData,
           network: {
@@ -5023,64 +5050,37 @@ async function main() {
         });
         try {
           await gotoDashboard(p);
-          // Wait for the node to be rendered
+          // The network is a set of agent cards (no SVG graph any more)
           await p.waitForSelector('[role="button"][aria-label^="probe-agent,"]', { timeout: 8_000 });
-          const node = p.locator('[role="button"][aria-label^="probe-agent,"]').first();
-          const svg  = p.locator('.db-network-svg').first();
-          const [nodeBB, svgBB] = await Promise.all([node.boundingBox(), svg.boundingBox()]);
-          if (!nodeBB || !svgBB) throw new Error('Could not get bounding boxes for node/SVG');
-          // The node should be near the SVG viewport centre, not at the top-left origin.
-          const nodeCx = nodeBB.x + nodeBB.width  / 2;
-          const nodeCy = nodeBB.y + nodeBB.height / 2;
-          // SVG rendered area centre (preserveAspectRatio xMidYMid centres the content)
-          const svgCx = svgBB.x + svgBB.width  / 2;
-          const svgCy = svgBB.y + svgBB.height / 2;
-          const dx = Math.abs(nodeCx - svgCx);
-          const dy = Math.abs(nodeCy - svgCy);
-          // Allow ≤15% of the SVG width/height as tolerance (centred layout may not be pixel-perfect)
-          const tolX = svgBB.width  * 0.15;
-          const tolY = svgBB.height * 0.25;
-          if (dx > tolX || dy > tolY) {
-            throw new Error(
-              `Node must be near SVG centre (within ${tolX.toFixed(0)}×${tolY.toFixed(0)} px). ` +
-              `Node centre: (${nodeCx.toFixed(0)},${nodeCy.toFixed(0)}), ` +
-              `SVG centre: (${svgCx.toFixed(0)},${svgCy.toFixed(0)}), ` +
-              `diff: (${dx.toFixed(0)},${dy.toFixed(0)})`
-            );
-          }
+          const cards = p.locator('.db-network .db-agent-card');
+          if ((await cards.count()) !== 1) throw new Error(`Expected one agent card, found ${await cards.count()}`);
+          const [cardBB, panelBB] = await Promise.all([cards.first().boundingBox(), p.locator('.db-network').first().boundingBox()]);
+          if (!cardBB || !panelBB) throw new Error('Could not get bounding boxes for the card and the panel');
+          const inside = cardBB.x >= panelBB.x - 1 && cardBB.y >= panelBB.y - 1
+            && cardBB.x + cardBB.width <= panelBB.x + panelBB.width + 1
+            && cardBB.y + cardBB.height <= panelBB.y + panelBB.height + 1;
+          if (!inside) throw new Error('The agent card sits outside the Agent Network panel');
         } finally {
           await p.unroute(dashApiPred).catch(() => {});
         }
       }, page);
 
-      // ── 47.11  Zoom toolbar + reset view ──────────────────────────────
+      // ── 47.11  Agent cards replaced the zoomable graph ───────────────────
 
-      await test('Zoom toolbar visible; zoom in and reset view work without errors', async (p) => {
+      await test('Agent Network has no zoom toolbar and raises no JS errors', async (p) => {
         const errorsBefore = jsErrors.length;
         await p.route(dashApiPred, mockDash());
         try {
           await gotoDashboard(p);
-          await p.waitForSelector('[role="toolbar"][aria-label="Graph controls"]', { timeout: 8_000 });
-          // Zoom in
-          const zoomInBtn = p.locator('button[aria-label="Zoom in"]').first();
-          await zoomInBtn.waitFor({ timeout: 3_000 });
-          await zoomInBtn.click();
-          await p.waitForTimeout(150);
-          // Zoom out
-          const zoomOutBtn = p.locator('button[aria-label="Zoom out"]').first();
-          await zoomOutBtn.click();
-          await p.waitForTimeout(150);
-          // Reset view
-          const resetBtn = p.locator('button[aria-label="Reset view"]').first();
-          await resetBtn.waitFor({ timeout: 3_000 });
-          await resetBtn.click();
-          await p.waitForTimeout(150);
-          // No new JS errors
+          await p.waitForSelector('.db-network .db-agent-card', { timeout: 8_000 });
+          if (await p.locator('[role="toolbar"][aria-label="Graph controls"]').count()) {
+            throw new Error('The Agent Network is cards now; it should have no graph zoom toolbar');
+          }
           const newErrors = jsErrors.slice(errorsBefore).filter(
             (e) => !e.includes('[404]') && !/favicon/i.test(e),
           );
           if (newErrors.length > 0) {
-            throw new Error(`JS errors during zoom/reset: ${newErrors.slice(0, 3).join('; ')}`);
+            throw new Error(`JS errors on the dashboard: ${newErrors.slice(0, 3).join('; ')}`);
           }
         } finally {
           await p.unroute(dashApiPred).catch(() => {});
@@ -5202,12 +5202,14 @@ async function main() {
     await test('Tickets page renders not-connected card', async (p) => {
       // Jira is not configured in the smoke-test environment, so we expect
       // to see the "Connect Jira" card (not a "Coming soon" placeholder).
+      // The session created in the test before can still be opening and would take the page over: let it finish first.
+      await goto(p, '/projects', 1500);
       await goto(p, `/p/${projectId}/tickets`, 1000);
       await p.waitForSelector('.shell', { timeout: 8000 });
       await assertNoPlaceholder(p);
 
       // Expect the connect-Jira card heading
-      await p.waitForSelector('h1, h2', { timeout: 8000 });
+      await p.waitForSelector('h1, h2', { timeout: 8000 }).catch(() => { throw new Error(`No heading on ${p.url()}`); });
       const headings = await p.locator('h1, h2').allTextContents();
       const hasTickets = headings.some(t => /tickets/i.test(t));
       if (!hasTickets) {
@@ -5414,10 +5416,10 @@ async function main() {
         [`/p/${projectId}/create`,                '[role="tablist"]'],
         [`/p/${projectId}/insights`,              '.page'],
         [`/p/${projectId}/tickets`,               '.page'],
-        [`/connections`,                          '.page'],
-        [`/connections/integrations`,             '.page'],
-        [`/connections/repos`,                    '.page'],
-        [`/credentials`,                          '.page'],
+        [`/connect/git`,                          '.page'],
+        [`/connect/tools`,             '.page'],
+        [`/connect/code-hosts`,                    '.page'],
+        [`/config/sign-ins`,                          '.page'],
         [`/config`,                               '.page'],
         [`/settings`,                             '.page'],
         [`/admin`,                                '.page'],
@@ -5446,7 +5448,15 @@ async function main() {
           iw: window.innerWidth,
         }));
         if (sw > iw) {
-          overflowRoutes.push(`${path} (scrollWidth=${sw}, innerWidth=${iw})`);
+          // Name the widest culprits so a failure points at the element, not just the page.
+          const culprits = await p.evaluate(() => {
+            const w = window.innerWidth;
+            return Array.from(document.querySelectorAll('body *'))
+              .filter((el) => el.getBoundingClientRect().right > w + 1)
+              .slice(0, 16)
+              .map((el) => `${el.tagName.toLowerCase()}${el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : ''}`);
+          });
+          overflowRoutes.push(`${path} (scrollWidth=${sw}, innerWidth=${iw}) widest: ${culprits.join(' | ')}`);
         }
       }
 

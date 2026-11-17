@@ -291,6 +291,14 @@ export function XtermTerminal({ workflowId, onClose, transport }) {
       const ws = wsRef.current;
       if (!ready || !ws || ws.readyState !== WebSocket.OPEN || ws.bufferedAmount > 64 * 1024) return;
       if (pendingResize) { ws.send(JSON.stringify(pendingResize)); pendingResize = null; }
+      // "!command" from the message box: typed into this terminal key by key, so PTY and pipe mode both handle it as usual.
+      const queue = window.__portalTermQueue;
+      // A command that waited longer than 15 s (the terminal was not connected) is dropped, never run late.
+      while (queue && queue.length && Date.now() - queue[0].at > 15_000) queue.shift();
+      if (queue && queue.length && queue[0].workflowId === workflowId) {
+        const item = queue.shift();
+        for (const ch of `${item.command}\r`) term.input(ch, true);
+      }
       if (!pendingInput) return;
       let end = Math.min(pendingInput.length, 4096);
       const last = pendingInput.charCodeAt(end - 1);

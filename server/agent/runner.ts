@@ -139,7 +139,13 @@ export function setRunLifecycleHook(
 
 function fireHook(workflowId: string, runId: string, event: 'start' | 'done' | 'failed' | 'cancelled'): void {
   if (!_runLifecycleHook) return;
-  try { _runLifecycleHook(workflowId, runId, event); } catch { /* hook errors must not crash the runner */ }
+  // The hook is async (it returns a promise although typed void): a rejection must not escape as an unhandled one.
+  try {
+    const pending: unknown = _runLifecycleHook(workflowId, runId, event);
+    if (pending && typeof (pending as Promise<unknown>).catch === 'function') {
+      (pending as Promise<unknown>).catch((e) => console.error('[runner] lifecycle hook failed:', e instanceof Error ? e.message : e));
+    }
+  } catch { /* hook errors must not crash the runner */ }
 }
 
 // ── Fingerprinting (FR-GUARD-8) ───────────────────────────────────────────────
@@ -164,6 +170,7 @@ export function resumableEngineSessionId(workflow: { engine?: unknown; engine_se
 import type { PendingApproval } from './approvals.ts';
 import { pendingApprovals, resolveApproval } from './approvals.ts';
 import { findUserCredential } from '../credential-default.ts';
+import { planMode } from './plan-guidance.ts';
 export { resolveApproval } from './approvals.ts';
 
 // ── SSE event emission ────────────────────────────────────────────────────────
@@ -497,6 +504,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       kind: workflow.kind ? String(workflow.kind) : null,
       engine: (workflow.engine as 'claude-code' | 'kiro' | 'codex' | 'demo') || 'demo',
       trusted: Boolean(workflow.trust_tools),
+      planMode: planMode(workflowId),
       dataDir: config.dataDir,
       workDir,
       repoIds: parseJsonArray(String(workflow.repo_ids ?? '[]')),

@@ -275,7 +275,7 @@ const formatCountdown = (ms) => {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 };
 
-export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onModelChanged }) {
+export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onModelChanged, hideAgent = false }) {
   const [bar, setBar] = useState(null);
 
   const load = useCallback(async () => {
@@ -371,7 +371,7 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
           </span>
         </span>
       )}
-      {bar?.agent && (
+      {bar?.agent && !hideAgent && (
         <span className="ide-status-chip" title="Agent"><span className="ide-status-key">agent</span> {bar.agent}</span>
       )}
       {!noTokens && (

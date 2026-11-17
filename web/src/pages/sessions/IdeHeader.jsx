@@ -3,6 +3,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
+import { sessionStatusPill, runElapsedMs } from '../../lib/session-status.js';
+import { formatDuration } from '../../lib/agent-timeline.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
@@ -198,6 +200,7 @@ export function IdeHeader({
   workflow,
   projectId,
   onStopped,
+  latestRun = null,
   onRenamed,
   onOpenBrowser,
   onDelegated,
@@ -209,6 +212,15 @@ export function IdeHeader({
   const [renameBusy, setRenameBusy]   = useState(false);
   const [renameError, setRenameError]   = useState('');
   const [stopping, setStopping]       = useState(false);
+  // The status pill counts the running turn's time up, once a second, only while a turn runs.
+  const [now, setNow] = useState(() => Date.now());
+  const runningNow = workflow?.status === 'running' || workflow?.status === 'pending';
+  useEffect(() => {
+    if (!runningNow) return undefined;
+    setNow(Date.now());
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [runningNow]);
   const [menuOpen, setMenuOpen]       = useState(false);
   const [showDelegate, setShowDelegate] = useState(false);
   const [showSwitch, setShowSwitch]     = useState(false);
@@ -266,6 +278,8 @@ export function IdeHeader({
   };
 
   const isRunning    = workflow?.status === 'running' || workflow?.status === 'pending';
+  const statusPill  = sessionStatusPill(workflow);
+  const elapsedMs   = runElapsedMs(latestRun, now);
   const title        = sessionTitle(workflow);
   const ownTitle     = hasOwnTitle(workflow);
   const engineLabel  = workflow?.engine === 'codex' ? 'Codex' : workflow?.engine === 'kiro' ? 'kiro' : workflow?.engine === 'claude-code' ? 'claude' : workflow?.engine ?? 'demo';
@@ -311,6 +325,7 @@ Click to change the title` : 'Click to give this session a short title'}
                 <Icon name="rename" size={12} />
               </button>
               {workflow?.engine && <span className={engineClass} style={{ fontSize: '0.69rem' }}>{engineLabel}</span>}
+              {statusPill && <span className={`ide-status-pill ide-status-pill--${statusPill.tone}`} role="status"><i aria-hidden="true" />{statusPill.label}{elapsedMs !== null && elapsedMs >= 1000 ? ` · ${formatDuration(elapsedMs)}` : ''}</span>}
             </>
           )}
         </div>

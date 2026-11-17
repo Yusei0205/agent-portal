@@ -74,7 +74,7 @@ export async function decideApprovalRequest(
   }
 
   // The working folder is inside the microVM, so the runner checks it; the portal re-checks the rest.
-  const again = decideToolCall({ toolName, input, workDir: null, rules, trusted: ctx.run.trusted, allowed: new Set() });
+  const again = decideToolCall({ toolName, input, workDir: null, rules, trusted: ctx.run.trusted, allowed: new Set(), planMode: ctx.run.planMode });
   if (again.action === 'deny') {
     ctx.emit('tool-blocked', { toolName, toolInput: inputStr, reason: again.reason });
     return { decision: 'deny', remember: false, message: again.reason };

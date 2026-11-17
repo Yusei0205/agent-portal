@@ -49,6 +49,7 @@ import { withBrowserGuidance } from './browser-guidance.ts';
 import { agentcoreSkillBody } from './builtin-skills.ts';
 import { withSkillsGuidance } from './skills-guidance.ts';
 import { cavemanMode, withCavemanGuidance } from './caveman-guidance.ts';
+import { planMode, withPlanGuidance } from './plan-guidance.ts';
 
 // ── SDK loader ────────────────────────────────────────────────────────────────
 
@@ -161,6 +162,7 @@ ${REVIEW_SYSTEM_APPEND}`;
   prompt = withSkillsGuidance(prompt, Boolean(run.runnerRepos?.length));
   // Terse replies, when the session was started with that option. Every cloud turn starts a fresh Claude session (earlier turns come as a recap), so each carries the full instructions.
   prompt = withCavemanGuidance(prompt, cavemanMode(run.workflowId), true);
+  prompt = withPlanGuidance(prompt, planMode(run.workflowId));
 
   const agents = loadRunAgents(run, anthropicAgentModel);
   const lead = leadAgentFor(run, agents);
@@ -403,6 +405,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
       rules: run.permissions.rules,
       trusted: run.trusted,
       allowed: ctx.allowed,
+      planMode: run.planMode,
     });
 
     if (decision.action === 'deny') {
@@ -534,6 +537,7 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
   // Terse replies, when the session was started with that option: the full instructions when this turn starts a new Claude session,
   // a one-line reminder when it continues one (the mode stays on until the person says "normal mode").
   prompt = withCavemanGuidance(prompt, cavemanMode(run.workflowId), !run.engineSessionId);
+  prompt = withPlanGuidance(prompt, planMode(run.workflowId));
 
   // Active prompt may be rebuilt on retry (recap prepended)
   let activePrompt = prompt;

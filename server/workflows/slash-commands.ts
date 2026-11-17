@@ -11,6 +11,7 @@ import { getEngineModels } from '../models.ts';
 import { parseModel } from '../agent/pricing.ts';
 import { listAgentsForEngine } from '../user-config.ts';
 import { now } from '../util.ts';
+import { planMode, setPlanMode } from '../agent/plan-guidance.ts';
 
 const MODEL_FAMILIES = new Set(['opus', 'sonnet', 'haiku', 'fable']);
 
@@ -21,6 +22,7 @@ export const PORTAL_COMMANDS: Array<{ name: string; usage: string; description: 
   { name: 'model',   usage: '/model [name|default]',  description: 'Show the available models, or switch the model for the next message' },
   { name: 'agent',   usage: '/agent [name|default]',  description: 'Show the available agents, or switch the lead agent' },
   { name: 'tools',   usage: '/tools [trust|ask]',     description: 'Show or change whether tools run without asking' },
+  { name: 'plan',    usage: '/plan [on|off]',        description: 'Plan mode: the agent only reads and plans, and changes nothing until you turn it off' },
   { name: 'cost',    usage: '/cost',                  description: 'Show the cost of the last turn and of the whole session' },
   { name: 'status',  usage: '/status',                description: 'Show the engine, model, agent and tool mode' },
   { name: 'flow',   usage: '/flow [run <name> [input]|status|stop]', description: 'Run a recipe: several agent sessions working in steps' },
@@ -146,6 +148,20 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
       return `Tool mode: ${w.trust_tools ? 'trust all (no prompts)' : 'ask before use'}\nChange with: /tools trust   or   /tools ask`;
     }
 
+    case 'plan': {
+      const a = arg.toLowerCase();
+      if (['on', 'start', 'enable', 'true'].includes(a)) {
+        await setPlanMode(w.id, true);
+        return 'Plan mode is on. The agent reads and plans only and changes nothing. Turn it off with /plan off when you want it to start.';
+      }
+      if (['off', 'stop', 'disable', 'false'].includes(a)) {
+        await setPlanMode(w.id, false);
+        return 'Plan mode is off. The agent can make changes again.';
+      }
+      return `Plan mode: ${planMode(w.id) ? 'on (read and plan only)' : 'off'}
+Change with: /plan on   or   /plan off`;
+    }
+
     case 'cost':
     case 'usage': {
       if (engine === 'codex') {
@@ -167,6 +183,7 @@ export async function runPortalCommand(w: WorkflowRecord, message: string, userI
         `Model: ${w.model || latest?.model || '(default)'}`,
         `Agent: ${w.lead_agent || '(default)'}`,
         `Tools: ${w.trust_tools ? 'trust all' : 'ask before use'}`,
+        `Plan mode: ${planMode(w.id) ? 'on (read and plan only)' : 'off'}`,
         `Session: ${w.status}`,
       ].join('\n');
     }

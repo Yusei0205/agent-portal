@@ -374,3 +374,15 @@
   }
   .config-status-card-actions { flex-wrap: wrap; }
 }
+
+/* Four tabs are wider than a phone: the tab row scrolls sideways instead of widening the page. */
+.config-tabs-row { min-width: 0; max-width: 100%; }
+.config-tabs-row .tab-bar {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.config-tabs-row .tab-btn {
+  white-space: nowrap;
+  flex-shrink: 0;
+}

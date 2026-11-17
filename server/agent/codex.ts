@@ -8,6 +8,7 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
 import { getBudgetRepository } from '../repositories/budget.ts';
 import { now } from '../util.ts';
 import { cavemanMode, withCavemanGuidance } from './caveman-guidance.ts';
+import { planMode, withPlanGuidance } from './plan-guidance.ts';
 export { approveCodexRequest } from './codex-session.ts';
 
 export async function runCodex(ctx: RunContext): Promise<string> {
@@ -17,7 +18,7 @@ export async function runCodex(ctx: RunContext): Promise<string> {
   const repo = getSessionsRepository();
   const recap = run.engineSessionId ? '' : await buildConversationRecap(run.workflowId, run.runId);
   // Terse replies, when the session was started with that option: the full instructions for a new Codex thread, a reminder when one continues.
-  const guide = (text: string): string => withCavemanGuidance(text, cavemanMode(run.workflowId), !run.engineSessionId);
+  const guide = (text: string): string => withPlanGuidance(withCavemanGuidance(text, cavemanMode(run.workflowId), !run.engineSessionId), planMode(run.workflowId));
   const record = async (usage: Omit<CodexTurnResult, 'text'>) => {
     await repo.updateRun(run.runId, { input_tokens: usage.inputTokens, output_tokens: usage.outputTokens,
       cache_read_tokens: usage.cacheTokens, cost_usd: 0, model: usage.model });

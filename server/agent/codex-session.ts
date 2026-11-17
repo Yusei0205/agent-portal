@@ -43,7 +43,7 @@ export async function approveCodexRequest(
   for (const input of inputs) {
     if (fileChange && !input.file_path) return { decision: 'decline' };
     const decision = decideToolCall({ toolName, input, workDir: ctx.run.workDir,
-      rules: ctx.run.permissions.rules, trusted: ctx.run.trusted, allowed: ctx.allowed });
+      rules: ctx.run.permissions.rules, trusted: ctx.run.trusted, allowed: ctx.allowed, planMode: (ctx.run as { planMode?: boolean }).planMode });
     if (decision.action === 'deny') {
       ctx.emit('status', { text: decision.reason });
       return { decision: 'decline' };

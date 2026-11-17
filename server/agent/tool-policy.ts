@@ -35,6 +35,27 @@ export const READ_TOOLS = new Set([
   'WebSearch', 'WebFetch', 'web_search', 'web_fetch',
 ]);
 
+/** Read-only tools besides READ_TOOLS: planning aids and sub-agents (a sub-agent's own tool calls are decided the same way). */
+const PLAN_ALLOWED_EXTRA = new Set(['TodoWrite', 'Task', 'Agent', 'ExitPlanMode', 'NotebookRead']);
+/** A shell command that only looks: one simple command from a short list, with no chaining, redirection or substitution. */
+const READ_ONLY_COMMAND = /^\s*(ls|cat|head|tail|grep|rg|find|pwd|wc|tree|file|stat|du|df|which|echo|git\s+(status|log|diff|show|rev-parse|ls-files|blame))(\s|$)/;
+const SHELL_METACHARS = /[;&|<>`]|\$\(|\bfind\b[^\n]*\s-(exec|delete|ok)/;
+
+/**
+ * Why plan mode refuses a tool call, or null when it is allowed: reads, searches, planning aids and read-looking shell
+ * commands pass; writes, other commands and tools that are not clearly reads are refused.
+ */
+export function planModeDenial(toolName: string, input: Record<string, unknown>): string | null {
+  if (READ_TOOLS.has(toolName) || PLAN_ALLOWED_EXTRA.has(toolName)) return null;
+  if (BASH_TOOLS.has(toolName)) {
+    const command = String(input.command ?? input.cmd ?? '');
+    if (READ_ONLY_COMMAND.test(command) && !SHELL_METACHARS.test(command)) return null;
+  } else if (/^mcp__/.test(toolName) && /(^|_)(get|list|read|search|fetch|find|view|describe|query|lookup)/i.test(toolName.replace(/^mcp__[^_]+(?:_[^_]+)*?__/, ''))) {
+    return null;
+  }
+  return 'Plan mode is on: this session may only read and plan. Describe the change in your plan instead; it can start once the person runs /plan off.';
+}
+
 export function toolCategory(name: string): string | null {
   if (WRITE_TOOLS.has(name)) return 'write';
   if (BASH_TOOLS.has(name)) return 'bash';
@@ -179,10 +200,17 @@ export interface ToolCallCheck {
   trusted: boolean;
   /** Keys allowed earlier in this run (rememberKey().key). */
   allowed: ReadonlySet<string>;
+  /** Plan mode is on for the session: only reads and plain look-only commands pass (planModeDenial). */
+  planMode?: boolean;
 }
 
 export function decideToolCall(c: ToolCallCheck): ToolDecision {
   const { toolName, input } = c;
+
+  if (c.planMode) {
+    const denial = planModeDenial(toolName, input);
+    if (denial) return { action: 'deny', reason: denial };
+  }
 
   if (c.workDir && WRITE_TOOLS.has(toolName)) {
     const target = String(input.file_path ?? input.path ?? input.new_path ?? input.notebook_path ?? '');

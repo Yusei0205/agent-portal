@@ -15,6 +15,8 @@ export interface AgentRun {
   kind: string | null;
   engine: 'claude-code' | 'kiro' | 'codex' | 'demo';
   trusted: boolean;
+  /** Plan mode is on for the session: the agent only reads and plans (plan-guidance.ts). */
+  planMode?: boolean;
   dataDir: string;
   /** Absolute path: DATA_DIR/projects/<slug>/work/<runId>/ */
   workDir: string;

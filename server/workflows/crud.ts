@@ -31,6 +31,7 @@ import { lostRunReason, closeLostRun } from './lost-runs.ts';
 import { parseSlashCommand, resolveSessionCommand, sessionCommands, unknownCommandText } from './session-commands.ts';
 import { requestRepoPrep, getRepoPrep } from '../agent/repo-prep.ts';
 import { setCavemanMode } from '../agent/caveman-guidance.ts';
+import { planMode } from '../agent/plan-guidance.ts';
 import { resolveApproval } from '../agent/approvals.ts';
 import { inputFingerprint, emitRunEvent } from '../agent/runner.ts';
 import { appendAudit } from '../audit.ts';
@@ -78,6 +79,7 @@ function workflowView(w: Row | WorkflowRecord) {
     stop_reason: (w.stop_reason as string | undefined) ?? '',
     engine: w.engine,
     trust_tools: Boolean((w as Row).trust_tools),
+    plan_mode: planMode(String(w.id)),
     loop: Boolean(String((w as Row).loop_state ?? '').trim()),
     lead_agent: w.lead_agent ?? null,
     workspace_id: w.workspace_id ?? null,

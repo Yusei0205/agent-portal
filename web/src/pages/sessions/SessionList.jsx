@@ -10,6 +10,7 @@ import { BulkActionBar } from '../../components/BulkActionBar.jsx';
 import { NewSessionDialog } from './NewSessionDialog.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
+import { statusCounts } from '../../lib/session-status.js';
 
 // ── Status helpers ─────────────────────────────────────────────────────────────
 
@@ -329,6 +330,7 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
 
   const needle = search.trim().toLowerCase();
 
+  const counts = useMemo(() => statusCounts(workflows), [workflows]);
   const filtered = useMemo(() => {
     if (!workflows) return [];
     return workflows.filter((w) => {
@@ -437,7 +439,7 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
               onClick={() => setStatusFilter(f.value)}
               aria-pressed={statusFilter === f.value}
             >
-              {f.label}
+              {f.label}{counts[f.value] > 0 && <span className="filter-count">{counts[f.value]}</span>}
             </button>
           ))}
         </div>

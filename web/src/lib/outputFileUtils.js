@@ -77,3 +77,23 @@ export function groupOutputsByRunId(outputFiles) {
   }
   return map;
 }
+
+const TEXT_EXTS = new Set(['py', 'js', 'jsx', 'ts', 'tsx', 'json', 'md', 'txt', 'csv', 'yaml', 'yml', 'sh', 'sql', 'html', 'css', 'xml', 'toml', 'ini', 'log']);
+/** Largest text file the chat card will download just to show an excerpt. */
+export const EXCERPT_MAX_BYTES = 200 * 1024;
+
+/** True for a file the chat card can show a few lines of: a known text/code extension, small enough to fetch. */
+export function isExcerptable(file) {
+  const ext = String(file?.name ?? '').split('.').pop().toLowerCase();
+  return TEXT_EXTS.has(ext) && Number(file?.size_bytes ?? 0) > 0 && Number(file.size_bytes) <= EXCERPT_MAX_BYTES;
+}
+
+/** The first `max` lines of a text as { lines, total, truncated }, for the card's excerpt. Long lines are cut. */
+export function excerptLines(text, max = 12) {
+  const all = String(text ?? '').replace(/\r\n?/g, '\n').replace(/\n$/, '').split('\n');
+  return {
+    lines: all.slice(0, max).map((l) => (l.length > 160 ? `${l.slice(0, 160)}…` : l)),
+    total: all.length,
+    truncated: all.length > max,
+  };
+}

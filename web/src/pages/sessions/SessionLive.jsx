@@ -14,6 +14,10 @@ import { RunOutputsCard } from './RunOutputsCard.jsx';
 import { PullRequestCards } from './PullRequestCard.jsx';
 import { SessionAgentsStrip } from './SessionAgentsStrip.jsx';
 import { SessionFlowStrip } from './SessionFlowStrip.jsx';
+import { SessionExecution } from './SessionExecution.jsx';
+import { editDiffLines } from '../../lib/edit-diff.js';
+import { groupToolRuns, groupStats, lastPlanId } from '../../lib/tool-groups.js';
+import { formatDuration } from '../../lib/agent-timeline.js';
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 
@@ -454,6 +458,7 @@ function ToolCallRow({ event }) {
 
   const isPending = !event._end;
   const failed    = endPayload?.status === 'failed';
+  const diffLines = expanded ? editDiffLines(rawInput) : null;
 
   const output = endPayload?.output ?? endPayload?.result ?? null;
   const outText = output === null || output === undefined ? '' : (typeof output === 'string' ? output : JSON.stringify(output, null, 2));
@@ -487,13 +492,73 @@ function ToolCallRow({ event }) {
       {summary && <div className="live-tool-summary">{summary}</div>}
       {expanded && (
         <div>
-          {inputStr && (
+          {diffLines ? (
+            <pre className="live-tool-result live-diff" aria-label="Change">
+              {diffLines.map((l, i) => (
+                <span key={i} className={`live-diff-line live-diff-line--${l.kind}`}>{l.kind === 'add' ? '+ ' : l.kind === 'del' ? '- ' : ''}{l.text}</span>
+              ))}
+            </pre>
+          ) : inputStr && (
             <pre className="live-tool-result">{inputStr}</pre>
           )}
           {outText && (
             <pre className="live-tool-result">{outText}</pre>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ── Tool activity group and plan card ─────────────────────────────────────────
+
+/** A run of tool calls as one collapsible row: "Tool Activity (4) · 12.8s", open while something in it is still running. */
+function ToolGroup({ calls }) {
+  const stats = groupStats(calls);
+  const [open, setOpen] = useState(stats.running > 0);
+  // A group that is still running opens by itself; it does not close again on its own.
+  useEffect(() => { if (stats.running > 0) setOpen(true); }, [stats.running]);
+  return (
+    <div className={`live-event live-tool-group${stats.failed ? ' live-tool-group--failed' : ''}`} aria-label={`Tool activity, ${stats.total} calls`}>
+      <button type="button" className="live-tool-group-head" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className={`live-tool-dot${stats.running ? ' live-tool-dot--run' : stats.failed ? ' live-tool-dot--fail' : ''}`} aria-hidden="true" />
+        <span className="live-tool-group-title">Tool Activity ({stats.total})</span>
+        {!open && (
+          <span className="live-tool-group-names">
+            {stats.names.slice(0, 5).map((n) => (n.count > 1 ? `${n.name} ×${n.count}` : n.name)).join(' · ')}{stats.names.length > 5 ? ' …' : ''}
+          </span>
+        )}
+        {stats.failed > 0 && <span className="live-tool-group-bad">{stats.failed} failed</span>}
+        <span className="live-tool-group-time">{stats.running ? 'running…' : stats.durationMs === null ? '' : formatDuration(stats.durationMs)}</span>
+        <Icon name={open ? 'chevronUp' : 'chevronDown'} size={12} aria-hidden="true" />
+      </button>
+      {open && <div className="live-tool-group-body">{calls.map((c, i) => <ToolCallRow key={c.id ?? i} event={c} />)}</div>}
+    </div>
+  );
+}
+
+/** The agent's task list in the conversation: "Plan 4 / 5 steps (80%)" with a bar and the steps. Only the newest is open. */
+function PlanCard({ plan, defaultOpen }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const pct = plan.total ? Math.round((plan.done / plan.total) * 100) : 0;
+  return (
+    <div className="live-event live-plan" aria-label="Plan">
+      <button type="button" className="live-plan-head" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <span className="live-plan-title">{plan.done === plan.total ? 'Plan complete' : 'Executing plan'}</span>
+        <span className="live-plan-count">{plan.done} / {plan.total} steps ({pct}%)</span>
+        <span className="live-plan-bar" aria-hidden="true"><i style={{ width: `${pct}%` }} /></span>
+        <Icon name={open ? 'chevronUp' : 'chevronDown'} size={12} aria-hidden="true" />
+      </button>
+      {open && (
+        <ul className="live-plan-steps">
+          {plan.items.map((t, i) => (
+            <li key={`${i}-${t.text}`} className={`live-plan-step live-plan-step--${t.status}`}>
+              <span className="live-plan-mark" aria-hidden="true">{t.status === 'done' ? '✓' : t.status === 'active' ? '●' : '○'}</span>
+              <span className="live-plan-text">{t.text}</span>
+              <span className="live-plan-state">{t.status === 'done' ? 'done' : t.status === 'active' ? 'running…' : 'pending'}</span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -766,8 +831,12 @@ function dropRoutineStatus(events) {
   return events.filter((e) => !(e.type === 'status' && later.has(e.run_id) && ROUTINE_STATUS.test(String(e.payload?.text ?? ''))));
 }
 
-function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName = 'Agent', outputFiles = [], vaultFolder }) {
+function RunEvent({ event, workflowId, projectId, runId, onResolved, agentName = 'Agent', outputFiles = [], vaultFolder, planOpenId = null }) {
   const { type, payload } = event;
+
+  // ── Grouped tool calls and plan cards (made by groupToolRuns) ────────────
+  if (type === 'tool-group') return <ToolGroup calls={event.calls} />;
+  if (event._plan) return <PlanCard plan={event._plan} defaultOpen={event.id != null && event.id === planOpenId} />;
 
   // ── Human message ────────────────────────────────────────────────────────
   if (type === 'human') {
@@ -1085,6 +1154,7 @@ export function SessionLive({
   outputFiles = [],
   vaultFolder = null,
   onOpenWorkspaceFile,
+  view = 'chat',
 }) {
   const { events, connected, error } = useRunStream(runId);
 
@@ -1190,6 +1260,11 @@ export function SessionLive({
   // What became of each approval request (answered, expired, or its turn ended), from everything loaded so far.
   // Everything loaded so far, oldest first: the agents view reads each agent's own messages from it.
   const allEvents = React.useMemo(() => [...earlierEvents, ...events], [earlierEvents, events]);
+  // Execution View: every tool call of the session, paired with its result, oldest first.
+  const executionEvents = React.useMemo(
+    () => (view === 'execution' ? pairToolEvents(dropRoutineStatus(allEvents)) : null),
+    [view, allEvents],
+  );
   const approvalState = React.useMemo(
     () => approvalStates([...earlierEvents, ...events], runId),
     [earlierEvents, events, runId],
@@ -1205,6 +1280,10 @@ export function SessionLive({
   const cleared = Boolean(clearAt) && !showBeforeClear;
   const displayEarlierEvents = cleared ? afterClear(allEarlier, clearAt) : allEarlier;
   const dedupedDisplayEvents = cleared ? afterClear(allCurrent, clearAt) : allCurrent;
+  // Runs of tool calls fold into one row and task-list updates become plan cards; only the newest plan is open.
+  const groupedEarlier = groupToolRuns(displayEarlierEvents);
+  const groupedCurrent = groupToolRuns(dedupedDisplayEvents);
+  const planOpenId = lastPlanId(groupedCurrent) ?? lastPlanId(groupedEarlier);
   const hiddenByClear = cleared
     ? [...allEarlier, ...allCurrent].filter((e) => !(String(e.created_at || '') >= clearAt) && (e.type === 'human' || e.type === 'assistant-text')).length
     : 0;
@@ -1532,12 +1611,23 @@ export function SessionLive({
         </div>
       )}
 
+      {/* Execution View: the same session, as a task list, tool counts and a timeline (the conversation stays mounted, hidden) */}
+      {executionEvents && (
+        <div className="exe-scroll">
+          <SessionExecution
+            events={executionEvents}
+            running={workflow?.status === 'running' || workflow?.status === 'pending'}
+            onOpenFile={onOpenWorkspaceFile ? (path) => onOpenWorkspaceFile(path) : undefined}
+          />
+        </div>
+      )}
+
       {/* Event stream */}
       <div
         ref={scrollRef}
         className="live-scroll"
         onScroll={onScroll}
-        style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}
+        style={{ flex: 1, overflowY: 'auto', padding: '8px 0', display: executionEvents ? 'none' : undefined }}
         role="log"
         aria-live="polite"
         aria-label="Agent conversation"
@@ -1580,7 +1670,7 @@ export function SessionLive({
         )}
 
         {/* Earlier (paged transcript) events */}
-        {displayEarlierEvents.map((e, i) => {
+        {groupedEarlier.map((e, i) => {
           const key           = e.id ?? `earlier-${i}`;
           const isTerminal    = e.type === 'run-complete' || e.type === 'run-failed';
           const eventRunId    = e.run_id ?? null;
@@ -1598,6 +1688,7 @@ export function SessionLive({
                 outputFiles={outputFiles}
                 vaultFolder={vaultFolder}
                 onResolved={undefined}
+                planOpenId={planOpenId}
               />
               {runFiles.length > 0 && (
                 <RunOutputsCard
@@ -1621,7 +1712,7 @@ export function SessionLive({
         )}
 
         {/* Current run events (deduped against pending messages), with the chat notes made during or after it */}
-        {dedupedDisplayEvents.map((e, i) => {
+        {groupedCurrent.map((e, i) => {
           // A note is a workflow event: its id can equal a run event's.
           const key        = `${e.src ?? 'r'}:${e.id ?? i}`;
           const isTerminal = e.type === 'run-complete' || e.type === 'run-failed';
@@ -1639,6 +1730,7 @@ export function SessionLive({
                 outputFiles={outputFiles}
                 vaultFolder={vaultFolder}
                 onResolved={undefined}
+                planOpenId={planOpenId}
               />
               {runFiles.length > 0 && (
                 <RunOutputsCard

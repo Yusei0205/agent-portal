@@ -15,6 +15,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStopShortcut } from '../../lib/useStopShortcut.js';
 import { addToHistory, idleHistory, stepHistory } from '../../lib/messageHistory.js';
+import { parseMemoryNote, appendMemoryNote, parseShellCommand } from '../../lib/session-status.js';
+import {
+  findMention, splitMentionPath, filterEntries, applyMention, searchHistory, backslashNewline, clearToLineStart,
+} from '../../lib/composerKeys.js';
 import { api } from '../../lib/api.js';
 import { subscribeProject } from '../../lib/events.js';
 import { navigate } from '../../lib/router.js';
@@ -82,7 +86,7 @@ function saveLayout(layout) {
  * Horizontal resize hook (X axis).
  * onEnd receives the final clamped size so persist callbacks don't close over stale state.
  */
-function useResize(initial, min, max, onEnd) {
+function useResize(initial, min, max, onEnd, invert = false) {
   const [size, setSize] = useState(initial);
   const dragging = useRef(false);
   const startPos = useRef(0);
@@ -97,7 +101,8 @@ function useResize(initial, min, max, onEnd) {
     let lastSize = size;
     const onMove = (ev) => {
       if (!dragging.current) return;
-      const delta = ev.clientX - startPos.current;
+      // A panel on the right edge grows when its handle is dragged to the left.
+      const delta = invert ? startPos.current - ev.clientX : ev.clientX - startPos.current;
       lastSize = Math.min(max, Math.max(min, startSize.current + delta));
       setSize(lastSize);
     };
@@ -109,7 +114,7 @@ function useResize(initial, min, max, onEnd) {
     };
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
-  }, [size, min, max, onEnd]);
+  }, [size, min, max, onEnd, invert]);
 
   return [size, setSize, onMouseDown];
 }
@@ -149,6 +154,16 @@ function useResizeY(initial, min, max, onEnd) {
 
   return [size, setSize, onMouseDown];
 }
+
+/** The side panel's tabs: one strip to switch between them without going back to the activity bar. */
+const PANEL_TABS = [
+  ['explorer', 'Files'],
+  ['source', 'Changes'],
+  ['browser', 'Browser'],
+  ['outputs', 'Outputs'],
+  ['agents', 'Agents'],
+  ['session', 'Session'],
+];
 
 // ── Activity bar button ───────────────────────────────────────────────────────
 
@@ -211,6 +226,67 @@ export function isSlashCommand(text) {
 /** What the command menu shows next to a command that is not one of the portal's own. */
 const COMMAND_SOURCE_LABEL = { command: 'your command', skill: 'skill' };
 
+/**
+ * The choices behind "/model" and "/agent", as the command itself lists them: the models of the session's sign-in, or the
+ * owner's agents, with "default" first. Used by the command menu and by the dropdowns under the message box.
+ */
+function loadChoiceOptions(kind, workflow) {
+  const load = kind === 'model'
+    ? api.get(`/api/engines/${encodeURIComponent(workflow.engine)}/models${workflow.credential_id ? `?credentialId=${encodeURIComponent(workflow.credential_id)}` : ''}`)
+      .then((d) => (d.models ?? []).map((m) => ({ value: m.id, label: m.label && m.label !== m.id ? `${m.id} (${m.label})` : m.id, current: m.id === workflow.model })))
+    : api.get(`/api/user-config/agents?engine=${encodeURIComponent(workflow.engine)}`)
+      .then((d) => (d.agents ?? []).map((a) => ({ value: a.name, label: a.name, hint: a.description, current: a.name === workflow.lead_agent })));
+  return load.then((items) => [
+    { value: 'default', label: 'default', hint: kind === 'model' ? 'the engine’s own default' : 'no lead agent', current: kind === 'model' ? !workflow.model : !workflow.lead_agent },
+    ...items,
+  ]);
+}
+
+/** A small dropdown chip under the message box (Model, Agent): opens upward, loads its choices when opened. */
+function PickerChip({ label, value, load, onPick, disabled }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState(null);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return undefined;
+    let live = true;
+    setItems(null);
+    load().then((i) => { if (live) setItems(i); }).catch(() => { if (live) setItems([]); });
+    const away = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const esc = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => { live = false; document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); };
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <span className="ws-chip-wrap" ref={ref}>
+      <button type="button" className="ws-chip" aria-haspopup="listbox" aria-expanded={open} disabled={disabled} onClick={() => setOpen((o) => !o)}>
+        <span className="ws-chip-label">{label}</span> <b>{value}</b> <Icon name="chevronDown" size={9} />
+      </button>
+      {open && (
+        <ul className="ws-menu ws-chip-menu" role="listbox" aria-label={label}>
+          {items === null && <li className="ws-menu-note">Loading…</li>}
+          {items !== null && items.length === 0 && <li className="ws-menu-note">Nothing to choose from.</li>}
+          {(items ?? []).map((o) => (
+            <li key={o.value} role="option" aria-selected={o.current} onClick={() => { setOpen(false); onPick(o.value); }}>
+              <code className="ws-menu-key">{o.current ? '● ' : ''}{o.label}</code>
+              {o.hint && <span className="ws-menu-desc">{o.hint}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </span>
+  );
+}
+
+/** Suggestions shown after a finished turn: they fill the box (nothing is sent) so the person can edit them first. */
+const FOLLOW_UPS = [
+  { label: 'Refine the result', text: 'Refine the result: ' },
+  { label: 'Review the changes', text: '/review' },
+  { label: 'Explain what you did', text: 'Explain what you did and why, step by step.' },
+  { label: 'Run the tests', text: 'Run the tests and fix any failures.' },
+];
+
 export function ComposerBar({
   workflow,
   projectId,
@@ -221,8 +297,15 @@ export function ComposerBar({
   onSendSuccess,
   onSendError,
   onCommandDone,
+  onShellCommand,
 }) {
   const [message, setMessage] = useState('');
+  const [memoryNote, setMemoryNote] = useState(''); // what a "#note" just saved, shown for a few seconds
+  useEffect(() => {
+    if (!memoryNote) return undefined;
+    const t = setTimeout(() => setMemoryNote(''), 7000);
+    return () => clearTimeout(t);
+  }, [memoryNote]);
   // A draft left by the New session dialog (e.g. "Update docs & skills"): shown in the box, never sent for the person.
   useEffect(() => {
     if (!workflow?.id) return;
@@ -240,6 +323,8 @@ export function ComposerBar({
   const attachmentInputRef = useRef(null);
   const attachmentsChanged = useCallback((ids, uploading) => { setAttachmentIds(ids); setAttachmentsBusy(uploading); }, []);
   const [commands, setCommands] = useState(null);
+  const [searching, setSearching] = useState(false); // Ctrl+R history search
+  const [mentionOff, setMentionOff] = useState(null); // start of an @mention whose list was closed with Esc
   const [menuIdx, setMenuIdx]   = useState(0);
   const [busy, setBusy]       = useState(false);
   // Resume state — shown when workflow.resumable and not running
@@ -247,6 +332,7 @@ export function ComposerBar({
   const [resumeError, setResumeError] = useState(null);
   // A message sent while the agent is mid-turn is read when that turn ends (the agent does not see it before).
   const [queuedNote, setQueuedNote] = useState(false);
+  const [queuedTexts, setQueuedTexts] = useState([]); // what was sent mid-turn, listed until the turn ends
   const [stoppingNow, setStoppingNow] = useState(false);
   // null = auto-grow with content; number = manually set height in pixels
   const [composerH, setComposerH] = useState(() => loadComposerH());
@@ -261,9 +347,34 @@ export function ComposerBar({
   const dragStartH  = useRef(0);
 
   const isRunning = workflow?.status === 'running' || workflow?.status === 'pending';
-  useEffect(() => { if (!isRunning) { setQueuedNote(false); setStoppingNow(false); } }, [isRunning]);
+  useEffect(() => { if (!isRunning) { setQueuedNote(false); setQueuedTexts([]); setStoppingNow(false); } }, [isRunning]);
 
   // Esc or Ctrl+C stops the current turn, as in the terminal agents (Ctrl+C still copies when text is selected).
+  // Tool mode, as in the CLI's mode switch: ask before tools run, or trust them all. Alt+M or the chip below the box.
+  // Trusting needs a second press within a few seconds, so a stray key never lets the agent run commands unasked.
+  const trusted = Boolean(workflow?.trust_tools);
+  const [trustArmed, setTrustArmed] = useState(false);
+  useEffect(() => {
+    if (!trustArmed) return undefined;
+    const t = setTimeout(() => setTrustArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [trustArmed]);
+  // A portal command sent on its own (the draft in the box is left alone), e.g. from the dropdowns under the box.
+  const runCommand = async (text, failure) => {
+    try {
+      await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/message`, { message: text, attachmentIds: [] });
+      if (onCommandDone) onCommandDone();
+    } catch (e) { setResumeError(e?.message || failure); }
+  };
+  // Plan mode: the agent reads and plans and changes nothing until it is turned off (/plan on, /plan off).
+  const planOn = Boolean(workflow?.plan_mode);
+  const togglePlanMode = () => { if (workflow?.id && !isRunning) runCommand(planOn ? '/plan off' : '/plan on', 'Could not change plan mode.'); };
+  const toggleToolMode = async () => {
+    if (!workflow?.id) return;
+    if (!trusted && !trustArmed) { setTrustArmed(true); return; }
+    setTrustArmed(false);
+    await runCommand(trusted ? '/tools ask' : '/tools trust', 'Could not change the tool mode.');
+  };
   const [stopHint, setStopHint] = useState('');
   const stopTurn = useCallback(async () => {
     if (!workflow?.id) return;
@@ -334,16 +445,19 @@ export function ComposerBar({
     return () => clearTimeout(t);
   }, [prep?.state, prep?.at, cloning]);
 
-  const enginePlaceholder =
-    workflow?.engine === 'kiro'
-      ? 'Ask Kiro to change something…'
+  const enginePlaceholder = isRunning
+    ? 'Queue a follow-up for when this turn ends…'
+    : workflow?.plan_mode
+    ? 'Plan mode: say what you want planned…'
+    : workflow?.engine === 'kiro'
+      ? 'Ask Kiro to continue, refine, or run another task…'
       : workflow?.engine === 'claude-code'
-      ? 'Ask Claude to change something…'
-      : 'Send a message…';
+      ? 'Ask Claude to continue, refine, or run another task…'
+      : 'Ask the agent to continue, refine, or run another task…';
 
   // Command menu: opens while a "/command" is being typed (no space yet). Names that start with what was typed
   // come first, then names that contain it.
-  const typedCommand = message.startsWith('/') && !/\s/.test(message) ? message.slice(1).toLowerCase() : null;
+  const typedCommand = !searching && message.startsWith('/') && !/\s/.test(message) ? message.slice(1).toLowerCase() : null;
   const menuItems = typedCommand === null || !commands
     ? []
     : [
@@ -353,7 +467,7 @@ export function ComposerBar({
   const showMenu = menuItems.length > 0;
   // "/model " and "/agent ": the choices are listed to pick from (arrow keys + Enter), as in the CLI, instead of
   // typing a name. The list is the one the command itself prints (models of the session's sign-in, the owner's agents).
-  const argMatch = /^\/(model|agent) ([^\n]*)$/i.exec(message);
+  const argMatch = searching ? null : /^\/(model|agent) ([^\n]*)$/i.exec(message);
   const argCmd = argMatch ? argMatch[1].toLowerCase() : null;
   const argQuery = argMatch ? argMatch[2].trim().toLowerCase() : '';
   const [argOptions, setArgOptions] = useState({ cmd: null, items: [] });
@@ -361,13 +475,8 @@ export function ComposerBar({
     if (!argCmd || !workflow?.id || argOptions.cmd === `${workflow.id}:${argCmd}`) return undefined;
     let cancelled = false;
     const key = `${workflow.id}:${argCmd}`;
-    const load = argCmd === 'model'
-      ? api.get(`/api/engines/${encodeURIComponent(workflow.engine)}/models${workflow.credential_id ? `?credentialId=${encodeURIComponent(workflow.credential_id)}` : ''}`)
-        .then((d) => (d.models ?? []).map((m) => ({ value: m.id, label: m.label && m.label !== m.id ? `${m.id} (${m.label})` : m.id, current: m.id === workflow.model })))
-      : api.get(`/api/user-config/agents?engine=${encodeURIComponent(workflow.engine)}`)
-        .then((d) => (d.agents ?? []).map((a) => ({ value: a.name, label: a.name, hint: a.description, current: a.name === workflow.lead_agent })));
-    load
-      .then((items) => { if (!cancelled) setArgOptions({ cmd: key, items: [{ value: 'default', label: 'default', hint: argCmd === 'model' ? 'the engine’s own default' : 'no lead agent', current: argCmd === 'model' ? !workflow.model : !workflow.lead_agent }, ...items] }); })
+    loadChoiceOptions(argCmd, workflow)
+      .then((items) => { if (!cancelled) setArgOptions({ cmd: key, items }); })
       .catch(() => { if (!cancelled) setArgOptions({ cmd: key, items: [] }); });
     return () => { cancelled = true; };
   }, [argCmd, workflow?.id, workflow?.engine, workflow?.credential_id, workflow?.model, workflow?.lead_agent, argOptions.cmd]);
@@ -375,7 +484,27 @@ export function ComposerBar({
     ? argOptions.items.filter((o) => !argQuery || o.value.toLowerCase().includes(argQuery) || o.label.toLowerCase().includes(argQuery))
     : [];
   const showArgMenu = !showMenu && argItems.length > 0 && !argItems.some((o) => o.value.toLowerCase() === argQuery);
-  const showSlashHint = isSlashCommand(message) && !showMenu && !showArgMenu;
+  // Ctrl+R: search the messages sent before (the box holds the search words until one is picked).
+  const historyHits = searching ? searchHistory(historyRef.current.items, message) : [];
+  // "@path": files of the session's working copy, one folder level at a time, as in the CLI.
+  const [caret, setCaret] = useState(0);
+  const foundMention = !searching && !showMenu && !showArgMenu && !message.startsWith('/') ? findMention(message, caret) : null;
+  const mention = foundMention && foundMention.start !== mentionOff ? foundMention : null;
+  const mentionPath = mention ? splitMentionPath(mention.query) : null;
+  const dirKey = mentionPath && workflow?.id ? `${workflow.id}:${mentionPath.dir}` : null;
+  const dirCache = useRef(new Map());
+  const [, setDirTick] = useState(0);
+  useEffect(() => {
+    if (!dirKey || dirCache.current.has(dirKey)) return;
+    dirCache.current.set(dirKey, null);
+    api.get(`/api/workflows/${workflow.id}/ide/tree?scope=work&path=${encodeURIComponent(mentionPath.dir)}`)
+      .then((d) => dirCache.current.set(dirKey, d.entries ?? []))
+      .catch(() => dirCache.current.set(dirKey, []))
+      .finally(() => setDirTick((t) => t + 1));
+  }, [dirKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const mentionItems = mention && dirKey ? filterEntries(dirCache.current.get(dirKey) ?? [], mentionPath.name) : [];
+  const showMentionMenu = mentionItems.length > 0;
+  const showSlashHint = !searching && isSlashCommand(message) && !showMenu && !showArgMenu;
 
   useEffect(() => {
     if (!workflow?.id) return undefined;
@@ -401,7 +530,7 @@ export function ComposerBar({
       .catch(() => setCommands([]));
   }, [commands, projectId, workflow?.id]);
 
-  useEffect(() => { setMenuIdx(0); }, [typedCommand, argCmd, argQuery]);
+  useEffect(() => { setMenuIdx(0); }, [typedCommand, argCmd, argQuery, mention?.query, searching, searching ? message : '']);
   // A change of model or agent made elsewhere (or by the command) must show on the next listing.
   useEffect(() => { setArgOptions({ cmd: null, items: [] }); }, [workflow?.id, workflow?.model, workflow?.lead_agent]);
 
@@ -414,6 +543,14 @@ export function ComposerBar({
       setMessage(`/${c.name} `);
       textareaRef.current?.focus();
     }
+  };
+
+  const pickMention = (entry) => {
+    if (!mention || !entry) return;
+    const r = applyMention(message, mention, entry.path, entry.type === 'directory');
+    setMessage(r.value);
+    setCaret(r.caret);
+    setTimeout(() => { const t = textareaRef.current; if (t) { t.focus(); t.setSelectionRange(r.caret, r.caret); } setCaret(r.caret); }, 0);
   };
 
   // Auto-resize textarea height when in auto-grow mode
@@ -526,6 +663,35 @@ export function ComposerBar({
     // send is also the Send button's click handler, so only a string is a command picked from the menu.
     const text = (typeof textOverride === 'string' ? textOverride : message).trim() || (attachmentIds.length ? 'Please read the attached files.' : '');
     if (!text || busy || attachmentsBusy) return;
+    // "!command": typed into the session's terminal, which opens. Nothing goes to the agent.
+    const shell = typeof textOverride === 'string' ? null : parseShellCommand(text);
+    if (shell && onShellCommand && !attachmentIds.length) {
+      const items = addToHistory(historyRef.current.items, text);
+      historyRef.current = { items, nav: idleHistory(items) };
+      setMessage('');
+      setResumeError(null);
+      onShellCommand(shell);
+      return;
+    }
+    // "#note": added to the owner's CLAUDE.md in Agent setup, for the runs that come after.
+    const note = typeof textOverride === 'string' ? null : parseMemoryNote(text);
+    if (note && !attachmentIds.length) {
+      if (workflow?.engine !== 'claude-code') { setResumeError('Memory notes are saved to CLAUDE.md, so they work in Claude Code sessions only. Start the message with "# " to send it as text.'); return; }
+      setBusy(true);
+      setResumeError(null);
+      try {
+        let existing = '';
+        try { existing = (await api.get('/api/user-config/claude/file?path=CLAUDE.md')).content ?? ''; }
+        catch (e) { if (e?.status !== 404) throw e; }
+        await api.put('/api/user-config/claude/file', { path: 'CLAUDE.md', content: appendMemoryNote(existing, note) });
+        setMemoryNote(`Saved to your CLAUDE.md in Agent setup, used from the next turn: ${note}`);
+        const items = addToHistory(historyRef.current.items, text);
+        historyRef.current = { items, nav: idleHistory(items) };
+        setMessage('');
+      } catch (e) { setResumeError(e?.message || 'Could not save the note.'); }
+      finally { setBusy(false); }
+      return;
+    }
     const sentAttachments = [...attachmentIds];
     const isSlash = isSlashCommand(text);
     if (isSlash && sentAttachments.length) {
@@ -574,7 +740,7 @@ export function ComposerBar({
           return null;
         });
         // A turn is already going: it started before this message, so it will not see it. It is read when the turn ends.
-        if (started?.alreadyRunning && !isSlash) setQueuedNote(true);
+        if (started?.alreadyRunning && !isSlash) { setQueuedNote(true); setQueuedTexts((q) => [...q, text]); }
       }
       if (onSendSuccess) onSendSuccess(clientId);
       if (onSent) onSent();
@@ -596,6 +762,58 @@ export function ComposerBar({
       if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && picked.name !== typedCommand)) {
         e.preventDefault();
         pickCommand(picked);
+        return;
+      }
+    }
+    // Ctrl+R: reverse search through earlier messages. The box holds the search words; Enter puts the pick in the box
+    // (it is not sent), Esc leaves the search and gives the box back empty.
+    if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'r') {
+      e.preventDefault();
+      if (!searching) { setSearching(true); setMessage(''); }
+      else if (historyHits.length) setMenuIdx((i) => (i + 1) % historyHits.length);
+      return;
+    }
+    if (searching) {
+      if (e.key === 'Escape') { e.preventDefault(); setSearching(false); setMessage(''); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); if (historyHits.length) setMenuIdx((i) => (i + 1) % historyHits.length); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); if (historyHits.length) setMenuIdx((i) => (i - 1 + historyHits.length) % historyHits.length); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const hit = historyHits[Math.min(menuIdx, historyHits.length - 1)];
+        setSearching(false);
+        if (hit !== undefined) { setMessage(hit); setTimeout(() => { const t = textareaRef.current; if (t) { t.focus(); t.setSelectionRange(hit.length, hit.length); } }, 0); }
+        return;
+      }
+    }
+    if (showMentionMenu) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setMenuIdx((i) => (i + 1) % mentionItems.length); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); setMenuIdx((i) => (i - 1 + mentionItems.length) % mentionItems.length); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); setMentionOff(mention.start); return; } // closes the list, the text stays
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault();
+        pickMention(mentionItems[Math.min(menuIdx, mentionItems.length - 1)]);
+        return;
+      }
+    }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'm') { e.preventDefault(); toggleToolMode(); return; }
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'p') { e.preventDefault(); togglePlanMode(); return; }
+    // Ctrl+U: clear back to the start of the line, as in a terminal.
+    if (e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === 'u') {
+      e.preventDefault();
+      const el = e.currentTarget;
+      const r = clearToLineStart(el.value, el.selectionStart);
+      setMessage(r.value);
+      setTimeout(() => textareaRef.current?.setSelectionRange(r.caret, r.caret), 0);
+      return;
+    }
+    // "\" then Enter: a new line without sending, as in Claude Code.
+    if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      const el = e.currentTarget;
+      const r = el.selectionStart === el.selectionEnd ? backslashNewline(el.value, el.selectionStart) : null;
+      if (r) {
+        e.preventDefault();
+        setMessage(r.value);
+        setTimeout(() => textareaRef.current?.setSelectionRange(r.caret, r.caret), 0);
         return;
       }
     }
@@ -644,7 +862,7 @@ export function ComposerBar({
   return (
     <div
       ref={composerRef}
-      className={`ws-composer${composerH !== null ? ' ws-composer--manual' : ''}`}
+      className={`ws-composer${composerH !== null ? ' ws-composer--manual' : ''}${workflow?.plan_mode ? ' ws-composer--plan' : ''}`}
     >
       {/* Drag handle — top edge. Drag up to grow, drag down to shrink.
           Double-click resets to auto-grow. */}
@@ -683,7 +901,14 @@ export function ComposerBar({
       )}
       {queuedNote && isRunning && (
         <div className="info-note" role="status" data-testid="queued-note" style={{ margin: '4px 8px', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <span>Your message is saved, but the agent is still on its current turn and has not seen it. It reads it when this turn ends.</span>
+          <span>
+            {queuedTexts.length > 1 ? `${queuedTexts.length} messages are` : 'Your message is'} saved, but the agent is still on its current turn and has not seen {queuedTexts.length > 1 ? 'them' : 'it'}. {queuedTexts.length > 1 ? 'It reads them' : 'It reads it'} when this turn ends.
+          </span>
+          {queuedTexts.length > 0 && (
+            <ol className="ws-queue" aria-label="Queued messages">
+              {queuedTexts.map((q, i) => <li key={`${i}-${q.slice(0, 20)}`} title={q}>{q}</li>)}
+            </ol>
+          )}
           <button
             type="button" className="btn btn-sm" disabled={stoppingNow}
             onClick={async () => {
@@ -728,37 +953,74 @@ export function ComposerBar({
         </div>
       )}
       {showMenu && (
-        <ul className="ide-slash-menu" role="listbox" aria-label="Commands"
-          style={{ listStyle: 'none', margin: 0, padding: '4px 0', borderTop: '1px solid var(--line)', maxHeight: 220, overflowY: 'auto' }}>
+        <ul className="ide-slash-menu ws-menu" role="listbox" aria-label="Commands">
           {menuItems.map((c, i) => (
             <li key={c.name} role="option" aria-selected={i === menuIdx}
               onMouseDown={(e) => { e.preventDefault(); pickCommand(c); }}
-              onMouseEnter={() => setMenuIdx(i)}
-              style={{ display: 'flex', gap: 12, padding: '4px 12px', cursor: 'pointer', fontSize: '0.8rem',
-                background: i === menuIdx ? 'var(--bg-3, rgba(127,127,127,.15))' : 'transparent' }}>
-              <code style={{ minWidth: 150 }}>{c.usage}</code>
-              <span style={{ color: 'var(--ink-3)', flex: 1, minWidth: 0 }}>{c.description}</span>
-              {COMMAND_SOURCE_LABEL[c.source] && (
-                <span style={{ color: 'var(--ink-3)', fontSize: '0.7rem', flexShrink: 0 }}>{COMMAND_SOURCE_LABEL[c.source]}</span>
-              )}
+              onMouseEnter={() => setMenuIdx(i)}>
+              <code className="ws-menu-key">{c.usage}</code>
+              <span className="ws-menu-desc">{c.description}</span>
+              {COMMAND_SOURCE_LABEL[c.source] && <span className="ws-menu-tag">{COMMAND_SOURCE_LABEL[c.source]}</span>}
             </li>
           ))}
         </ul>
       )}
       {showArgMenu && (
-        <ul className="ide-slash-menu" role="listbox" aria-label={argCmd === 'model' ? 'Models' : 'Agents'}
-          style={{ listStyle: 'none', margin: 0, padding: '4px 0', borderTop: '1px solid var(--line)', maxHeight: 220, overflowY: 'auto' }}>
+        <ul className="ide-slash-menu ws-menu" role="listbox" aria-label={argCmd === 'model' ? 'Models' : 'Agents'}>
           {argItems.map((o, i) => (
             <li key={o.value} role="option" aria-selected={i === menuIdx}
               onMouseDown={(e) => { e.preventDefault(); send(`/${argCmd} ${o.value}`); }}
-              onMouseEnter={() => setMenuIdx(i)}
-              style={{ display: 'flex', gap: 12, padding: '4px 12px', cursor: 'pointer', fontSize: '0.8rem',
-                background: i === menuIdx ? 'var(--bg-3, rgba(127,127,127,.15))' : 'transparent' }}>
-              <code style={{ minWidth: 150 }}>{o.current ? '● ' : ''}{o.label}</code>
-              {o.hint && <span style={{ color: 'var(--ink-3)', flex: 1, minWidth: 0 }}>{o.hint}</span>}
+              onMouseEnter={() => setMenuIdx(i)}>
+              <code className="ws-menu-key">{o.current ? '● ' : ''}{o.label}</code>
+              {o.hint && <span className="ws-menu-desc">{o.hint}</span>}
             </li>
           ))}
         </ul>
+      )}
+      {workflow?.stop_reason === 'awaiting_message' && !isRunning && !message && !searching && (
+        <div className="ws-suggest" role="group" aria-label="Suggested follow-ups">
+          {FOLLOW_UPS.map((f) => (
+            <button
+              key={f.label}
+              type="button"
+              className="ws-suggest-chip"
+              onClick={() => { setMessage(f.text); setTimeout(() => { const t = textareaRef.current; if (t) { t.focus(); t.setSelectionRange(f.text.length, f.text.length); } }, 0); }}
+            >{f.label}</button>
+          ))}
+        </div>
+      )}
+      {showMentionMenu && (
+        <ul className="ide-slash-menu ws-menu" role="listbox" aria-label="Files">
+          {mentionItems.map((en, i) => (
+            <li key={en.path} role="option" aria-selected={i === menuIdx}
+              onMouseDown={(ev) => { ev.preventDefault(); pickMention(en); }}
+              onMouseEnter={() => setMenuIdx(i)}>
+              <code className="ws-menu-key">{en.type === 'directory' ? `${en.name}/` : en.name}</code>
+              <span className="ws-menu-desc">{en.path}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {searching && (
+        <ul className="ide-slash-menu ws-menu" role="listbox" aria-label="Earlier messages">
+          <li className="ws-menu-note" aria-hidden="true">
+            {message.trim() ? (historyHits.length ? 'reverse search · Ctrl+R next · Enter use · Esc cancel' : 'no earlier message matches') : 'reverse search · type to find an earlier message'}
+          </li>
+          {historyHits.map((h, i) => (
+            <li key={h} role="option" aria-selected={i === menuIdx}
+              onMouseDown={(ev) => { ev.preventDefault(); setSearching(false); setMessage(h); textareaRef.current?.focus(); }}
+              onMouseEnter={() => setMenuIdx(i)}>
+              <span className="ws-menu-desc ws-menu-line">{h}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {memoryNote && <div className="info-note ws-memory-note" role="status">{memoryNote}</div>}
+      {!searching && parseMemoryNote(message) !== null && !message.includes('\n') && (
+        <div className="ide-slash-hint ws-line-hint" role="status">Enter saves this note to your CLAUDE.md (Agent setup). Start with "# " to send it as a message.</div>
+      )}
+      {!searching && parseShellCommand(message) !== null && (
+        <div className="ide-slash-hint ws-line-hint" role="status">Enter runs this in the session terminal. Nothing is sent to the agent.</div>
       )}
       {showSlashHint && (
         <div
@@ -835,14 +1097,16 @@ export function ComposerBar({
         >
           <Icon name="attach" size={16} />
         </button>
-        <span className="ws-composer-prompt" aria-hidden="true">&gt;</span>
+        <span className="ws-composer-prompt" aria-hidden="true">{searching ? '⌕' : '>'}</span>
         <textarea
           ref={textareaRef}
           rows={1}
           className="ws-composer-input"
-          placeholder={cloning ? 'Cloning the repositories…' : enginePlaceholder}
+          placeholder={cloning ? 'Cloning the repositories…' : searching ? 'Search earlier messages…' : enginePlaceholder}
           value={message}
-          onChange={(e) => { historyRef.current.nav = idleHistory(historyRef.current.items); setMessage(e.target.value); }}
+          onChange={(e) => { historyRef.current.nav = idleHistory(historyRef.current.items); setMessage(e.target.value); setCaret(e.target.selectionStart); }}
+          onSelect={(e) => setCaret(e.target.selectionStart)}
+          onBlur={() => { if (searching) setSearching(false); }}
           onKeyDown={handleKeyDown}
           disabled={!workflow || cloning}
           data-paste-files="true"
@@ -851,7 +1115,29 @@ export function ComposerBar({
         <div className="ws-composer-actions">
           <button
             type="button"
+            className="btn-icon ws-slash-btn"
+            aria-label="Commands"
+            title="Commands (type / )"
+            disabled={!workflow || cloning}
+            onClick={() => { setSearching(false); setMessage((m) => (m.startsWith('/') ? m : '/')); textareaRef.current?.focus(); }}
+          >
+            <span aria-hidden="true" className="ws-slash-glyph">/</span>
+          </button>
+          {isRunning && !message.trim() && !attachmentIds.length && (
+            <button
+              type="button"
+              className="btn btn-sm ws-stop-btn"
+              onClick={stopTurn}
+              aria-label="Stop this turn (Esc)"
+              title="Stop this turn (Esc)"
+            >
+              <Icon name="stop" size={14} />
+            </button>
+          )}
+          <button
+            type="button"
             className="btn btn-sm btn-primary"
+            style={isRunning && !message.trim() && !attachmentIds.length ? { display: 'none' } : undefined}
             onClick={send}
             disabled={busy || attachmentsBusy || (!message.trim() && !attachmentIds.length) || !workflow || cloning}
             aria-label="Send (Enter)"
@@ -863,11 +1149,42 @@ export function ComposerBar({
           </button>
         </div>
       </div>
-      <div className="ws-composer-hints" aria-hidden="true">
-        <span><kbd>↵</kbd> send</span>
-        <span><kbd>⇧</kbd><kbd>↵</kbd> new line</span>
-        <span><kbd>/</kbd> commands</span>
-        {isRunning && <span><kbd>Esc</kbd> or <kbd>Ctrl</kbd><kbd>C</kbd> {stopHint === 'Stopping…' ? 'stopping…' : 'stop the turn'}</span>}
+      <div className="ws-composer-hints">
+        <button
+          type="button"
+          className={`ws-mode ws-mode-plan${planOn ? ' is-plan' : ''}`}
+          onClick={togglePlanMode}
+          disabled={!workflow || isRunning}
+          aria-pressed={planOn}
+          aria-label={planOn ? 'Plan mode is on: the agent only reads and plans. Turn it off' : 'Plan mode is off. Turn on: the agent only reads and plans'}
+          title={isRunning ? 'Plan mode can change when the turn ends' : 'Plan mode (Alt+P): the agent reads and plans, and changes nothing'}
+        >
+          {planOn ? 'plan: on' : 'plan: off'}
+        </button>
+        <button
+          type="button"
+          className={`ws-mode${trusted ? ' is-trust' : ''}${trustArmed ? ' is-armed' : ''}`}
+          onClick={toggleToolMode}
+          disabled={!workflow}
+          aria-label={trustArmed ? 'Press again to trust all tools' : trusted ? 'Tools run without asking. Switch to asking before tools run' : 'Tools ask before running. Switch to trusting all tools'}
+          title="Tool mode (Alt+M)"
+        >
+          {trustArmed ? 'trust all tools? press again' : trusted ? 'tools: trusted' : 'tools: ask'}
+        </button>
+        
+        {workflow?.id && ['kiro', 'claude-code', 'codex'].includes(workflow.engine) && (
+          <>
+            <PickerChip label="agent" value={workflow.lead_agent || 'default'} disabled={isRunning} load={() => loadChoiceOptions('agent', workflow)} onPick={(v) => runCommand(`/agent ${v}`, 'Could not switch the agent.')} />
+          </>
+        )}
+        <span aria-hidden="true"><kbd>↵</kbd> send</span>
+        <span aria-hidden="true"><kbd>⇧</kbd><kbd>↵</kbd> / <kbd>\</kbd><kbd>↵</kbd> new line</span>
+        <span aria-hidden="true"><kbd>/</kbd> commands</span>
+        <span aria-hidden="true"><kbd>@</kbd> files</span>
+        <span aria-hidden="true"><kbd>!</kbd> shell</span>
+        <span aria-hidden="true"><kbd>#</kbd> note</span>
+        <span aria-hidden="true"><kbd>Ctrl</kbd><kbd>R</kbd> history</span>
+        {isRunning && <span aria-hidden="true"><kbd>Esc</kbd> or <kbd>Ctrl</kbd><kbd>C</kbd> {stopHint === 'Stopping…' ? 'stopping…' : 'stop the turn'}</span>}
       </div>
     </div>
   );
@@ -925,8 +1242,13 @@ export function IdeWorkspace({ id, project }) {
   const persistTerminal = useCallback((h) => saveLayout({ ...loadLayout(), terminalH: h }), []);
   const persistEditorW  = useCallback((w) => saveLayout({ ...loadLayout(), editorW: w }), []);
 
+  // The side panel (Files, Browser, Outputs, Agents…) sits to the right of the conversation by default, so the chat
+  // stays the main workspace; the person can move it to the left, like an IDE explorer.
+  const [panelSide, setPanelSide] = useState(savedLayout.panelSide === 'left' ? 'left' : 'right');
+  // Chat: the conversation. Execution: the same session as a task list, tool counts and a timeline.
+  const [sessionView, setSessionView] = useState(savedLayout.sessionView === 'execution' ? 'execution' : 'chat');
   const [sidebarW, setSidebarW, onSidebarDrag] = useResize(
-    savedLayout.sidebarW ?? 240, 140, 520, persistSidebar,
+    savedLayout.sidebarW ?? 300, 140, 520, persistSidebar, panelSide === 'right',
   );
   // Fix #1 & #2: terminal uses the Y-axis hook; onEnd receives final height.
   const [terminalH, setTerminalH, onTerminalDrag] = useResizeY(
@@ -943,8 +1265,8 @@ export function IdeWorkspace({ id, project }) {
 
   // Persist panel visibility on change
   useEffect(() => {
-    saveLayout({ ...loadLayout(), sidebarPanel, terminalOpen, editorPanelOpen });
-  }, [sidebarPanel, terminalOpen, editorPanelOpen]);
+    saveLayout({ ...loadLayout(), sidebarPanel, terminalOpen, editorPanelOpen, panelSide, sessionView });
+  }, [sidebarPanel, terminalOpen, editorPanelOpen, panelSide, sessionView]);
 
   // Auto-expand editor panel when a file is opened from the explorer
   useEffect(() => {
@@ -1179,6 +1501,7 @@ export function IdeWorkspace({ id, project }) {
       <IdeHeader
         workflow={workflow ? { ...workflow, title: displayTitle } : null}
         projectId={project.id}
+        latestRun={latestRun}
         onStopped={load}
         onRenamed={(t) => setTitle(t)}
         onOpenBrowser={() => setSidebarPanel((p) => p === 'browser' ? null : 'browser')}
@@ -1187,7 +1510,7 @@ export function IdeWorkspace({ id, project }) {
       />
 
       {/* Body */}
-      <div className="ide-body">
+      <div className={`ide-body ide-body--${panelSide}`}>
         {/* Activity bar */}
         <nav className="ide-activity-bar" aria-label="Activity bar">
           <ActivityBtn
@@ -1254,16 +1577,32 @@ export function IdeWorkspace({ id, project }) {
             }
           >
             <div className="ide-panel-header">
-              <span className="ide-panel-header-title">
-                {sidebarPanel === 'explorer' ? 'Explorer' :
-                 sidebarPanel === 'source'   ? 'Source Control' :
-                 sidebarPanel === 'browser'  ? 'Browser' :
-                 sidebarPanel === 'agents'   ? 'Agents Activity' :
-                 sidebarPanel === 'outputs'  ? 'Outputs' :
-                 sidebarPanel === 'session'  ? 'Session' :
-                 'Panel'}
-              </span>
+              <div className="ide-panel-tabs" role="tablist" aria-label="Side panel">
+                {PANEL_TABS.map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    aria-selected={sidebarPanel === key}
+                    className={`ide-panel-tab${sidebarPanel === key ? ' is-active' : ''}`}
+                    onClick={() => setSidebarPanel(key)}
+                  >
+                    {label}
+                    {key === 'outputs' && outputFiles.length > 0 && <span className="ide-panel-tab-count">{outputFiles.length}</span>}
+                  </button>
+                ))}
+              </div>
               <div className="ide-panel-header-actions">
+                <button
+                  type="button"
+                  className="btn-icon"
+                  style={{ width: 22, height: 22 }}
+                  aria-label={panelSide === 'right' ? 'Move panel to the left' : 'Move panel to the right'}
+                  title={panelSide === 'right' ? 'Move panel to the left' : 'Move panel to the right'}
+                  onClick={() => setPanelSide((sd) => (sd === 'right' ? 'left' : 'right'))}
+                >
+                  <Icon name={panelSide === 'right' ? 'chevronLeft' : 'chevronRight'} size={12} />
+                </button>
                 <button
                   type="button"
                   className="btn-icon"
@@ -1395,7 +1734,20 @@ export function IdeWorkspace({ id, project }) {
               style={{ flex: 1, borderLeft: 'none' }}
               aria-label="Agent conversation"
             >
+              <div className="ide-view-switch" role="tablist" aria-label="Session view">
+                {[['chat', 'Chat'], ['execution', 'Execution']].map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    aria-selected={sessionView === key}
+                    className={`ide-view-tab${sessionView === key ? ' is-active' : ''}`}
+                    onClick={() => setSessionView(key)}
+                  >{label}</button>
+                ))}
+              </div>
               <SessionLive
+                view={sessionView}
                 onOpenWorkspaceFile={async (path, line) => {
                   const resolved = await resolveConversationPath(api, id, path);
                   setOpenFile({ scope: 'work', path: resolved, name: resolved.split('/').pop(), ext: '.' + resolved.split('.').pop(), line, key: `work:${resolved}` });
@@ -1468,15 +1820,6 @@ export function IdeWorkspace({ id, project }) {
         </div>
       </div>
 
-      {/* Status bar */}
-      <IdeStatusBar
-        projectId={project.id}
-        workflowId={id}
-        engine={workflow?.engine}
-        credentialId={workflow?.credential_id ?? null}
-        onModelChanged={() => { load(); setCommandTick((k) => k + 1); }}
-      />
-
       {/* Composer */}
       <ComposerBar
         workflow={workflow}
@@ -1488,6 +1831,17 @@ export function IdeWorkspace({ id, project }) {
         onSendSuccess={handleSendSuccess}
         onSendError={handleSendError}
         onCommandDone={() => { load(); setCommandTick((k) => k + 1); }}
+        onShellCommand={(command) => { (window.__portalTermQueue ||= []).push({ workflowId: id, command, at: Date.now() }); setTerminalOpen(true); }}
+      />
+
+      {/* Status bar: model, context, tokens, cost and plan usage, right under the message box */}
+      <IdeStatusBar
+        projectId={project.id}
+        workflowId={id}
+        engine={workflow?.engine}
+        credentialId={workflow?.credential_id ?? null}
+        hideAgent
+        onModelChanged={() => { load(); setCommandTick((k) => k + 1); }}
       />
 
       {/* Output file preview modal (opened from Outputs panel) */}

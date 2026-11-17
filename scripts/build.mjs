@@ -48,6 +48,8 @@ const web = await esbuild.build({
   loader: { '.svg': 'file', '.woff2': 'file', '.woff': 'file' },
   metafile: true,
   logLevel: 'warning',
+  // The vendored NICE DCV client (web/vendor) trips this check; it is third-party code we do not edit.
+  logOverride: { 'suspicious-nullish-coalescing': 'silent' },
   legalComments: 'none',
 });
 

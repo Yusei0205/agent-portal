@@ -1,4 +1,7 @@
 import { useState } from 'react';
+
+const LS_LIST_COLLAPSED = 'sessions_list_collapsed';
+function loadCollapsed() { try { return localStorage.getItem(LS_LIST_COLLAPSED) === '1'; } catch { return false; } }
 import { navigate, href } from '../../lib/router.js';
 import { SessionList } from './SessionList.jsx';
 import { SessionWorkspace } from './SessionWorkspace.jsx';
@@ -24,12 +27,20 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
   // project may be passed from App or we can construct a minimal one
   const proj = project || { id: projectId, name: projectId };
 
+  // The sessions list can fold away to give the conversation the whole width. It stays mounted (search and filters are kept).
+  const [listCollapsed, setListCollapsed] = useState(loadCollapsed);
+  const toggleList = () => setListCollapsed((c) => {
+    try { localStorage.setItem(LS_LIST_COLLAPSED, c ? '0' : '1'); } catch { /* storage unavailable: not remembered */ }
+    return !c;
+  });
+  const collapsed = Boolean(selectedId) && listCollapsed;
+
   const handleSelect = (id) => {
     navigate(href(projectId, 'sessions', id));
   };
 
   return (
-    <div className={`sessions-shell${selectedId ? ' with-workspace' : ''}`}>
+    <div className={`sessions-shell${selectedId ? ' with-workspace' : ''}${collapsed ? ' list-collapsed' : ''}`}>
       {/* Left panel — Session list */}
       <SessionList
         project={proj}
@@ -38,6 +49,19 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
         initialDialogTicket={initialDialogTicket ?? null}
         onInitialDialogConsumed={onInitialDialogConsumed}
       />
+
+      {selectedId && (
+        <button
+          type="button"
+          className="sessions-list-toggle"
+          onClick={toggleList}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? 'Show sessions list' : 'Hide sessions list'}
+          title={collapsed ? 'Show sessions list' : 'Hide sessions list'}
+        >
+          <Icon name={collapsed ? 'chevronRight' : 'chevronLeft'} size={12} />
+        </button>
+      )}
 
       {/* Right panel — Detail / empty state */}
       <div className="sessions-detail-panel">

@@ -8,10 +8,10 @@
  *  - Footer: Download all (ZIP) and Open in Vault
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Icon } from '../../components/Icon.jsx';
 import { navigate } from '../../lib/router.js';
-import { formatBytes, getFileTypeMeta, isImageFile } from '../../lib/outputFileUtils.js';
+import { formatBytes, getFileTypeMeta, isImageFile, isExcerptable, excerptLines } from '../../lib/outputFileUtils.js';
 import { AddToVaultButton } from './AddToVaultButton.jsx';
 
 const MAX_COLLAPSED = 4;
@@ -25,6 +25,49 @@ function downloadFile(file) {
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
+}
+
+// ── Excerpt of the first text or code file ────────────────────────────────────
+
+/** The first lines of a small text or code file, with line numbers and a copy button. Fetched when the card is shown. */
+function FileExcerpt({ file, onOpen }) {
+  const [state, setState] = useState({ status: 'loading', text: '' });
+  const [copied, setCopied] = useState(false);
+  useEffect(() => {
+    let live = true;
+    // Give up quietly after a few seconds: the card is complete without the excerpt.
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 8000);
+    fetch(`${file.download_url}?inline=1`, { credentials: 'same-origin', signal: ctrl.signal })
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
+      .then((text) => { if (live) setState({ status: 'ready', text }); })
+      .catch(() => { if (live) setState({ status: 'error', text: '' }); })
+      .finally(() => clearTimeout(timer));
+    return () => { live = false; clearTimeout(timer); ctrl.abort(); };
+  }, [file.download_url]);
+  if (state.status === 'error') return null;
+  if (state.status === 'loading') return <div className="run-outputs-excerpt run-outputs-excerpt--loading muted">Loading {file.name}…</div>;
+  const ex = excerptLines(state.text);
+  return (
+    <div className="run-outputs-excerpt">
+      <div className="run-outputs-excerpt-head">
+        <span className="run-outputs-excerpt-name">{file.name} <span className="muted">(excerpt)</span></span>
+        <button
+          type="button" className="btn-icon" aria-label={`Copy ${file.name}`} title="Copy the whole file"
+          onClick={() => { navigator.clipboard?.writeText(state.text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }).catch(() => {}); }}
+        >
+          <Icon name={copied ? 'check' : 'copy'} size={13} />
+        </button>
+        <button type="button" className="btn-icon" aria-label={`Open ${file.name}`} title="Open" onClick={() => onOpen(file)}>
+          <Icon name="external" size={13} />
+        </button>
+      </div>
+      <pre className="run-outputs-excerpt-code">
+        {ex.lines.map((l, i) => (<span key={i} className="run-outputs-excerpt-line"><i>{i + 1}</i>{l}</span>))}
+        {ex.truncated && <span className="run-outputs-excerpt-line run-outputs-excerpt-more">⋯ {ex.total - ex.lines.length} more lines</span>}
+      </pre>
+    </div>
+  );
 }
 
 // ── File row ──────────────────────────────────────────────────────────────────
@@ -123,6 +166,7 @@ export function RunOutputsCard({ files, workflowId, projectId, vaultFolder, onPr
   if (!files?.length) return null;
 
   const displayFiles = showAll ? files : files.slice(0, MAX_COLLAPSED);
+  const excerptFile = files.find(isExcerptable) ?? null;
   const hiddenCount  = files.length - MAX_COLLAPSED;
 
   const handleDownloadAll = () => {
@@ -159,6 +203,9 @@ export function RunOutputsCard({ files, workflowId, projectId, vaultFolder, onPr
           />
         ))}
       </ul>
+
+      {/* An excerpt of the first text or code file */}
+      {excerptFile && <FileExcerpt key={excerptFile.id} file={excerptFile} onOpen={(f) => onPreview(f, files)} />}
 
       {/* Show all */}
       {!showAll && hiddenCount > 0 && (

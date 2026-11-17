@@ -1130,6 +1130,7 @@ export function Connections({ user, projectId }) {
 
       {!loading && connections.length > 0 && (
         <div style={{ position: 'relative' }}>
+          <div className="table-wrap">
           <table className="data-table" aria-label="Git connections">
             <thead>
               <tr>
@@ -1278,6 +1279,7 @@ export function Connections({ user, projectId }) {
             })}
           </tbody>
         </table>
+          </div>
         <BulkActionBar
           selected={bulk.selected}
           onDelete={handleBulkDelete}

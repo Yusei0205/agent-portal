@@ -841,3 +841,10 @@
 .page > .page-header { margin-bottom: 0; }
 .tab-panel > :first-child,
 .connect-panel > :first-child { margin-top: 0; }
+
+/* Connect page: a wide table (Git connections) scrolls in its own wrapper instead of widening the page. */
+.connect-hub,
+.connect-panel,
+.connect-panel > .page,
+.connect-panel .table-wrap { min-width: 0; max-width: 100%; }
+.connect-panel .page > * { min-width: 0; max-width: 100%; }
