@@ -53,7 +53,10 @@ test('an empty diff is ok and not large', () => {
 test('deps exemption covers only the lockfile globs', () => {
   assert.equal(checkDiff([f('infra/package-lock.json')], p, 'deps').ok, false);
   assert.equal(checkDiff([f('.github/workflows/package-lock.json')], p, 'deps').ok, false);
-  assert.equal(checkDiff([f('.env/package-lock.json')], p, 'deps').ok, false);
+  // dot-directories: `**` in matchesGlob does not cross them, the suffix fallback does
+  assert.equal(checkDiff([f('.hidden/a/.env')], p, 'tests').ok, false);
+  assert.equal(checkDiff([f('.hidden/package-lock.json')], p, 'tests').ok, false);
+  assert.equal(checkDiff([f('.hidden/package-lock.json')], p, 'deps').ok, true);
   assert.equal(checkDiff([f('package-lock.json'), f('web/package-lock.json')], p, 'deps').ok, true);
 });
 test('yarn.lock matches no default glob: not blocked, not specially exempted', () => {
