@@ -680,6 +680,13 @@ async function main() {
       const tabTexts = await p.locator('.tab-btn, [role="tab"]').allTextContents();
       if (tabTexts.length === 0) throw new Error('No tabs found on Setup page');
     }, page);
+    await test('Setup page has an Auto-fix tab with counters and the off notice', async (p) => {
+      await goto(p, `/p/${projectId}/setup/autofix`, 1200);
+      await p.locator('[role="tab"]', { hasText: 'Auto-fix' }).click();
+      await p.waitForSelector('[data-testid="autofix-tab"]', { timeout: 8000 });
+      await p.waitForSelector('.af-counts .af-count', { timeout: 4000 });
+      await p.getByText('Auto-fix is off for this project').waitFor({ timeout: 4000 });
+    }, page);
     } // end §8 setup
 
     // ── 8b. Repository progress bar ───────────────────────────────────────

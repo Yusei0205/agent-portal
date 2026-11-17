@@ -1,0 +1,34 @@
+/* Auto-fix tab (project Setup). Status is shown as a tinted pill, never a coloured edge. */
+.af-root { display: grid; gap: 16px; }
+.af-notice {
+  margin: 0; padding: 10px 14px; border-radius: 10px; font-size: 0.88rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+}
+.af-counts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px; }
+.af-count {
+  display: grid; gap: 6px; justify-items: start; min-width: 108px; padding: 10px 14px;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+}
+.af-count-n { font-size: 1.4rem; font-weight: 600; line-height: 1; }
+.af-filter { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+.af-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.af-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.af-table th, .af-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+.af-table th { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); font-weight: 600; }
+.af-table tbody tr:last-child td { border-bottom: 0; }
+.af-links { display: flex; gap: 12px; }
+
+.af-pill {
+  --tone: var(--ink-3);
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 1px 8px; border-radius: 999px; white-space: nowrap;
+  font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--tone);
+  background: color-mix(in srgb, var(--tone) 16%, transparent);
+}
+.af-pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+.af-pill.is-ok     { --tone: var(--ok); }
+.af-pill.is-warn   { --tone: var(--warn); }
+.af-pill.is-danger { --tone: var(--danger); }
+.af-pill.is-info   { --tone: var(--info); }

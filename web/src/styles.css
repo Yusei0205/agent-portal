@@ -25,6 +25,7 @@
 @import './styles/connections.css';
 @import './styles/simulation.css';
 @import './styles/dashboard.css';
+@import './styles/autofix.css';
 @import './styles/motion.css';
 @import './styles/jira.css';
 @import './styles/help.css';

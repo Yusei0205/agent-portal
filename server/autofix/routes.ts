@@ -10,6 +10,8 @@ import { getAutofixPolicy, saveAutofixPolicy, setPaused } from './policy.ts';
 import type { AutofixPolicy } from './policy.ts';
 import { newWebhookSecret } from '../loop-triggers.ts';
 import { setSecret } from '../secrets.ts';
+import { getAutofixFindingsRepository, FINDING_STATUSES } from '../repositories/autofix-findings.ts';
+import type { FindingStatus } from '../repositories/autofix-findings.ts';
 import { registerAutofixWebhook, webhookSecretName } from './webhook.ts';
 
 /** Any project member (or an admin) may read; non-members see 404. */
@@ -38,6 +40,22 @@ function pausedFlag(body: unknown): boolean {
   return paused;
 }
 
+const DEFAULT_FINDINGS_LIMIT = 50;
+const MAX_FINDINGS_LIMIT = 100;
+
+function parseStatus(raw: unknown): FindingStatus | undefined {
+  if (raw === undefined || raw === '') return undefined;
+  if (typeof raw !== 'string' || !(FINDING_STATUSES as readonly string[]).includes(raw)) throw badRequest('Unknown status');
+  return raw as FindingStatus;
+}
+
+function parseLimit(raw: unknown): number {
+  if (raw === undefined || raw === '') return DEFAULT_FINDINGS_LIMIT;
+  const n = typeof raw === 'string' && /^\d+$/.test(raw) ? Number(raw) : NaN;
+  if (!Number.isInteger(n) || n < 1) throw badRequest('limit must be a positive integer');
+  return Math.min(n, MAX_FINDINGS_LIMIT);
+}
+
 export function registerAutofixRoutes(): void {
   registerAutofixWebhook();
 
@@ -47,6 +65,24 @@ export function registerAutofixRoutes(): void {
     const secret = newWebhookSecret();
     await setSecret(webhookSecretName(req.params.id), secret);
     sendJson(res, 200, { secret });
+  });
+
+  // The list leaves out the evidence (it can be large); the detail route returns it.
+  router.get('/api/projects/:id/autofix/findings', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectMember(req, res, req.params.id)) return;
+    const status = parseStatus(req.query.get('status') ?? undefined);
+    const limit = parseLimit(req.query.get('limit') ?? undefined);
+    const repo = getAutofixFindingsRepository();
+    const [rows, counts] = await Promise.all([repo.list(req.params.id, { status, limit }), repo.countByStatus(req.params.id)]);
+    const findings = rows.map(({ evidence: _evidence, ...rest }) => rest);
+    sendJson(res, 200, { findings, counts });
+  });
+
+  router.get('/api/projects/:id/autofix/findings/:fid', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectMember(req, res, req.params.id)) return;
+    const finding = await getAutofixFindingsRepository().getById(req.params.fid);
+    if (!finding || finding.project_id !== req.params.id) { sendJson(res, 404, { error: 'Finding not found' }); return; }
+    sendJson(res, 200, { finding });
   });
 
   router.get('/api/projects/:id/autofix/policy', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
