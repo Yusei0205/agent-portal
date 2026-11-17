@@ -8,7 +8,9 @@
 
 **Tech Stack:** TypeScript on Node >=22.13, `node:test` with tsx, `node:sqlite`, DynamoDB (Local in tests), React in `web/src`.
 
-**Spec:** `docs/superpowers/specs/2026-11-17-autofix-foundation-design.md`. Read section 10 first: it corrects what the spec assumed already exists.
+**Spec:** `docs/superpowers/specs/2026-11-17-autofix-foundation-design.md`. Read section 10 first: it lists what the code already provides (checked against `origin/main_v3` at `eac382e`) and how this plan reuses it.
+
+**Reused, not rebuilt:** `fireLoopSpec` and the signed-webhook helpers in `server/loop-triggers.ts`; loop-session stop rules and `checks` in `server/workflows/loop.ts` and `server/agent/runner-checks.ts`; the push, PR and draft-review flow in `server/session-pr.ts` and `server/pull-requests.ts`; the config-file guard in `server/agent/guard.ts`; the Inbox `push` and `blocked` types; interruption recovery in `server/workflows/recovery.ts`.
 
 ## Global Constraints
 
@@ -38,7 +40,7 @@
 ### Task 1: Findings repository
 
 **Files:**
-- Modify: `server/db.ts` (add `M46_AUTOFIX_FINDINGS` and append it to `MIGRATIONS`)
+- Modify: `server/db.ts` (add `M53_AUTOFIX_FINDINGS` after `M52_API_SIMULATION` and append it to `MIGRATIONS`)
 - Create: `server/repositories/autofix-findings.ts`, `autofix-findings-sqlite.ts`, `autofix-findings-dynamodb.ts`
 - Test: `test/autofix-findings-repo.test.ts` (model it on `test/audit-repo.test.ts`)
 
@@ -96,8 +98,8 @@
 
 **Interfaces:**
 - Produces in `policy.ts`:
-  - `interface AutofixPolicy { mode: 'off'|'propose'|'draft_pr'; classes: string[]; branches: { default_branch: boolean; portal_prs: boolean; extra: string[] }; protected_paths: string[]; limits: { max_open_prs: number; max_attempts: number; max_cost_per_finding_usd: number; max_cost_per_day_usd: number; cooldown_minutes: number; max_files: number; max_lines: number }; verify: { command: string; quick_commands: string[] } }`
-  - `DEFAULT_POLICY: AutofixPolicy` (values from Global Constraints; `verify.command` is `''`)
+  - `interface AutofixPolicy { mode: 'off'|'propose'|'draft_pr'; classes: string[]; branches: { default_branch: boolean; portal_prs: boolean; extra: string[] }; protected_paths: string[]; limits: { max_open_prs: number; max_attempts: number; max_cost_per_finding_usd: number; max_cost_per_day_usd: number; cooldown_minutes: number; max_files: number; max_lines: number }; verify: { command: string; quick_commands: string[] }; run_as: string; engine: string }`
+  - `DEFAULT_POLICY: AutofixPolicy` (values from Global Constraints; `verify.command` is `''`; `engine` is `'claude-code'`; `run_as` is `''` until an admin enables auto-fix, when it is set to that admin's user id and must still be a project editor or owner, as `fireLoopSpec` requires)
   - `getAutofixPolicy(projectId: string): Promise<AutofixPolicy>`, `saveAutofixPolicy(projectId: string, patch: Partial<AutofixPolicy>): Promise<AutofixPolicy>` (validates: `mode` is one of the three, numbers are positive integers, `protected_paths` always keeps the workflow and policy defaults)
   - `isPaused(projectId: string): Promise<boolean>` (true when the global or the project flag is set), `setPaused(scope: 'global' | string, paused: boolean): Promise<void>`
 - Routes: `GET`/`PUT /api/projects/:id/autofix/policy`, `POST /api/projects/:id/autofix/pause` with body `{ paused: boolean }`, `POST /api/autofix/pause` (admin only, global).
@@ -125,12 +127,12 @@
   - `verifySignature(rawBody: Buffer, header: string | undefined, secret: string): boolean` (HMAC SHA-256, `timingSafeEqual`)
   - `recordFinding(projectId: string, c: FindingCandidate, evidence: string): Promise<{ finding: AutofixFinding; created: boolean }>` in `intake.ts`
   - `fetchCiEvidence(c: FindingCandidate, projectId: string): Promise<string>` (GitHub API jobs and log tail for `runId`, using the project's GitHub connection token as `review.ts` does; returns scrubbed text)
-  - Routes: `router.rawPost('/api/autofix/webhook/github/:projectId', ...)`, `POST /api/projects/:id/autofix/webhook-secret` (admin; generates a secret, stores it with `setSecret('autofix.webhook.<projectId>', ...)`, returns it once).
+  - Routes: `router.rawPost('/api/hooks/autofix/:projectId', ...)`, `POST /api/projects/:id/autofix/webhook-secret` (admin; `newWebhookSecret()`, stored with `setSecret('autofix.webhook.<projectId>', ...)`, returned once). Route path: `router.rawPost('/api/hooks/autofix/:projectId', ...)`.
 
 - [ ] **Step 1: Write the parser tests** against the recorded fixtures: a failed `workflow_run` on `main` gives a `finding` with `kind` from the workflow name; the same on `autofix/tests-ab12cd34` gives `ci_result` with `conclusion: 'failure'`; a successful one gives `ci_result` success; a `pull_request` closed with `merged: true` gives `pr_closed`; `ping` and cancelled runs give `ignore`.
 - [ ] **Step 2: Write the webhook tests** with the server fixture: `a valid signature creates one finding`; `the same delivery twice creates one finding with occurrences 2`; `a wrong signature returns 401 and stores nothing`; `a repository that is not in the project returns 404 and stores nothing`; `a project with mode 'off' stores the finding as 'suppressed'`; `a paused project stores it as 'new'` (stubbing `fetchCiEvidence`).
 - [ ] **Step 3: Run them.** Expected: FAIL.
-- [ ] **Step 4: Implement** the parser, signature check, intake and routes. The route resolves the project's repository from `repos` by matching `repository.full_name` against each repo's GitHub remote (read `server/repos.ts` for the field). It verifies the signature before anything else, returns 202 quickly and does evidence fetching and `recordFinding` after responding. Status rules in `recordFinding`: a new finding starts as `new`, or `suppressed` when the policy mode is `off`; an existing `resolved` finding that recurs goes back to `new`; one that is `dismissed` or `suppressed` with a future `cooldown_until` is left alone, only its counter increments.
+- [ ] **Step 4: Implement** the parser, intake and routes. Do not write a new signature check or secret generator: import `readWebhookBody`, `webhookSignatureOk` and `newWebhookSecret` from `server/loop-triggers.ts` (`verifySignature` in the interface list above is then just a thin wrapper, or dropped). The new route is separate from `/api/hooks/loop-specs/:sid`, which only fires a spec with generic variables and cannot classify or dedupe CI failures. The route resolves the project's repository from `repos` by matching `repository.full_name` against each repo's GitHub remote (read `server/repos.ts` for the field). It verifies the signature before anything else, returns 202 quickly and does evidence fetching and `recordFinding` after responding. Status rules in `recordFinding`: a new finding starts as `new`, or `suppressed` when the policy mode is `off`; an existing `resolved` finding that recurs goes back to `new`; one that is `dismissed` or `suppressed` with a future `cooldown_until` is left alone, only its counter increments.
 - [ ] **Step 5: Run the tests.** Expected: PASS. Run `npm run typecheck`.
 - [ ] **Step 6: Commit** `feat(autofix): GitHub webhook intake`.
 
@@ -180,57 +182,60 @@
 - Test: `test/autofix-hooks.test.ts`; the existing review tests must still pass
 
 **Interfaces:**
-- Produces: `addRunLifecycleHook(fn: RunLifecycleHook): () => void` (returns an unsubscribe function); `setRunLifecycleHook` is kept and replaces only the hook it registered earlier. `registerSessionIntake()` in `session-intake.ts`: on `'failed'`, creates a `session_failed` finding for the workflow's project unless the workflow is an auto-fix session (`getByWorkflowId` returns a finding) or a review session.
+- Consumes: `interruptionOf` and `trailingRecoveries`/`MAX_AUTO_RECOVERIES` from `server/workflows/recovery.ts`.
+- Produces: `addRunLifecycleHook(fn: RunLifecycleHook): () => void` (returns an unsubscribe function; `setRunLifecycleHook` stays and replaces only the hook it registered). `registerSessionIntake()`: on `'failed'`, creates a `session_failed` finding unless (a) the workflow is an auto-fix session (`getByWorkflowId` finds one), (b) it is a review session, or (c) the failure is an interruption that recovery is still continuing (`interruptionOf(error) !== null` and fewer than `MAX_AUTO_RECOVERIES` trailing recoveries).
 
-- [ ] **Step 1: Write the tests:** `two hooks both fire for one event`; `one hook throwing does not stop the other`; `the unsubscribe function removes the hook`; `a failed ordinary session creates a session_failed finding`; `a failed auto-fix session does not`.
+- [ ] **Step 1: Write the tests:** `two hooks both fire for one event`; `one hook throwing does not stop the other`; `the unsubscribe function removes the hook`; `a failed ordinary session creates a session_failed finding`; `a failed auto-fix session does not`; `a failure that recovery is continuing does not, and the same failure after the recovery cap does`.
 - [ ] **Step 2: Run them.** Expected: FAIL.
-- [ ] **Step 3: Implement** the hook list in `runner.ts` (each hook guarded in its own try/catch, as `fireHook` does now), move `review-lifecycle.ts` to `addRunLifecycleHook`, and wire `registerSessionIntake()` at startup.
+- [ ] **Step 3: Implement** the hook list in `runner.ts` (each hook in its own try/catch, as `fireHook` does now), move `review-lifecycle.ts` to `addRunLifecycleHook`, wire `registerSessionIntake()` at startup.
 - [ ] **Step 4: Run** the new test plus `npm run test:affected -- --module reviews`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(autofix): multi-hook run lifecycle and session failure intake`.
 
-### Task 8: Fix pipeline (baseline, session, verification) with propose mode
+### Task 8: Fix pipeline (start the session, loop checks, propose and draft modes)
 
 **Files:**
-- Modify: `server/workflows/crud.ts` (extract `createAndStartWorkflow`), `server/db.ts` (`M47_AUTOFIX_SPECS`, seeds), `server/autofix/intake.ts` (call the pipeline after `recordFinding`)
-- Create: `server/autofix/pipeline.ts`, `server/autofix/verify.ts`
-- Test: `test/autofix-pipeline.test.ts`, `test/autofix-verify.test.ts`
+- Modify: `server/loop-triggers.ts` (extend `FireOptions`), `server/db.ts` (`M54_AUTOFIX_SPECS`: seeded spec), `server/autofix/intake.ts` (call the pipeline after `recordFinding`)
+- Create: `server/autofix/pipeline.ts`
+- Test: `test/autofix-pipeline.test.ts`, `test/loop-triggers.test.ts` (extend; check the existing file name with `ls test | grep loop`)
 
 **Interfaces:**
-- Consumes: Tasks 1, 3, 6, 7; `checkoutRepoToWorkDir` and `createWorkDir` from `server/workflows/working-copies.ts`; `createInboxItem` from `server/inbox.ts`.
+- Consumes: Tasks 1, 3, 6, 7; `fireLoopSpec` and `FireResult` from `server/loop-triggers.ts`; `validateCheckSteps` from `server/agent/runner-checks.ts`; `readLoopState` from `server/workflows/loop.ts`; `createInboxItem`.
 - Produces:
-  - `createAndStartWorkflow(opts: { projectId: string; goal: string; engine?: string; repoIds: string[]; maxIterations: number; createdBy: string | null }): Promise<string>`, extracted from the POST handler in `crud.ts` with no behaviour change.
-  - Seeded spec `builtin-autofix-ci` (migration `M47_AUTOFIX_SPECS`): `trigger_type = 'webhook'`, `trigger_config = {"finding_kind":"ci_failed"}`, goal template with `{{kind}}`, `{{branch}}`, `{{evidence}}`, `{{verify_command}}`, `max_iterations` 4, stop config `{"maxIterations":4,"budgetUsd":2}`.
-  - `runCommand(cmd: string, cwd: string, timeoutMs: number): Promise<{ code: number; output: string }>` and `runVerification(i: { workDir: string; command: string; quickCommands: string[] }): Promise<{ ok: boolean; output: string }>` in `verify.ts`.
-  - `processFinding(findingId: string): Promise<void>` and `onFixSessionDone(workflowId: string): Promise<void>` in `pipeline.ts`.
+  - `FireOptions` gains optional `runAs?: string`, `checks?: CheckStep[]`, `repoIds?: string[]`, `engine?: string`. When set they override the values read from the spec's `trigger_config`/`stop_config`. A built-in spec has no `runAs`, so the pipeline passes it. The existing "previous session of this spec is still running" and `maxPerHour` rules stay: auto-fix sessions of one spec run one at a time, and a finding that gets 409 or 429 stays `new` and is retried when the previous session ends (Task 7's hook).
+  - Seeded spec `builtin-autofix-ci` (migration `M54_AUTOFIX_SPECS`): `trigger_type = 'webhook'`, `trigger_config = {"finding_kind":"ci_failed"}`, goal template using `{{kind}}`, `{{branch}}`, `{{evidence}}` and `{{verify_command}}`, `max_iterations` 4, `stop_config = {"maxIterations":4,"budgetUsd":2}`. The goal tells the agent to run the verify command first, report `cannot reproduce` in its status line if it passes, and otherwise fix until the check passes.
+  - `processFinding(findingId: string): Promise<void>` and `onFixSessionEnded(workflowId: string): Promise<void>` in `pipeline.ts`.
 
 - [ ] **Step 1: Write the tests:**
-  - verify: `runCommand returns the exit code and combined output`, `a command that exceeds the timeout returns code 124`.
-  - pipeline (Demo mode, stubbed repo checkout): `a triaged finding with a failing verify command starts one workflow and becomes 'fixing'`; `if the verify command already passes (not reproducible) the finding becomes needs_human, no workflow starts, and a 'blocked' inbox item with payload.kind 'autofix' exists`; `a deferred or suppressed triage result starts nothing`; `onFixSessionDone in propose mode with a passing verify and a clean diff stores the diff and creates a 'review-ready' inbox item with payload.kind 'autofix'`; `verification that still fails counts an attempt and returns the finding to 'new'`; `a diff touching a protected path pushes nothing and ends needs_human`.
+  - `fireLoopSpec with runAs, checks and repoIds overrides starts the session as that user with those checks in its loop state`;
+  - `fireLoopSpec without runAs on a built-in spec still returns 409` (existing behaviour kept);
+  - pipeline (Demo engine): `a triaged finding starts one session with the verify command as its loop check and becomes 'fixing' with workflow_id set`; `a deferred or suppressed triage result starts nothing`; `a 409 from fireLoopSpec leaves the finding 'new'`; `a session that reports "cannot reproduce" ends needs_human with a 'blocked' inbox item whose payload.kind is 'autofix'`; `a session whose last loop check failed counts an attempt and returns the finding to 'new'`; `a session that ends with checks passing leaves the finding 'fixing' for the PR step (Task 9)`.
 - [ ] **Step 2: Run them.** Expected: FAIL.
-- [ ] **Step 3: Extract `createAndStartWorkflow`** from the workflow POST handler and run `npm run test:affected -- --module sessions` to confirm no change.
-- [ ] **Step 4: Implement `verify.ts`** with `spawn` through a shell, a hard timeout that kills the process group, and output capped and scrubbed.
-- [ ] **Step 5: Implement `processFinding`:** load the finding, policy and context, run `triage`, transition conditionally, run the baseline in a fresh working copy (it must fail), fill the goal template, call `createAndStartWorkflow`, and store `workflow_id` and `status='fixing'` in one conditional transition from `triaged`. `onFixSessionDone` (called from a hook registered with `addRunLifecycleHook` on `'done'` and `'failed'`) finds the finding by workflow id, runs `runVerification`, builds `DiffFile[]` from `git diff --numstat` against the base, calls `checkDiff`, adds the run cost to `cost_usd`, and then either stores the diff and creates the Inbox item (propose mode) or hands off to Task 9.
+- [ ] **Step 3: Extend `FireOptions`** and `fireLoopSpec` with the four overrides. Run the existing loop-trigger tests; they must still pass.
+- [ ] **Step 4: Implement `processFinding`:** load finding, policy and context, run `triage`, transition conditionally, build `checks` from `policy.verify` with `validateCheckSteps`, call `fireLoopSpec(spec, { source: 'webhook', vars, projectId, runAs: policy.run_as, checks, repoIds: [finding.repo_id], engine })`, and store `workflow_id` and `status='fixing'` in one conditional transition from `triaged`. Add `run_as: string` and `engine: string` to `AutofixPolicy` in Task 3 (the user who enabled auto-fix, and the engine to use; default `claude-code`).
+- [ ] **Step 5: Implement `onFixSessionEnded`** (registered with `addRunLifecycleHook` on `'done'` and `'failed'`): find the finding by workflow id, read `readLoopState(workflow).lastCheck` and the final status line, add the session cost to `cost_usd`, and apply the outcomes in the tests. On pass it does nothing further: Task 9 reacts to the session's `repo-changes`.
 - [ ] **Step 6: Run the tests.** Expected: PASS. Run `npm run typecheck`.
-- [ ] **Step 7: Commit** `feat(autofix): fix pipeline with server-run verification and propose mode`.
+- [ ] **Step 7: Commit** `feat(autofix): fix pipeline on loop sessions with loop checks`.
 
-## Phase 3: draft PRs and the closed loop
-
-### Task 9: Delivery (push and draft PR)
+### Task 9: Delivery through the existing PR flow, with guardrails
 
 **Files:**
+- Modify: `server/session-pr.ts` (`handleOne`), `server/pull-requests.ts` (`CreatePrInput`, `createPullRequest`), `server/agent/runner-finalize.ts` (`detectChanges`), the shared `RepoChange` type (`server/session-pr.ts:36` and `runner-finalize.ts:11`)
 - Create: `server/autofix/delivery.ts`
-- Modify: `server/autofix/pipeline.ts` (call `deliver` in `draft_pr` mode and on approval in propose mode)
-- Test: `test/autofix-delivery.test.ts`
+- Test: `test/autofix-delivery.test.ts`, plus the existing `session-pr` tests must still pass
 
 **Interfaces:**
-- Consumes: Task 8 pipeline; `buildPrBody` inputs from the finding and the verification output.
-- Produces: `fixBranchName(kind: string, fingerprint: string): string` (`autofix/<kind>-<first 8 of fingerprint>`); `buildPrBody(f: AutofixFinding, verifyOutput: string, judge: string | null): string` (evidence and verify output scrubbed, links the session, follows the repo's PR template headings when a template file exists in the working copy); `deliver(f: AutofixFinding, workDir: string): Promise<{ prNumber: number; prUrl: string }>` (commit, `git push` of the branch, GitHub `POST /pulls` with `draft: true`, then add the `autofix` label through the issues API, using the same token source as `review.ts`), and append an audit entry `autofix.pr.opened` with the finding id and PR number (assert it in the deliver test). `judge` is `null` in v1: the advisory judge does not exist in the code yet.
+- Consumes: Task 6 `checkDiff`, Task 3 policy, Task 8 findings linked to a workflow.
+- Produces:
+  - `RepoChange` gains optional `paths?: DiffFile[]` (path, added, removed from `git diff --numstat <base>`), filled by `detectChanges`. Because `runner-finalize.ts` is copied into the runner images, this change needs the runners rebuilt and redeployed before it takes effect; sessions from an older runner send no `paths` and are treated as `large` (not pushed without approval).
+  - `CreatePrInput` gains optional `draft?: boolean` and `labels?: string[]`; `createPullRequest` sends `draft` on GitHub and adds labels through the issues API; other providers ignore both.
+  - `fixBranchName(kind: string, fingerprint: string): string` (`autofix/<kind>-<first 8 of fingerprint>`), `buildPrBody(f: AutofixFinding, checkOutput: string): string` (evidence and check output passed through `scrubSecrets`/`scrubEvidence`).
+  - `autofixGate(ctx: SessionPrContext, change: RepoChange): Promise<'go' | 'ask' | 'block'>` in `delivery.ts`, called at the top of `handleOne` for workflows that belong to a finding: `block` when `checkDiff` reports a violation (the finding becomes `needs_human`, an audit entry and a `blocked` inbox item are written, nothing is pushed); `ask` for `propose` mode, or for `draft_pr` mode when `large` is true or `paths` is missing (the existing `push` Inbox item is created, with `payload.kind = 'autofix'`); `go` for `draft_pr` mode with a clean diff (skips the "no ticket" question and calls `runPullRequest`).
 
-- [ ] **Step 1: Write the tests** with `fetch` and git stubbed: `fixBranchName('tests','abcdef0123456789') === 'autofix/tests-abcdef01'`; `buildPrBody contains the evidence, the verify output and no secret`; `deliver creates a draft PR with label autofix and returns its number and url`; `the finding moves fixing to pr_open with pr_number, pr_url and fix_branch set`; `a push failure leaves the finding in 'new' with an attempt counted and no PR`; `in propose mode nothing is pushed until the inbox item is approved`.
+- [ ] **Step 1: Write the tests:** `fixBranchName('tests','abcdef0123456789') === 'autofix/tests-abcdef01'`; `buildPrBody contains the evidence and check output and no secret`; `createPullRequest sends draft true and the autofix label for GitHub`; gate: `a diff touching .github/workflows/ci.yml is blocked, nothing is pushed, the finding is needs_human`; `draft_pr mode with a clean diff goes ahead and the finding becomes pr_open with pr_number, pr_url and fix_branch`; `propose mode creates a 'push' inbox item with payload.kind 'autofix' and pushes nothing until approved`; `a change with no paths asks instead of going ahead`; `a push failure leaves the finding 'new' with an attempt counted`; an audit entry `autofix.pr.opened` is written when the PR is opened.
 - [ ] **Step 2: Run them.** Expected: FAIL.
-- [ ] **Step 3: Implement** `delivery.ts` and the two call sites. Approval of the propose-mode Inbox item calls `deliver`; wire this where the inbox resolve route handles `review-ready` items (see `server/inbox.ts`).
-- [ ] **Step 4: Run the tests.** Expected: PASS.
-- [ ] **Step 5: Commit** `feat(autofix): push branch and open labelled draft PR`.
+- [ ] **Step 3: Implement** the type changes, `detectChanges` numstat output, the gate, the branch name (pass it to `branchNameFor`'s caller so the session's PR uses `fixBranchName`), the PR body and `draft`/`labels`. Link the PR back to the finding when `runPullRequest` reports `opened`.
+- [ ] **Step 4: Run the tests** and `npm run test:affected -- --module sessions`. Expected: PASS.
+- [ ] **Step 5: Commit** `feat(autofix): draft PR delivery through the session PR flow`.
 
 ### Task 10: Closing the loop
 
@@ -268,7 +273,7 @@
 ### Task 12: Review-finding and failed-session fixers
 
 **Files:**
-- Modify: `server/db.ts` (`M48_AUTOFIX_SPECS_2`), `server/review.ts` (emit candidates), `server/autofix/pipeline.ts` (goal templates per source)
+- Modify: `server/db.ts` (`M55_AUTOFIX_SPECS_2`), `server/review.ts` (emit candidates), `server/autofix/pipeline.ts` (goal templates per source)
 - Test: `test/autofix-sources.test.ts`
 
 **Interfaces:**
