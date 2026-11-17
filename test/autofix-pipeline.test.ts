@@ -7,7 +7,8 @@
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
-import { run as dbRun, all } from '../server/db.ts';
+import { run as dbRun, all, one } from '../server/db.ts';
+import { recordFinding } from '../server/autofix/intake.ts';
 import { fireRunLifecycleHook } from '../server/agent/runner.ts';
 import { getAutofixFindingsRepository } from '../server/repositories/autofix-findings.ts';
 import type { AutofixFinding, UpsertFindingInput } from '../server/repositories/autofix-findings.ts';
@@ -128,7 +129,7 @@ describe('the seeded spec', () => {
     const spec = (await getLoopSpecsRepository().getSpecById('builtin-autofix-ci'))!;
     assert.ok(spec);
     assert.equal(spec.trigger_type, 'webhook');
-    assert.deepEqual(JSON.parse(spec.trigger_config), { finding_kind: 'ci_failed' });
+    assert.deepEqual(JSON.parse(spec.trigger_config), { finding_kind: 'ci_failed', maxPerHour: 12 });
     assert.deepEqual(JSON.parse(spec.stop_config), { maxIterations: 4, budgetUsd: 2 });
     assert.equal(spec.max_iterations, 4);
     for (const v of ['{{kind}}', '{{branch}}', '{{evidence}}', '{{verify_command}}']) assert.ok(spec.goal_template.includes(v), v);
@@ -228,7 +229,7 @@ describe('processFinding', () => {
     assert.equal(items.length, 1);
     assert.equal(items[0].type, 'blocked');
     assert.equal(items[0].payload.kind, 'autofix');
-    assert.equal(items[0].payload.reason, 'run_as lost edit access');
+    assert.equal(items[0].payload.reason, 'the run_as user has no edit access to this project');
   });
 
   it('a finding with no verify command configured stays new and starts nothing', async () => {
@@ -317,6 +318,23 @@ describe('onFixSessionEnded', () => {
     assert.equal(got.attempts, 1);
   });
 
+  it('a failed attempt that reaches max_attempts goes straight to needs_human with a blocked inbox item', async () => {
+    const f = await newFinding();
+    await repo().transition(f.id, ['new'], { status: 'new', attempts: 1 }); // max_attempts is 2
+    await processFinding(f.id);
+    const wf = calls[0].workflowId!;
+    await endSession(wf, 'paused', { ok: false, output: 'FAIL' });
+    await onFixSessionEnded(wf);
+    const got = (await repo().getById(f.id))!;
+    assert.equal(got.status, 'needs_human');
+    assert.equal(got.attempts, 2);
+    const items = inboxItems();
+    assert.equal(items.length, 1);
+    assert.equal(items[0].type, 'blocked');
+    assert.equal(items[0].payload.kind, 'autofix');
+    assert.equal(items[0].payload.reason, 'attempt limit reached');
+  });
+
   it("a session that ends with checks passing leaves the finding 'fixing' for the PR step (Task 9)", async () => {
     const f = await newFinding();
     await processFinding(f.id);
@@ -376,6 +394,72 @@ describe('onFixSessionEnded', () => {
     assert.equal((await repo().getById(a.id))!.status, 'fixing');
     assert.equal(calls.length, 1, 'only findings with a fixer spec start a session');
     assert.equal((await repo().getById(b.id))!.status, 'new');
+  });
+});
+
+describe('held-back findings', () => {
+  let otherProject = '';
+  before(async () => { otherProject = await makeProject('Pipeline B'); });
+  beforeEach(async () => {
+    dbRun('DELETE FROM autofix_findings WHERE project_id = ?', otherProject);
+    await saveAutofixPolicy(otherProject, {
+      mode: 'propose', engine: 'demo', verify: { command: 'npm test', quick_commands: [] }, run_as: adminId,
+    }, { actorId: adminId, isAdmin: true });
+  });
+
+  it("another project's finding held back by the portal-wide spec (409) is retried when a session ends", async () => {
+    const a = await newFinding();
+    await processFinding(a.id);
+    const b = await newFinding({ repo_id: null, branch: null }, otherProject);
+    nextResult = { ok: false, status: 409, reason: 'The previous session of this spec is still running.' };
+    await processFinding(b.id);
+    assert.equal((await repo().getById(b.id))!.status, 'new');
+    const wf = calls[0].workflowId!;
+    await endSession(wf, 'done', { ok: true, output: 'ok' });
+    await onFixSessionEnded(wf);
+    assert.equal((await repo().getById(b.id))!.status, 'fixing');
+    assert.equal(calls[calls.length - 1].opts.projectId, otherProject);
+  });
+
+  it('a repeat delivery for an existing new finding retries it', async () => {
+    const candidate = { repoFullName: 'acme/widgets', branch: 'main', headSha: 'abc', source: 'ci_failed' as const, kind: 'tests', severity: 'medium' as const, errorText: 'unit failure' };
+    nextResult = { ok: false, status: 429, reason: 'hourly limit' };
+    const first = await recordFinding(projectId, candidate, 'FAIL unit');
+    await _drainPipelineForTest();
+    assert.equal(first.created, true);
+    assert.equal((await repo().getById(first.finding.id))!.status, 'new');
+    assert.equal(calls.length, 1);
+    await recordFinding(projectId, candidate, 'FAIL unit again');
+    await _drainPipelineForTest();
+    assert.equal((await repo().getById(first.finding.id))!.status, 'fixing');
+    assert.equal(calls.length, 2);
+  });
+
+  it('two concurrent processFinding / maybeProcess calls start exactly one session', async () => {
+    const f = await newFinding();
+    await Promise.all([processFinding(f.id), maybeProcess(f.id), processFinding(f.id)]);
+    assert.equal(calls.length, 1);
+    assert.equal((await repo().getById(f.id))!.status, 'fixing');
+  });
+
+  it('a missing fixer spec is warned about once and leaves the finding new', async () => {
+    const row = one<Record<string, unknown>>("SELECT * FROM p10_loop_specs WHERE id = 'builtin-autofix-ci'")!;
+    dbRun("DELETE FROM p10_loop_specs WHERE id = 'builtin-autofix-ci'");
+    const warnings: string[] = [];
+    const orig = console.warn;
+    console.warn = (...a: unknown[]) => { warnings.push(a.map(String).join(' ')); };
+    try {
+      const f = await newFinding();
+      await processFinding(f.id);
+      await processFinding(f.id);
+      assert.equal((await repo().getById(f.id))!.status, 'new');
+    } finally {
+      console.warn = orig;
+      const cols = Object.keys(row);
+      dbRun(`INSERT INTO p10_loop_specs (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`, ...(cols.map((c) => row[c]) as never[]));
+    }
+    assert.equal(warnings.filter((w) => w.includes('builtin-autofix-ci')).length, 1, JSON.stringify(warnings));
+    assert.equal(calls.length, 0);
   });
 });
 

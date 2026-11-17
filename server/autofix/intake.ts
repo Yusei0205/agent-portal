@@ -82,6 +82,8 @@ export async function recordFinding(projectId: string, c: FindingCandidate, evid
   } else if (finding.status !== 'fixing' && finding.status !== 'pr_open') {
     // A finding being fixed keeps the evidence and commit the fix works from; only the counter moves.
     await repos.transition(finding.id, [finding.status], { status: finding.status, evidence: clean, commit_sha: c.headSha || finding.commit_sha });
+    // A finding still waiting as `new` (held back earlier) gets another chance with each new delivery.
+    if (finding.status === 'new') void maybeProcess(finding.id);
   }
   return { finding: (await repos.getById(finding.id)) ?? finding, created };
 }

@@ -7,7 +7,8 @@
  *  - the checks passed: the finding stays `fixing`; the PR step (Task 9) reacts to the session's repo changes.
  *
  * Every status change is a conditional transition, so two callers racing on one finding cannot both act on it. Findings held back
- * (deferred by triage, or a 409/429 from fireLoopSpec) stay `new` and are picked up by processNew when a fix session ends.
+ * (deferred by triage, or a 409/429 from the portal-wide fixer spec) stay `new`; they are picked up when any fix session ends
+ * (processNewEverywhere) or when the same failure is delivered again (intake).
  */
 
 import { getAutofixFindingsRepository } from '../repositories/autofix-findings.ts';
@@ -16,6 +17,7 @@ import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getLoopSpecsRepository } from '../repositories/loop-specs.ts';
 import type { LoopSpecRecord } from '../repositories/loop-specs.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import { getProjectRepository } from '../repositories/projects.ts';
 import { fireLoopSpec } from '../loop-triggers.ts';
 import type { FireOptions, FireResult } from '../loop-triggers.ts';
 import { validateCheckSteps, MAX_CHECK_STEPS } from '../agent/runner-checks.ts';
@@ -33,6 +35,8 @@ export const AUTOFIX_SPEC_BY_SOURCE: Partial<Record<FindingSource, string>> = { 
 
 const EVIDENCE_IN_GOAL = 4_000;
 const PROCESS_NEW_BATCH = 20;
+/** At most this many projects are looked at in one sweep after a session ends. */
+const SWEEP_PROJECTS = 100;
 
 type FireFn = (spec: LoopSpecRecord, opts: FireOptions) => Promise<FireResult>;
 let fire: FireFn = fireLoopSpec;
@@ -97,39 +101,55 @@ function buildChecks(verify: { command: string; quick_commands: string[] }): Che
   return validateCheckSteps(steps);
 }
 
+const warnedMissingSpecs = new Set<string>();
+
 async function specFor(source: FindingSource): Promise<LoopSpecRecord | null> {
   const id = AUTOFIX_SPEC_BY_SOURCE[source];
-  return id ? getLoopSpecsRepository().getSpecById(id) : null;
+  if (!id) return null; // no fixer for this source yet
+  const spec = await getLoopSpecsRepository().getSpecById(id);
+  if (!spec && !warnedMissingSpecs.has(id)) {
+    // Built-in specs are seeded by the SQLite schema only (not on DynamoDB), so this is a setup problem worth a log line.
+    warnedMissingSpecs.add(id);
+    log(`the fixer spec ${id} for ${source} findings is missing (not seeded in this database); those findings stay new`);
+  }
+  return spec;
 }
+
+/** What one processing pass did: 'busy' when the fixer spec refused for now (409/429), so others of that spec need not try. */
+type Outcome = 'started' | 'busy' | 'none';
 
 /** Triage a `new` finding and, when it may proceed, start its fix session. Safe to call for any finding in any status. */
 export async function processFinding(findingId: string): Promise<void> {
+  await processOne(findingId);
+}
+
+async function processOne(findingId: string): Promise<Outcome> {
   const repo = getAutofixFindingsRepository();
   const f = await repo.getById(findingId);
-  if (!f || f.status !== 'new') return;
+  if (!f || f.status !== 'new') return 'none';
   const spec = await specFor(f.source);
-  if (!spec) return; // no fixer for this source yet
+  if (!spec) return 'none';
   const policy = await getAutofixPolicy(f.project_id);
 
   const decision = triage(f, policy, await triageContext(f));
-  if (decision.decision === 'deferred') return;
-  if (decision.decision === 'suppressed') { await repo.transition(f.id, ['new'], { status: 'suppressed' }); return; }
-  if (decision.decision === 'needs_human') { await toNeedsHuman(f, ['new'], decision.reason); return; }
+  if (decision.decision === 'deferred') return 'none';
+  if (decision.decision === 'suppressed') { await repo.transition(f.id, ['new'], { status: 'suppressed' }); return 'none'; }
+  if (decision.decision === 'needs_human') { await toNeedsHuman(f, ['new'], decision.reason); return 'none'; }
 
   // An incomplete setup is not the finding's fault: it waits as `new` until the policy has a verify command and a user to run as.
   if (!policy.verify.command.trim() || !policy.run_as) {
     log(`finding ${f.id} waits: the auto-fix policy has no ${policy.run_as ? 'verify command' : 'run_as user'}`);
-    return;
+    return 'none';
   }
 
-  if (!await repo.transition(f.id, ['new'], { status: 'triaged' })) return; // someone else took it
+  if (!await repo.transition(f.id, ['new'], { status: 'triaged' })) return 'none'; // someone else took it
 
   let checks: CheckStep[];
   try {
     checks = buildChecks(policy.verify);
   } catch (e) {
     await toNeedsHuman(f, ['triaged'], `verify command not allowed: ${(e as Error).message}`);
-    return;
+    return 'none';
   }
 
   const vars: Record<string, string> = {
@@ -154,31 +174,62 @@ export async function processFinding(findingId: string): Promise<void> {
       // Not expected (only this call moves a finding out of 'triaged'); never start a second session for it.
       log(`finding ${f.id} left 'triaged' while session ${result.workflowId} was starting; the session is not linked to it`);
     }
-    return;
+    return 'started';
   }
   if (result.status === 403) {
-    // fireLoopSpec checks run_as again at fire time: that user is no longer an editor or owner of the project.
-    await toNeedsHuman(f, ['triaged'], 'run_as lost edit access');
-  } else if (result.status === 409 || result.status === 429) {
-    // The previous auto-fix session is still running, or the hourly limit is reached: retried when a session ends (processNew).
+    // fireLoopSpec checks run_as again at fire time: that user is not (or no longer) an editor or owner of the project.
+    await toNeedsHuman(f, ['triaged'], 'the run_as user has no edit access to this project');
+    return 'none';
+  }
+  if (result.status === 409 || result.status === 429) {
+    // The fixer spec is portal-wide: its previous session is still running, or its hourly limit is reached. The finding is retried
+    // when a fix session ends (sweep) or the same failure is delivered again (intake).
     await repo.transition(f.id, ['triaged'], { status: 'new' });
-  } else {
-    log(`fix session for ${f.id} did not start (${result.status}): ${result.reason}`);
-    await repo.transition(f.id, ['triaged'], { status: 'new', attempts: f.attempts + 1 });
+    return 'busy';
+  }
+  log(`fix session for ${f.id} did not start (${result.status}): ${result.reason}`);
+  await repo.transition(f.id, ['triaged'], { status: 'new', attempts: f.attempts + 1 });
+  return 'none';
+}
+
+async function newWithFixer(projectId: string): Promise<AutofixFinding[]> {
+  if ((await getAutofixPolicy(projectId)).mode === 'off') return [];
+  return (await getAutofixFindingsRepository().list(projectId, { status: 'new', limit: 200 }))
+    .filter((f) => AUTOFIX_SPEC_BY_SOURCE[f.source]);
+}
+
+/** Oldest first, one at a time, at most PROCESS_NEW_BATCH; once a spec is busy (409/429), its other findings are not tried. */
+async function processList(list: AutofixFinding[]): Promise<void> {
+  const busy = new Set<string>();
+  const ordered = [...list]
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+    .slice(0, PROCESS_NEW_BATCH);
+  for (const f of ordered) {
+    const specId = AUTOFIX_SPEC_BY_SOURCE[f.source]!;
+    if (busy.has(specId)) continue;
+    try {
+      if (await processOne(f.id) === 'busy') busy.add(specId);
+    } catch (e) { log(`processing finding ${f.id} failed`, e); }
   }
 }
 
 /** Process the project's `new` findings that have a fixer, oldest first, one at a time (at most PROCESS_NEW_BATCH). */
 export async function processNew(projectId: string): Promise<void> {
-  const policy = await getAutofixPolicy(projectId);
-  if (policy.mode === 'off') return;
-  const fresh = (await getAutofixFindingsRepository().list(projectId, { status: 'new', limit: 200 }))
-    .filter((f) => AUTOFIX_SPEC_BY_SOURCE[f.source])
-    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
-    .slice(0, PROCESS_NEW_BATCH);
-  for (const f of fresh) {
-    try { await processFinding(f.id); } catch (e) { log(`processing finding ${f.id} failed`, e); }
+  await processList(await newWithFixer(projectId));
+}
+
+/**
+ * Process the held-back `new` findings of every project with auto-fix on (at most SWEEP_PROJECTS projects), oldest first across
+ * projects. The fixer specs are portal-wide, so a session ending in one project frees the spec for the others.
+ */
+export async function processNewEverywhere(firstProjectId?: string): Promise<void> {
+  const ids = (await getProjectRepository().listProjects()).map((p) => p.id);
+  const ordered = firstProjectId ? [firstProjectId, ...ids.filter((id) => id !== firstProjectId)] : ids;
+  const all: AutofixFinding[] = [];
+  for (const id of ordered.slice(0, SWEEP_PROJECTS)) {
+    try { all.push(...await newWithFixer(id)); } catch (e) { log(`listing findings of project ${id} failed`, e); }
   }
+  await processList(all);
 }
 
 /**
@@ -230,13 +281,19 @@ export async function onFixSessionEnded(workflowId: string, opts: { cancelled?: 
     } else if (!failed && lastCheck?.ok !== false && cannotReproduce(lastSummary)) {
       await toNeedsHuman(f, ['fixing'], 'cannot reproduce', { cost_usd }, workflowId);
     } else if (failed || !lastCheck || !lastCheck.ok) {
-      await repo.transition(f.id, ['fixing'], { status: 'new', attempts: f.attempts + 1, cost_usd, cooldown_until });
+      const attempts = f.attempts + 1;
+      if (attempts >= policy.limits.max_attempts) {
+        // The last allowed attempt failed: straight to a person (a cooldown here would only delay the same decision in triage).
+        await toNeedsHuman(f, ['fixing'], 'attempt limit reached', { attempts, cost_usd }, workflowId);
+      } else {
+        await repo.transition(f.id, ['fixing'], { status: 'new', attempts, cost_usd, cooldown_until });
+      }
     } else {
       // Checks passed: stays 'fixing'; the PR step takes it from the session's repo changes.
       await repo.transition(f.id, ['fixing'], { status: 'fixing', cost_usd });
     }
   }
-  await processNew(f.project_id);
+  await processNewEverywhere(f.project_id);
 }
 
 /** The run lifecycle hook: acts when a fix session has ended, not after an iteration the loop goes on from. */

@@ -238,6 +238,12 @@ describe('triggered sessions', () => {
     assert.equal((r as { status: number }).status, 400);
   });
 
+  it('a fixer spec (trigger_config.finding_kind) cannot be run by hand', async () => {
+    const r = await fetchJson(baseUrl, `/api/projects/${projectId}/loop-specs/builtin-autofix-ci/run`, { method: 'POST', body: { vars: {} }, cookie });
+    assert.equal(r.status, 400, JSON.stringify(r.body));
+    assert.match(String((r.body as { error?: string }).error), /auto-fix/i);
+  });
+
   it('the minute job starts a due interval spec once', async () => {
     const { id } = await createSpec({ triggerType: 'interval', triggerConfig: { everyMinutes: 10 } });
     // Created a moment ago: not due yet.

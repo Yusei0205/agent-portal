@@ -291,6 +291,10 @@ export function registerLoopSpecRoutes(): void {
       sendJson(res, 404, { error: 'Loop spec not found' }); return;
     }
     if (!spec.enabled) { sendJson(res, 400, { error: 'This loop spec is disabled' }); return; }
+    // An auto-fix spec is started by the fix pipeline for one finding (its goal needs the finding's evidence), never by hand.
+    if (parseJson<Record<string, unknown>>(spec.trigger_config, {}).finding_kind !== undefined) {
+      sendJson(res, 400, { error: 'This is an auto-fix spec: auto-fix starts it for a finding, it cannot be run by hand.' }); return;
+    }
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const vars: Record<string, string> = {};
