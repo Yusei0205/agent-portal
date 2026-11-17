@@ -13,6 +13,10 @@ let memberCookie = '';
 let outsiderCookie = '';
 let projectId = '';
 let adminId = '';
+let memId = '';
+let ownerCookie = '';
+let ownerId = '';
+let viewerId = '';
 
 async function audit(action: string) {
   return (await getAuditRepository().query({ limit: 100, action })).entries;
@@ -22,16 +26,21 @@ before(async () => {
   baseUrl = (await createTestServer()).baseUrl;
   await fetchJson(baseUrl, '/api/auth/setup', { body: { email: 'admin@af.test', password: 'adminpassword1', name: 'Admin' } });
   adminCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'admin@af.test', password: 'adminpassword1' } })).cookie ?? '';
-  for (const e of ['mem@af.test', 'out@af.test']) {
+  for (const e of ['mem@af.test', 'out@af.test', 'own@af.test', 'view@af.test']) {
     await fetchJson(baseUrl, '/api/users', { method: 'POST', body: { email: e, name: e, password: 'memberpass1234', isAdmin: false }, cookie: adminCookie });
   }
   memberCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'mem@af.test', password: 'memberpass1234' } })).cookie ?? '';
   outsiderCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'out@af.test', password: 'memberpass1234' } })).cookie ?? '';
   const p = await fetchJson(baseUrl, '/api/projects', { body: { name: 'AF project' }, cookie: adminCookie });
   projectId = (p.body as { project: { id: string } }).project.id;
-  const memId = String(one('SELECT id FROM users WHERE email = ?', 'mem@af.test')!.id);
+  memId = String(one('SELECT id FROM users WHERE email = ?', 'mem@af.test')!.id);
   adminId = String(one('SELECT id FROM users WHERE email = ?', 'admin@af.test')!.id);
   await fetchJson(baseUrl, `/api/projects/${projectId}/members`, { method: 'POST', body: { userId: memId, role: 'editor' }, cookie: adminCookie });
+  ownerId = String(one('SELECT id FROM users WHERE email = ?', 'own@af.test')!.id);
+  viewerId = String(one('SELECT id FROM users WHERE email = ?', 'view@af.test')!.id);
+  await fetchJson(baseUrl, `/api/projects/${projectId}/members`, { method: 'POST', body: { userId: ownerId, role: 'owner' }, cookie: adminCookie });
+  await fetchJson(baseUrl, `/api/projects/${projectId}/members`, { method: 'POST', body: { userId: viewerId, role: 'viewer' }, cookie: adminCookie });
+  ownerCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'own@af.test', password: 'memberpass1234' } })).cookie ?? '';
 });
 
 after(cleanup);
@@ -82,6 +91,17 @@ describe('policy store', () => {
   });
 });
 
+describe('validation extras', () => {
+  it('rejects prototype-ish limit keys and bad classes', async () => {
+    await assert.rejects(saveAutofixPolicy('p-v', { limits: JSON.parse('{"constructor":1}') }));
+    await assert.rejects(saveAutofixPolicy('p-v', { limits: JSON.parse('{"__proto__":1}') }));
+    await assert.rejects(saveAutofixPolicy('p-v', { classes: [''] }));
+    await assert.rejects(saveAutofixPolicy('p-v', { classes: ['x'.repeat(41)] }));
+    await assert.rejects(saveAutofixPolicy('p-v', { classes: [5 as never] }));
+    assert.deepEqual((await saveAutofixPolicy('p-v', { classes: ['lint', 'security'] })).classes, ['lint', 'security']);
+  });
+});
+
 describe('kill switch', () => {
   it('isPaused is true after the global pause and after the project pause, false after both are cleared', async () => {
     assert.equal(await isPaused('pk'), false);
@@ -128,6 +148,28 @@ describe('routes', () => {
     assert.equal((entries[0].detail as { mode?: string }).mode, 'propose');
     assert.equal((await fetchJson(baseUrl, url(), { method: 'PUT', body: { mode: 'auto_merge' }, cookie: adminCookie })).status, 400);
     assert.equal((await audit('autofix.policy.update')).filter((e) => e.target === projectId).length, 1);
+  });
+
+  it('a non-admin project owner may PUT, and set run_as to themselves only', async () => {
+    const pj = (await fetchJson(baseUrl, '/api/projects', { body: { name: 'Owner project' }, cookie: adminCookie })).body as { project: { id: string } };
+    const u = `/api/projects/${pj.project.id}/autofix/policy`;
+    await fetchJson(baseUrl, `/api/projects/${pj.project.id}/members`, { method: 'POST', body: { userId: ownerId, role: 'owner' }, cookie: adminCookie });
+    await fetchJson(baseUrl, `/api/projects/${pj.project.id}/members`, { method: 'POST', body: { userId: viewerId, role: 'viewer' }, cookie: adminCookie });
+    await fetchJson(baseUrl, `/api/projects/${pj.project.id}/members`, { method: 'POST', body: { userId: memId, role: 'editor' }, cookie: adminCookie });
+    const ok = await fetchJson(baseUrl, u, { method: 'PUT', body: { mode: 'propose' }, cookie: ownerCookie });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
+    assert.equal((ok.body as { policy: { run_as: string } }).policy.run_as, ownerId);
+    const own = await fetchJson(baseUrl, u, { method: 'PUT', body: { run_as: ownerId }, cookie: ownerCookie });
+    assert.equal(own.status, 200);
+    const other = await fetchJson(baseUrl, u, { method: 'PUT', body: { run_as: adminId }, cookie: ownerCookie });
+    assert.equal(other.status, 403);
+    assert.equal((await fetchJson(baseUrl, u, { method: 'PUT', body: { run_as: memId }, cookie: ownerCookie })).status, 403);
+    assert.equal((await fetchJson(baseUrl, u, { method: 'PUT', body: { run_as: 'nonexistent' }, cookie: ownerCookie })).status, 403);
+    // admin: existing editor ok; viewer, non-member and nonexistent rejected
+    assert.equal((await fetchJson(baseUrl, u, { method: 'PUT', body: { run_as: memId }, cookie: adminCookie })).status, 200);
+    assert.equal((await fetchJson(baseUrl, u, { method: 'PUT', body: { run_as: viewerId }, cookie: adminCookie })).status, 400);
+    assert.equal((await fetchJson(baseUrl, u, { method: 'PUT', body: { run_as: 'nonexistent' }, cookie: adminCookie })).status, 400);
+    assert.equal((await getAutofixPolicy(pj.project.id)).run_as, memId);
   });
 
   it('project pause and global pause toggle the flag and audit each change', async () => {

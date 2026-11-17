@@ -45,7 +45,7 @@ export function registerAutofixRoutes(): void {
     if (!await requireProjectOwnerOrAdmin(req, res, req.params.id)) return;
     const body = req.body;
     if (typeof body !== 'object' || body === null || Array.isArray(body)) throw badRequest('Body must be a JSON object');
-    const policy = await saveAutofixPolicy(req.params.id, body as Partial<AutofixPolicy>, { actorId: req.user!.id, ip: req.ip });
+    const policy = await saveAutofixPolicy(req.params.id, body as Partial<AutofixPolicy>, { actorId: req.user!.id, ip: req.ip, isAdmin: Boolean(req.user!.is_admin) });
     sendJson(res, 200, { policy });
   });
 

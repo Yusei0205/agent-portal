@@ -9,7 +9,8 @@
 import { getDb } from '../db.ts';
 import { getSetting, setSetting } from '../settings.ts';
 import { getAuditRepository } from '../repositories/audit.ts';
-import { badRequest } from '../util.ts';
+import { badRequest, HttpError } from '../util.ts';
+import { getMemberRow } from '../project-access.ts';
 
 export type AutofixMode = 'off' | 'propose' | 'draft_pr';
 
@@ -33,7 +34,7 @@ export interface AutofixPolicy {
   engine: string;
 }
 
-export interface AuditActor { actorId?: string | null; ip?: string | null }
+export interface AuditActor { actorId?: string | null; ip?: string | null; isAdmin?: boolean }
 
 const MODES: AutofixMode[] = ['off', 'propose', 'draft_pr'];
 export const AUTOFIX_ENGINES = ['demo', 'claude-code', 'kiro', 'codex'];
@@ -100,7 +101,13 @@ function applyPatch(base: AutofixPolicy, patch: Partial<AutofixPolicy>): Autofix
     if (!MODES.includes(p.mode as AutofixMode)) throw badRequest(`mode must be one of ${MODES.join(', ')}`);
     out.mode = p.mode as AutofixMode;
   }
-  if (p.classes !== undefined) out.classes = strList(p.classes, 'classes');
+  if (p.classes !== undefined) {
+    if (Array.isArray(p.classes) && p.classes.some((c) => typeof c !== 'string' || !c.trim())) {
+      throw badRequest('classes entries must be non-empty strings of at most 40 characters');
+    }
+    out.classes = strList(p.classes, 'classes');
+    if (out.classes.some((c) => c.length > 40)) throw badRequest('classes entries must be non-empty strings of at most 40 characters');
+  }
   if (p.branches !== undefined) {
     if (!isObj(p.branches)) throw badRequest('branches must be an object');
     const b = p.branches;
@@ -120,7 +127,7 @@ function applyPatch(base: AutofixPolicy, patch: Partial<AutofixPolicy>): Autofix
     if (!isObj(p.limits)) throw badRequest('limits must be an object');
     const l = p.limits;
     for (const k of Object.keys(l)) {
-      if (!(k in DEFAULT_POLICY.limits)) throw badRequest(`Unknown limit ${k}`);
+      if (!Object.hasOwn(DEFAULT_POLICY.limits, k)) throw badRequest(`Unknown limit ${k}`);
     }
     for (const k of ['max_open_prs', 'max_attempts', 'cooldown_minutes', 'max_files', 'max_lines'] as const) {
       if (l[k] !== undefined) out.limits[k] = posInt(l[k], `limits.${k}`);
@@ -158,12 +165,30 @@ export async function getAutofixPolicy(projectId: string): Promise<AutofixPolicy
   }
 }
 
+/**
+ * A run_as change is accepted only for the actor's own id, or, for a portal admin,
+ * for an existing project editor or owner. Anything else would let one user run
+ * fix sessions with another user's permissions.
+ */
+async function checkRunAs(projectId: string, current: AutofixPolicy, patch: Partial<AutofixPolicy>, actor: AuditActor): Promise<void> {
+  const target = (patch as Record<string, unknown>).run_as;
+  if (target === undefined || target === current.run_as) return;
+  if (typeof target !== 'string' || !target) throw badRequest('run_as must be a user id');
+  if (actor.actorId && target === actor.actorId) return;
+  if (!actor.isAdmin) throw new HttpError(403, 'run_as can only be set to your own user');
+  const member = await getMemberRow(projectId, target);
+  if (!member || !['editor', 'owner'].includes(String(member.access))) {
+    throw badRequest('run_as must be an editor or owner of the project');
+  }
+}
+
 export async function saveAutofixPolicy(
   projectId: string,
   patch: Partial<AutofixPolicy>,
   actor: AuditActor = {},
 ): Promise<AutofixPolicy> {
   const current = await getAutofixPolicy(projectId);
+  await checkRunAs(projectId, current, patch, actor);
   const next = applyPatch(current, patch);
   // The first time an admin turns auto-fix on, fix sessions run as that admin.
   if (next.mode !== 'off' && !next.run_as && actor.actorId) next.run_as = actor.actorId;
