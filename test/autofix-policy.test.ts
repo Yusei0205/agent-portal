@@ -75,6 +75,14 @@ describe('policy store', () => {
     }
   });
 
+  it('protected_paths: brace and bracket globs, more than 6 wildcard runs or 200 characters are a 400; the defaults are accepted', async () => {
+    for (const bad of ['**/*.{key,pem}', 'secrets/[ab]/**', 'a{b,c}/x', 'x]', '*a*a*a*a*a*a*b', 'a/'.repeat(101)]) {
+      await assert.rejects(saveAutofixPolicy('p-glob', { protected_paths: [bad] }), (e: any) => e.status === 400 && /protected_paths/.test(e.message), bad);
+    }
+    await assert.rejects(saveAutofixPolicy('p-glob', { protected_paths: ['**/*.{key,pem}'] }), /only \*, \*\* and \? are supported/);
+    const ok = await saveAutofixPolicy('p-glob', { protected_paths: [...DEFAULT_POLICY.protected_paths, 'secrets/**', '*a*a*a*a*a*b'] });
+    assert.ok(ok.protected_paths.includes('*a*a*a*a*a*b'));
+  });
   it('protected_paths cannot lose the default entries', async () => {
     const saved = await saveAutofixPolicy('p-paths', { protected_paths: ['secrets/**'] });
     for (const d of DEFAULT_POLICY.protected_paths) assert.ok(saved.protected_paths.includes(d), d);

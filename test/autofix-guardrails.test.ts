@@ -76,7 +76,7 @@ test('leading slash and doubled slashes are normalised', () => {
 
 // ── Round 2 of the Task 9 review: one matcher with the runner, control characters, dotfiles ──
 
-import { deniedBy, globToRegExp } from '../server/agent/runner-finalize.ts';
+import { deniedBy, compileGlob, protectedGlobMatches } from '../server/agent/runner-finalize.ts';
 
 test('a newline inside a path does not hide it from any default protected glob', () => {
   for (const path of ['.github/workflows/a b\nc.yml', 'a\nb/.env', 'x\ny/key.pem', 'a\nb/package-lock.json', 'infra/x\ny']) {
@@ -100,7 +100,7 @@ test('a path with a control character is a violation even when no glob matches i
   assert.equal(checkDiff([f('src/é ü.ts')], p, 'tests').ok, true, 'unicode and spaces are fine');
 });
 test('the server and the runner judge every path the same way (one matcher)', () => {
-  const res = p.protected_paths.map(globToRegExp);
+  const res = p.protected_paths.map(compileGlob);
   for (const path of [
     '.github/workflows/ci.yml', '.github/workflows/.ci.yml', '.github/ci.yml', 'infra/.tf', 'infra/.a/.b', 'src/infra/x', '.env', 'a/.env.x',
     'a/env', 'k.pem', 'a/.b/c.PEM', 'package-lock.json', '.x/package-lock.json', 'src/a.ts', 'README.md', 'x\ny/key.pem', 'infra/x\ny',
@@ -114,4 +114,40 @@ test('the matcher stays fast on a pathological path (no suffix expansion)', () =
   const t0 = Date.now();
   assert.equal(checkDiff([f(deep)], p, 'tests').ok, false);
   assert.ok(Date.now() - t0 < 2000, `took ${Date.now() - t0} ms`);
+});
+
+// ── Round 3: unsupported or over-complex stored patterns fail closed; the matcher has no super-linear case ──
+
+test('a stored brace, bracket or over-complex pattern is a violation by itself (nothing is pushed until an admin fixes it)', () => {
+  for (const bad of ['**/*.{key,pem}', 'secrets/[ab]/**', '*a*a*a*a*a*a*b', 'x'.repeat(201)]) {
+    const r = checkDiff([f('src/a.ts')], { ...p, protected_paths: [...p.protected_paths, bad] }, 'tests');
+    assert.equal(r.ok, false, bad);
+    assert.ok(r.violations.includes(`unsupported protected pattern: ${bad}`), bad);
+  }
+  assert.equal(checkDiff([], { ...p, protected_paths: ['a{b}'] }, 'tests').ok, false, 'even an empty diff');
+  assert.equal(checkDiff([f('src/a.ts')], p, 'tests').ok, true, 'the defaults are fine');
+});
+
+test('no pattern within the caps takes super-linear time on a 4000-character path', () => {
+  const worst = ['*a*a*a*a*a*b', '**/**/**/**/**/x', 'a**a**a**a**a**b', '**/a/**/a/**/a/**/b', '?*?*?*b', '**a**a**a**b'];
+  const paths = ['a'.repeat(4000), 'a/'.repeat(2000), ('a'.repeat(9) + '/').repeat(400), 'a/'.repeat(1999) + 'x'];
+  for (const g of worst) {
+    for (const path of paths) {
+      const t = performance.now();
+      protectedGlobMatches(path, g);
+      const ms = performance.now() - t;
+      assert.ok(ms < 200, `${g} on ${path.length} chars took ${ms.toFixed(1)} ms`);
+    }
+  }
+});
+
+test('the matcher semantics hold: ** crosses /, * and ? do not, **/ is zero or more directories', () => {
+  const m = protectedGlobMatches;
+  assert.ok(m('a/b/c.pem', '**/*.pem') && m('c.pem', '**/*.pem') && !m('a/c.pem.txt', '**/*.pem'));
+  assert.ok(m('src/x/y', 'src/**') && !m('srcx/y', 'src/**'));
+  assert.ok(m('a/b', 'a/*') && !m('a/b/c', 'a/*') && m('a/.b', 'a/*'));
+  assert.ok(m('ab', 'a?') && !m('a/', 'a?') && !m('abc', 'a?'));
+  assert.ok(m('x', '**/**/x') && m('a/b/x', '**/**/x') && !m('ax', '**/**/x'));
+  assert.ok(m('A/B.PEM', '**/*.pem') && m('a+b(c).ts', 'a+b(c).ts'));
+  assert.ok(m('aXbYc', 'a**b**c') && m('a/x/b/c', 'a**b**c'));
 });

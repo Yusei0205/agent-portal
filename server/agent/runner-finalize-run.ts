@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { classifyPushError, detectChanges, pushBranch, ProtectedPathError } from './runner-finalize.ts';
+import { classifyPushError, detectChanges, pushBranch, ProtectedPathError, TRUSTED_GIT_ENV } from './runner-finalize.ts';
 import type { PushErrorCode } from './runner-finalize.ts';
 import { parseRunnerRepos } from './runner-repos.ts';
 import { parseSnapshot, restoreWorkspace } from './runner-snapshot.ts';
@@ -172,7 +172,7 @@ function realDir(dir: string): string {
 
 function gitText(cwd: string, args: string[], env: Record<string, string>): Promise<string | null> {
   return new Promise((resolve) => {
-    execFile('git', args, { cwd, env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: '0' }, timeout: 30_000, windowsHide: true }, (err, stdout) => {
+    execFile('git', args, { cwd, env: { ...process.env, ...env, ...TRUSTED_GIT_ENV }, timeout: 30_000, windowsHide: true }, (err, stdout) => {
       resolve(err ? null : String(stdout).trim());
     });
   });

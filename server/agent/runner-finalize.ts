@@ -82,11 +82,24 @@ function redact(text: string, env: Record<string, string> = {}): string {
   return out;
 }
 
+/**
+ * Set on every git call of the change report, the checks before a push and the push: git must read the repository as it really is,
+ * so replace objects (`git replace`) and grafts (which the agent can set up to show a clean commit while the real one is pushed) are
+ * off, and the system-wide config is not read. The global config is still read (nothing the runners set relies on it either, but
+ * turning it off is left for a later change).
+ */
+export const TRUSTED_GIT_ENV: Readonly<Record<string, string>> = Object.freeze({
+  GIT_NO_REPLACE_OBJECTS: '1',
+  GIT_GRAFT_FILE: '/nonexistent/agent-portal-no-grafts',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_TERMINAL_PROMPT: '0',
+});
+
 function runGit(cwd: string, args: string[], env: Record<string, string> = {}, allowFail = false): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile('git', args, {
       cwd,
-      env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: '0' },
+      env: { ...process.env, ...env, ...TRUSTED_GIT_ENV },
       maxBuffer: 32 * 1024 * 1024,
       timeout: GIT_TIMEOUT_MS,
       windowsHide: true,
@@ -131,41 +144,113 @@ const MAX_SCANNED_PATHS = 20_000;
  * Fetch `base` from the URL pushes go to into PRIVATE_BASE_REF (forced, overwriting whatever is there) and return the merge base of
  * it and HEAD, or null when either step fails. The session's remote-tracking refs are not trusted.
  */
-async function trustedMergeBase(repoDir: string, base: string, env: Record<string, string>): Promise<string | null> {
+async function trustedMergeBase(repoDir: string, base: string, env: Record<string, string>, head = 'HEAD'): Promise<string | null> {
   if (!BRANCH_RE.test(base) || base.includes('..')) return null;
   const url = await runGit(repoDir, ['remote', 'get-url', '--push', 'origin'], env, true);
   const remote = url.code === 0 && url.stdout.trim() ? url.stdout.trim() : 'origin';
   const fetched = await runGit(repoDir, ['fetch', '--no-tags', '--quiet', remote, `+refs/heads/${base}:${PRIVATE_BASE_REF}`], env, true);
   if (fetched.code !== 0) return null;
-  const mb = await runGit(repoDir, ['merge-base', PRIVATE_BASE_REF, 'HEAD'], env, true);
+  const mb = await runGit(repoDir, ['merge-base', PRIVATE_BASE_REF, head], env, true);
   const sha = mb.stdout.trim();
   return mb.code === 0 && /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
 }
 
 /**
  * The one glob matcher for protected paths, used by the runner before a push and by the portal's guardrails (server/autofix/
- * guardrails.ts imports it), so the two cannot disagree. A glob becomes a regular expression:
+ * guardrails.ts imports it), so the two cannot disagree. Supported: `*`, `**`, `?` and literal characters, nothing else (no braces,
+ * no brackets: such a pattern is refused by the policy and, if already stored, fails closed, see protectedPatternProblem).
  *   `**` followed by `/`  zero or more directories;  any other `**`  anything, `/` included (so `dir/**` is every descendant);
- *   `*`  anything but `/`;  `?`  one character but `/`;  everything else literal (no braces or brackets).
+ *   `*`  anything but `/`;  `?`  one character but `/`.
  * Names starting with a dot match like any other (dot files and dot-directories), matching is case-insensitive (both sides are
- * lowercased), and the expression has the `s` flag so a newline inside a path is matched like any other character. The expression
- * has no nested quantifiers, so matching stays roughly linear in the path length for the usual globs.
+ * lowercased), and a newline is an ordinary character. It is not a regular expression: a set of reachable path positions is carried
+ * through the pattern's tokens, so matching costs O(tokens x path length) whatever the pattern (no backtracking).
  */
-export function globToRegExp(glob: string): RegExp {
+export interface GlobMatcher { test(path: string): boolean }
+
+type GlobToken = { t: 'lit'; c: string } | { t: 'one' } | { t: 'star' } | { t: 'any' } | { t: 'dirs' };
+
+/** The pattern rules the matcher supports; null when `glob` is fine, else why it is not. */
+export const MAX_PATTERN_CHARS = 200;
+export const MAX_PATTERN_WILDCARD_RUNS = 6;
+export function protectedPatternProblem(glob: string): string | null {
+  const g = String(glob ?? '');
+  if (!g.trim()) return 'is empty';
+  if (/[{}[\]]/.test(g)) return 'uses { } [ or ] (only *, ** and ? are supported)';
+  if (g.length > MAX_PATTERN_CHARS) return `is longer than ${MAX_PATTERN_CHARS} characters`;
+  const runs = (g.match(/[*?]+/g) ?? []).length;
+  if (runs > MAX_PATTERN_WILDCARD_RUNS) return `has more than ${MAX_PATTERN_WILDCARD_RUNS} wildcard runs`;
+  if (hasControlChar(g)) return 'contains a control character';
+  return null;
+}
+
+function globTokens(glob: string): GlobToken[] {
   const g = normaliseRepoPath(String(glob)).toLowerCase();
-  let re = '';
+  const out: GlobToken[] = [];
   for (let i = 0; i < g.length; i++) {
     const c = g[i];
     if (c === '*' && g[i + 1] === '*') {
+      let j = i;
+      while (g[j] === '*') j++;
       const atStart = i === 0 || g[i - 1] === '/';
-      if (atStart && g[i + 2] === '/') { re += '(?:.*/)?'; i += 2; continue; } // `**/`: zero or more directories
-      re += '.*'; i += 1; continue;
+      if (atStart && g[j] === '/') {
+        i = j; // `**/`
+        if (out.at(-1)?.t !== 'dirs') out.push({ t: 'dirs' }); // `**/**/` is the same as `**/`
+        continue;
+      }
+      i = j - 1;
+      if (out.at(-1)?.t !== 'any') out.push({ t: 'any' });
+      continue;
     }
-    if (c === '*') { re += '[^/]*'; continue; }
-    if (c === '?') { re += '[^/]'; continue; }
-    re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    if (c === '*') { if (out.at(-1)?.t !== 'star') out.push({ t: 'star' }); continue; }
+    if (c === '?') { out.push({ t: 'one' }); continue; }
+    out.push({ t: 'lit', c });
   }
-  return new RegExp(`^${re}$`, 's');
+  return out;
+}
+
+export function compileGlob(glob: string): GlobMatcher {
+  const tokens = globTokens(glob);
+  return {
+    test(pathIn: string): boolean {
+      const s = String(pathIn).toLowerCase();
+      const n = s.length;
+      // cur[i]: the tokens so far can match s[0..i).
+      let cur = new Uint8Array(n + 1);
+      cur[0] = 1;
+      for (const tok of tokens) {
+        const next = new Uint8Array(n + 1);
+        let any = false;
+        switch (tok.t) {
+          case 'lit':
+            for (let i = 0; i < n; i++) if (cur[i] && s[i] === tok.c) { next[i + 1] = 1; any = true; }
+            break;
+          case 'one':
+            for (let i = 0; i < n; i++) if (cur[i] && s[i] !== '/') { next[i + 1] = 1; any = true; }
+            break;
+          case 'star':
+            for (let j = 0; j <= n; j++) {
+              if (cur[j] || (j > 0 && next[j - 1] && s[j - 1] !== '/')) { next[j] = 1; any = true; }
+            }
+            break;
+          case 'any':
+            for (let j = 0; j <= n; j++) if (cur[j] || (j > 0 && next[j - 1])) { next[j] = 1; any = true; }
+            break;
+          case 'dirs': {
+            // Zero directories, or any text ending in `/` after a reachable position.
+            let seen = false;
+            for (let j = 0; j <= n; j++) {
+              if ((j > 0 && seen && s[j - 1] === '/') || cur[j]) { next[j] = 1; any = true; }
+              if (cur[j]) seen = true;
+            }
+            break;
+          }
+        }
+        if (!any) return false;
+        cur = next;
+      }
+      return cur[n] === 1;
+    },
+  };
 }
 
 /** Forward slashes, single slashes, no leading `./` or `/` (the same for globs and paths). */
@@ -180,12 +265,12 @@ export function hasControlChar(p: string): boolean {
   return /[\x00-\x1f\x7f]/.test(p);
 }
 
-const compiled = new Map<string, RegExp>();
-/** Whether `file` matches `glob` under the rules of globToRegExp (compiled expressions are cached). */
+const compiled = new Map<string, GlobMatcher>();
+/** Whether `file` matches `glob` under the rules of compileGlob (compiled matchers are cached). */
 export function protectedGlobMatches(file: string, glob: string): boolean {
   let re = compiled.get(glob);
   if (!re) {
-    re = globToRegExp(glob);
+    re = compileGlob(glob);
     if (compiled.size > 1000) compiled.clear();
     compiled.set(glob, re);
   }
@@ -193,13 +278,17 @@ export function protectedGlobMatches(file: string, glob: string): boolean {
 }
 
 /** The first deny pattern `file` matches, or null. */
-export function deniedBy(file: string, patterns: RegExp[], sources: string[]): string | null {
+export function deniedBy(file: string, patterns: GlobMatcher[], sources: string[]): string | null {
   const n = normaliseRepoPath(file).toLowerCase();
   for (let i = 0; i < patterns.length; i++) if (patterns[i].test(n)) return sources[i];
   return null;
 }
 
 /** Raised by pushBranch when the branch would carry a denied path. */
+let beforePushHook: ((repoDir: string, branch: string) => Promise<void>) | null = null;
+/** Tests only: runs after the checks and before the push (to move refs in between). Null restores nothing-in-between. */
+export function _setBeforePushHookForTest(fn: ((repoDir: string, branch: string) => Promise<void>) | null): void { beforePushHook = fn; }
+
 export class ProtectedPathError extends Error {
   code = 'protected-path' as const;
 }
@@ -326,9 +415,18 @@ export async function pushBranch(opts: {
     throw new Error(`git diff failed: ${redact(staged.stderr.trim(), env).slice(0, 500)}`);
   }
 
+  // The commit to check and to push, resolved once: whatever happens to the branch ref afterwards, this commit is what is pushed.
+  const resolved = await runGit(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`], env, true);
+  const sha = resolved.stdout.trim();
+  if (resolved.code !== 0 || !/^[0-9a-f]{40,64}$/.test(sha)) throw new Error('Refusing to push: the branch commit could not be resolved');
+
   if (opts.denyPaths) {
     const sources = opts.denyPaths.filter((p) => typeof p === 'string' && p.trim());
-    const patterns = sources.map(globToRegExp);
+    for (const g of sources) {
+      const problem = protectedPatternProblem(g);
+      if (problem) throw new ProtectedPathError(`Refusing to push: unsupported protected pattern ${JSON.stringify(g)} (${problem})`);
+    }
+    const patterns = sources.map(compileGlob);
     const refuse = (f: string, where: string): void => {
       const shown = JSON.stringify(f);
       if (f.length > PATH_CHECK_MAX) throw new ProtectedPathError(`Refusing to push: a changed path${where} is too long to check`);
@@ -336,26 +434,27 @@ export async function pushBranch(opts: {
       const hit = deniedBy(f, patterns, sources);
       if (hit) throw new ProtectedPathError(`Refusing to push: ${shown} is a protected path (${hit})${where}`);
     };
-    const mb = await trustedMergeBase(repoDir, opts.base, env);
+    const mb = await trustedMergeBase(repoDir, opts.base, env, sha);
     if (!mb) throw new ProtectedPathError('Refusing to push: the base branch could not be fetched to check the changed files');
-    const diff = await runGit(repoDir, ['diff', '--name-only', '--no-renames', '-z', mb, 'HEAD'], env, true);
+    const diff = await runGit(repoDir, ['diff', '--name-only', '--no-renames', '-z', mb, sha], env, true);
     if (diff.code !== 0) throw new ProtectedPathError('Refusing to push: the changed files could not be listed');
     for (const f of diff.stdout.split('\0')) if (f) refuse(f, '');
-    // Every commit that will be pushed, too: a protected file added and reverted on the way still sits in the pushed history.
-    // (A merge commit's own resolution is not listed; the commits it brings in are, and the final tree is checked above.)
-    const count = await runGit(repoDir, ['rev-list', '--count', `${mb}..HEAD`], env, true);
+    // Every commit that will be pushed, too: a protected file added and reverted on the way still sits in the pushed history. Merge
+    // commits are listed against each parent (--diff-merges=separate), so a file a merge resolution adds is seen; a merge of the base
+    // into the branch then lists the base's own changes as well, which can refuse a push that is in fact fine (fails closed).
+    const count = await runGit(repoDir, ['rev-list', '--count', `${mb}..${sha}`], env, true);
     const n = parseInt(count.stdout.trim(), 10);
     if (count.code !== 0 || !Number.isFinite(n)) throw new ProtectedPathError('Refusing to push: the commits could not be counted');
     if (n > MAX_SCANNED_COMMITS) throw new ProtectedPathError(`Refusing to push: too many commits to check (${n}, at most ${MAX_SCANNED_COMMITS})`);
-    const log = await runGit(repoDir, ['log', '--name-only', '--no-renames', '-z', '--format=', `${mb}..HEAD`], env, true);
+    const log = await runGit(repoDir, ['log', '--name-only', '--no-renames', '--diff-merges=separate', '-z', '--format=', `${mb}..${sha}`], env, true);
     if (log.code !== 0) throw new ProtectedPathError('Refusing to push: the commits could not be listed');
     const names = log.stdout.split('\0').filter(Boolean);
     if (names.length > MAX_SCANNED_PATHS) throw new ProtectedPathError(`Refusing to push: too many changed paths in the commits to check (at most ${MAX_SCANNED_PATHS})`);
     for (const f of names) refuse(f, ' in an intermediate commit');
   }
 
-  // Only this branch: a full refspec (no tag or other ref of the same name), no configured push refspecs, no tags riding along.
-  await runGit(repoDir, ['-c', 'push.followTags=false', 'push', '--no-verify', '--no-follow-tags', 'origin', `refs/heads/${branch}:refs/heads/${branch}`], env);
-  const sha = (await runGit(repoDir, ['rev-parse', 'HEAD'], env)).stdout.trim();
+  if (beforePushHook) await beforePushHook(repoDir, branch);
+  // Exactly the checked commit, to this branch only: no tag or other ref of the same name, no configured push refspecs, no tags.
+  await runGit(repoDir, ['-c', 'push.followTags=false', 'push', '--no-verify', '--no-follow-tags', 'origin', `${sha}:refs/heads/${branch}`], env);
   return { sha };
 }

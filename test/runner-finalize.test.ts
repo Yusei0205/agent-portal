@@ -11,7 +11,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
   slugify, branchNameFor, isProtectedBranch, detectChanges, pushBranch, classifyPushError, parseChangedPaths, repoChangeOf, MAX_REPORTED_PATHS,
-  globToRegExp, deniedBy, ProtectedPathError,
+  compileGlob, deniedBy, ProtectedPathError, _setBeforePushHookForTest,
 } from '../server/agent/runner-finalize.ts';
 import { validateFinalizeRequest } from '../server/agent/runner-finalize-run.ts';
 
@@ -230,14 +230,14 @@ describe('detectChanges does not trust the session\'s own base ref', () => {
   });
 });
 
-describe('globToRegExp / deniedBy', () => {
+describe('compileGlob / deniedBy', () => {
   it('agrees with path.matchesGlob on the default protected paths, and is case-insensitive and dot-directory aware', () => {
     const samples = [
       '.github/workflows/ci.yml', '.github/workflows/sub/x.yaml', '.github/ci.yml', 'github/workflows/ci.yml', 'infra/main.tf', 'infra/a/b.tf',
       'src/infra/x.tf', '.env', '.env.local', 'app/.env', 'app/.envrc', 'app/env', 'key.pem', 'a/b/c.pem', 'a.pem.txt', 'package-lock.json',
       'web/package-lock.json', 'web/package-lock.json.bak', 'src/cart.ts', 'README.md',
     ];
-    const res = DEFAULT_DENY.map(globToRegExp);
+    const res = DEFAULT_DENY.map(compileGlob);
     for (const p of samples) {
       const ours = deniedBy(p, res, DEFAULT_DENY) !== null;
       const node = DEFAULT_DENY.some((g) => path.posix.matchesGlob(p, g));
@@ -247,9 +247,9 @@ describe('globToRegExp / deniedBy', () => {
       assert.ok(deniedBy(p, res, DEFAULT_DENY), p);
     }
     assert.ok(deniedBy('.hidden/dir/package-lock.json', res, DEFAULT_DENY), 'dot-directories are crossed by **');
-    assert.equal(deniedBy('src/a.ts', [globToRegExp('src/?.ts')], ['src/?.ts']), 'src/?.ts');
-    assert.equal(deniedBy('src/ab.ts', [globToRegExp('src/?.ts')], ['src/?.ts']), null);
-    assert.equal(deniedBy('a+b(c).ts', [globToRegExp('a+b(c).ts')], ['x']), 'x', 'regex characters are literal');
+    assert.equal(deniedBy('src/a.ts', [compileGlob('src/?.ts')], ['src/?.ts']), 'src/?.ts');
+    assert.equal(deniedBy('src/ab.ts', [compileGlob('src/?.ts')], ['src/?.ts']), null);
+    assert.equal(deniedBy('a+b(c).ts', [compileGlob('a+b(c).ts')], ['x']), 'x', 'regex characters are literal');
   });
 });
 
@@ -310,7 +310,7 @@ describe('round 2: newline and dotfile paths, tags and intermediate commits', ()
   const lsRemote = (remote: string, ref: string) => execFileSync('git', ['ls-remote', remote, ref], { encoding: 'utf8' }).trim();
 
   it('the matcher matches across newlines and dot names for each default glob', () => {
-    const res = DEFAULT_DENY.map(globToRegExp);
+    const res = DEFAULT_DENY.map(compileGlob);
     for (const p of ['.github/workflows/a b\nc.yml', 'a\nb/.env', 'x\ny/key.pem', 'a\nb/package-lock.json', 'infra/x\ny',
       'infra/.tf', 'infra/.main\n.tf', '.github/workflows/.ci.yml', '.github/workflows/.ci\n.yml', 'infra/.a/.b']) {
       assert.ok(deniedBy(p, res, DEFAULT_DENY), JSON.stringify(p));
@@ -381,6 +381,72 @@ describe('round 2: newline and dotfile paths, tags and intermediate commits', ()
     const { work } = makeRepo();
     for (let i = 0; i < 201; i++) git(work, 'commit', '-q', '--allow-empty', '-m', `c${i}`);
     await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/many-1' }), /too many commits/);
+  });
+});
+
+describe('round 3: replace objects, merge resolutions, check-then-push, unsupported patterns', () => {
+  const opts = { base: 'main', protectedPatterns: ['main'], defaultBranch: 'main', message: 'fix', env: {}, denyPaths: DEFAULT_DENY };
+  const lsTree = (remote: string, ref: string) => git(remote, 'ls-tree', '-r', '--name-only', ref).split('\n').filter(Boolean).sort();
+
+  it('a commit hidden behind `git replace` is checked as it really is (refused)', async () => {
+    const { remote, work } = makeRepo();
+    git(work, 'checkout', '-q', '-b', 'autofix/rp-1');
+    fs.writeFileSync(path.join(work, 'b.txt'), 'x');
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'clean');
+    const clean = git(work, 'rev-parse', 'HEAD');
+    git(work, 'reset', '-q', '--hard', 'HEAD~1');
+    fs.mkdirSync(path.join(work, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(work, '.github', 'workflows', 'evil.yml'), 'on: push\n');
+    fs.writeFileSync(path.join(work, 'b.txt'), 'x');
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'evil');
+    const evil = git(work, 'rev-parse', 'HEAD');
+    git(work, 'replace', evil, clean);
+    git(work, 'reset', '-q', '--hard');
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/rp-1' }), /evil\.yml/);
+    assert.equal(execFileSync('git', ['ls-remote', remote, 'refs/heads/autofix/rp-1'], { encoding: 'utf8' }).trim(), '');
+  });
+
+  it('a protected file added in one merge resolution and removed in the next is refused', async () => {
+    const { remote, work } = makeRepo();
+    const side = (n: string) => { git(work, 'checkout', '-q', '-b', n, 'main'); fs.writeFileSync(path.join(work, `${n}.txt`), n); git(work, 'add', '-A'); git(work, 'commit', '-qm', n); };
+    side('s1'); side('s2');
+    git(work, 'checkout', '-q', '-b', 'autofix/mg-1', 'main');
+    git(work, 'merge', '-q', '--no-ff', '--no-commit', 's1');
+    fs.mkdirSync(path.join(work, '.github', 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(work, '.github', 'workflows', 'evil.yml'), 'on: push\n');
+    git(work, 'add', '-A'); git(work, 'commit', '-qm', 'M1');
+    git(work, 'merge', '-q', '--no-ff', '--no-commit', 's2');
+    git(work, 'rm', '-qr', '.github'); git(work, 'commit', '-qm', 'M2');
+    await assert.rejects(pushBranch({ ...opts, repoDir: work, branch: 'autofix/mg-1' }), /evil\.yml.*intermediate commit/);
+    assert.equal(execFileSync('git', ['ls-remote', remote, 'refs/heads/autofix/mg-1'], { encoding: 'utf8' }).trim(), '');
+  });
+
+  it('pushes exactly the commit that was checked, even when the branch ref moves between check and push', async () => {
+    const { remote, work } = makeRepo();
+    fs.writeFileSync(path.join(work, 'b.txt'), 'ok\n');
+    let evil = '';
+    _setBeforePushHookForTest(async (repoDir, branch) => {
+      // The agent, in the same machine, moves the branch to a commit with a workflow after the check.
+      fs.mkdirSync(path.join(repoDir, '.github', 'workflows'), { recursive: true });
+      fs.writeFileSync(path.join(repoDir, '.github', 'workflows', 'evil.yml'), 'on: push\n');
+      git(repoDir, 'add', '-A'); git(repoDir, 'commit', '-qm', 'late');
+      evil = git(repoDir, 'rev-parse', 'HEAD');
+      git(repoDir, 'update-ref', `refs/heads/${branch}`, evil);
+    });
+    try {
+      const { sha } = await pushBranch({ ...opts, repoDir: work, branch: 'autofix/tt-1' });
+      assert.notEqual(sha, evil);
+      assert.equal(git(remote, 'rev-parse', 'refs/heads/autofix/tt-1'), sha);
+      assert.deepEqual(lsTree(remote, 'refs/heads/autofix/tt-1'), ['a.txt', 'b.txt']);
+    } finally { _setBeforePushHookForTest(null); }
+  });
+
+  it('refuses to push when a deny pattern is unsupported or too complex (fail closed)', async () => {
+    for (const bad of ['**/*.{key,pem}', 'secrets/[ab]/**', '*a*a*a*a*a*a*b']) {
+      const { work } = makeRepo();
+      fs.writeFileSync(path.join(work, 'b.txt'), 'ok\n');
+      await assert.rejects(pushBranch({ ...opts, denyPaths: [...DEFAULT_DENY, bad], repoDir: work, branch: 'autofix/up-1' }), /unsupported protected pattern/, bad);
+    }
   });
 });
 

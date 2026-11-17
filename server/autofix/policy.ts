@@ -11,6 +11,7 @@ import { getSetting, setSetting } from '../settings.ts';
 import { getAuditRepository } from '../repositories/audit.ts';
 import { badRequest, HttpError } from '../util.ts';
 import { getMemberRow } from '../project-access.ts';
+import { MAX_PATTERN_CHARS, MAX_PATTERN_WILDCARD_RUNS, protectedPatternProblem } from '../agent/runner-finalize.ts';
 
 export type AutofixMode = 'off' | 'propose' | 'draft_pr';
 
@@ -121,7 +122,16 @@ function applyPatch(base: AutofixPolicy, patch: Partial<AutofixPolicy>): Autofix
     }
     if (b.extra !== undefined) out.branches.extra = strList(b.extra, 'branches.extra');
   }
-  if (p.protected_paths !== undefined) out.protected_paths = strList(p.protected_paths, 'protected_paths');
+  if (p.protected_paths !== undefined) {
+    out.protected_paths = strList(p.protected_paths, 'protected_paths');
+    // The protected-path matcher (agent/runner-finalize.ts compileGlob) supports only *, ** and ?; anything else would protect nothing.
+    for (const g of out.protected_paths) {
+      const problem = protectedPatternProblem(g);
+      if (problem) {
+        throw badRequest(`protected_paths entry ${JSON.stringify(g.slice(0, 80))} ${problem}; only *, ** and ? are supported, at most ${MAX_PATTERN_WILDCARD_RUNS} wildcard runs and ${MAX_PATTERN_CHARS} characters`);
+      }
+    }
+  }
   out.protected_paths = [...new Set([...REQUIRED_PROTECTED_PATHS, ...out.protected_paths])];
   if (p.limits !== undefined) {
     if (!isObj(p.limits)) throw badRequest('limits must be an object');
