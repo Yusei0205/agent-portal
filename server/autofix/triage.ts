@@ -25,7 +25,8 @@ function branchEligible(f: AutofixFinding, p: AutofixPolicy, ctx: TriageContext)
   if (f.branch === null) return p.branches.default_branch;
   if (p.branches.extra.some(g => path.posix.matchesGlob(f.branch as string, g))) return true;
   if (ctx.defaultBranch !== null && f.branch === ctx.defaultBranch) return p.branches.default_branch;
-  if (ctx.portalPrBranches.includes(f.branch)) return p.branches.portal_prs;
+  // "Pull requests opened by the portal": the branches of the portal's own session PRs (portal/...) and its fix branches.
+  if (ctx.portalPrBranches.includes(f.branch) || f.branch.startsWith('portal/')) return p.branches.portal_prs;
   return false;
 }
 
@@ -40,6 +41,7 @@ export function triage(f: AutofixFinding, p: AutofixPolicy, ctx: TriageContext):
   if (f.attempts >= p.limits.max_attempts) return { decision: 'needs_human', reason: `${f.attempts} attempts reached the limit of ${p.limits.max_attempts}` };
   if (ctx.openPrCount >= p.limits.max_open_prs) return { decision: 'deferred', reason: `open PR cap of ${p.limits.max_open_prs} reached` };
   if (ctx.costTodayUsd >= p.limits.max_cost_per_day_usd) return { decision: 'deferred', reason: 'daily cost cap reached' };
-  if (f.cost_usd >= p.limits.max_cost_per_finding_usd) return { decision: 'deferred', reason: 'per-finding cost cap reached' };
+  // The finding's own spend does not go down by waiting: a person decides (deferring would hold it back forever).
+  if (f.cost_usd >= p.limits.max_cost_per_finding_usd) return { decision: 'needs_human', reason: 'cost limit reached' };
   return { decision: 'triaged' };
 }

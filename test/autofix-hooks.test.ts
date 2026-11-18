@@ -135,6 +135,16 @@ describe('session_failed intake', () => {
     assert.equal((await findings()).length, 1);
   });
 
+  it('a failed iteration of a loop that goes on (loopEnded false) is not a failed session', async () => {
+    const { wf, run } = await makeFailedRun('iteration failed');
+    fireRunLifecycleHook(wf, run, 'failed', { recovering: false, loopEnded: false });
+    await tick();
+    assert.equal((await findings()).length, 0);
+    fireRunLifecycleHook(wf, run, 'failed', { recovering: false, loopEnded: true });
+    await tick();
+    assert.equal((await findings()).length, 1);
+  });
+
   it('the intake does not read human events itself', async () => {
     const { wf, run } = await makeFailedRun('ACP error: kiro-cli process exited');
     const repo = getSessionsRepository();

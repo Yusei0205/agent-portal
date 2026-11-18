@@ -19,6 +19,8 @@ import { recordFinding } from './intake.ts';
 
 export async function handleSessionFailed(workflowId: string, runId: string, event: RunLifecycleEvent, detail?: RunLifecycleDetail): Promise<void> {
   if (event !== 'failed') return;
+  // A failed iteration of a loop that goes on is not a failed session: the loop decides at its end.
+  if (detail?.loopEnded === false) return;
   const sessions = getSessionsRepository();
   const workflow = await sessions.getWorkflowById(workflowId);
   if (!workflow || !workflow.project_id || workflow.kind === 'automation' || workflow.kind === 'review') return;

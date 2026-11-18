@@ -56,8 +56,17 @@ test('open PR cap reached is deferred', () => {
 test('daily cost cap reached is deferred', () => {
   assert.equal(triage(finding(), policy(), ctx({ costTodayUsd: 10 })).decision, 'deferred');
 });
-test('per-finding cost cap reached is deferred', () => {
-  assert.equal(triage(finding({ cost_usd: 2 }), policy(), ctx()).decision, 'deferred');
+test('per-finding cost cap reached goes to a person (needs_human, cost limit reached), not deferred forever', () => {
+  const r = triage(finding({ cost_usd: 2 }), policy(), ctx());
+  assert.equal(r.decision, 'needs_human');
+  assert.equal((r as { reason: string }).reason, 'cost limit reached');
+});
+test('a portal/ branch (a PR the portal opened) is eligible when portal_prs is on, not otherwise', () => {
+  const none = ctx({ portalPrBranches: [] });
+  assert.equal(triage(finding({ branch: 'portal/RLP-12-fix-login' }), policy(), none).decision, 'triaged');
+  const off = policy(); off.branches.portal_prs = false;
+  assert.equal(triage(finding({ branch: 'portal/RLP-12-fix-login' }), off, none).decision, 'suppressed');
+  assert.equal(triage(finding({ branch: 'portalx/y' }), policy(), none).decision, 'suppressed');
 });
 test("a finding on the default branch with kind 'tests' in mode draft_pr is triaged", () => {
   assert.deepEqual(triage(finding(), policy(), ctx()), { decision: 'triaged' });
