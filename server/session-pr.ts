@@ -244,10 +244,20 @@ async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<voi
   if (w.kind === 'automation') return;
   // An auto-fix session is decided by its gate before the project's setting is read; any other session goes on unchanged.
   // Fix sessions attach one repository today; with several, each change would be gated (and could block the finding) on its own.
-  const { autofixGate, askReason, activeFinding } = await import('./autofix/delivery.ts');
+  const { autofixGate, askReason, activeFinding, autofixPushRefusal } = await import('./autofix/delivery.ts');
   const gate = await autofixGate(ctx, change);
   if (gate === 'block' || gate === 'wait') return;
+  // An auto-fix session that is not its finding's active fix session (finding no longer fixing, mode off, an earlier session of a
+  // retried finding, a delegated child) never takes the ordinary (unchecked) flow.
+  const refusal = gate === null ? await autofixPushRefusal(ctx.workflowId) : null;
   const resolved = (await resolveRepos(w)).find((r) => r.runnerName === change.repo);
+  if (refusal) {
+    await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, {
+      repo: change.repo, repoId: resolved ? String(resolved.record.id) : '', state: 'failed', base: change.base,
+      commits: change.commits, files: change.files, error: refusal, errorCode: 'failed',
+    });
+    return;
+  }
   if (!resolved) {
     await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, {
       repo: change.repo, repoId: '', state: 'failed', base: change.base, commits: change.commits, files: change.files,
@@ -374,8 +384,8 @@ export async function createRequestedSessionPullRequest(ctx: SessionPrContext, r
   const resolved = (await resolveRepos(w)).find(r => r.runnerName === request.repo);
   if (!resolved) throw new Error('Repository is not attached to this session');
   // An auto-fix session delivers only through its gate: the agent cannot open a PR itself.
-  const { activeFinding } = await import('./autofix/delivery.ts');
-  if (await activeFinding(ctx.workflowId)) {
+  const { autofixSessionOf } = await import('./autofix/delivery.ts');
+  if (await autofixSessionOf(ctx.workflowId)) {
     await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, {
       repo: request.repo, repoId: String(resolved.record.id), state: 'failed', base: request.base,
       error: 'An auto-fix session cannot open a pull request itself; the portal delivers the fix after its checks.', errorCode: 'failed',
@@ -397,8 +407,17 @@ async function runPullRequest(
   runId: string, w: WorkflowRecord, r: Resolved, start: PrEvent, who: { userId: string | null }, via: 'gate' | 'approval' | 'other',
 ): Promise<void> {
   // An auto-fix session's PR: its own branch name, title and body, a draft with the autofix label, and the finding is told the outcome.
-  const { autofixPrPlan, afterAutofixPullRequest } = await import('./autofix/delivery.ts');
+  const { autofixPrPlan, afterAutofixPullRequest, autofixPushRefusal } = await import('./autofix/delivery.ts');
   const plan = await autofixPrPlan(String(w.id), runId);
+  if (!plan) {
+    // Not an ACTIVE fix session: an auto-fix session in any other state (or a child of one) is refused, whatever `via` is (an Inbox
+    // approval given after the finding left 'fixing' included). Only ordinary sessions go on.
+    const refusal = await autofixPushRefusal(String(w.id));
+    if (refusal) {
+      await writeEvent(runId, String(w.project_id), String(w.id), { ...start, state: 'failed', errorCode: 'failed', error: refusal });
+      return;
+    }
+  }
   if (plan && via === 'other') {
     await writeEvent(runId, String(w.project_id), String(w.id), {
       ...start, state: 'failed', errorCode: 'failed',
@@ -669,8 +688,14 @@ export function registerSessionPullRequestRoutes(): void {
       sendJson(res, 409, { error: 'A pull request is already open for this repository in this session.' });
       return;
     }
-    if ((await getAutofixFindingsRepository().getByWorkflowId(workflowId))?.status === 'fixing') {
+    const { autofixSessionInfo, autofixPushRefusal } = await import('./autofix/delivery.ts');
+    const af = await autofixSessionInfo(workflowId);
+    if (af && !af.delegated && af.finding?.workflow_id === workflowId && af.finding.status === 'fixing') {
       sendJson(res, 409, { error: 'This auto-fix session is being delivered through its checks. Use its Inbox question to approve the pull request.' });
+      return;
+    }
+    if (af) {
+      sendJson(res, 409, { error: (await autofixPushRefusal(workflowId)) ?? 'This is an auto-fix session; nothing was pushed.' });
       return;
     }
     void createPullRequestForSession(workflowId, repoId, { approvedBy: String(req.user.id) });

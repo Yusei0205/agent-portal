@@ -615,19 +615,26 @@ describe('the gate in the session PR flow', () => {
     assert.equal(pl.title, 'Open a pull request for shop?');
     assert.equal(pl.body, '2 files changed in 1 commit(s) in shop. Approve to push a new branch and open a pull request.');
 
+  });
+
+  it('a session whose finding is no longer fixing (pr_open) is refused: no ordinary question, nothing pushed', async () => {
     const s2 = await makeFix();
     await repo().transition(s2.findingId, ['fixing'], { status: 'pr_open' });
     await handleRepoChanges(ctxOf(s2), [clean]);
-    assert.deepEqual(states(s2), ['asked']);
-    assert.equal(inbox(s2)[0].payload.kind, undefined);
+    assert.deepEqual(states(s2), ['failed']);
+    assert.match(String(prEvents(s2)[0].error), /finding is pr open; nothing was pushed\. Use Retry on the Auto-fix tab/);
+    assert.equal(prEvents(s2)[0].repoId, s2.repoId);
+    assert.equal(inbox(s2).length, 0);
+    assert.equal(finalizeCalls.length, 0);
   });
 
-  it("mode 'off' while the fix ran falls through to the ordinary flow", async () => {
+  it("mode 'off' while the fix ran: the session is refused, not the ordinary flow", async () => {
     const s = await makeFix();
     await saveAutofixPolicy(s.projectId, { mode: 'off' }, { actorId: userId, isAdmin: true });
-    await setPullRequestSettings(s.projectId, { openPullRequests: false });
+    await setPullRequestSettings(s.projectId, { openPullRequests: true });
     await handleRepoChanges(ctxOf(s), [clean]);
-    assert.deepEqual(states(s), ['available'], 'setting off: the ordinary flow only offers the button');
+    assert.deepEqual(states(s), ['failed'], 'no ordinary question and no button');
+    assert.match(String(prEvents(s)[0].error), /nothing was pushed/);
     assert.equal(finalizeCalls.length, 0);
     assert.equal(inbox(s).length, 0);
     const f = await finding(s);
@@ -803,6 +810,97 @@ describe('no way around the gate', () => {
     assert.equal(r.status, 409);
     assert.match(String((r.body as any).error), /Inbox question/);
     assert.equal(finalizeCalls.length, 0);
+  });
+
+  /** A propose-mode fix session with its Inbox question asked; returns the question. */
+  async function asked(): Promise<{ s: Fix; itemId: string }> {
+    const s = await makeFix({ mode: 'propose' });
+    await handleRepoChanges(ctxOf(s), [clean]);
+    const item = inbox(s).find((i) => i.type === 'push')!;
+    assert.equal(item.payload.kind, 'autofix');
+    return { s, itemId: item.id };
+  }
+  async function approve(s: Fix, itemId: string): Promise<void> {
+    const r = await fetchJson(baseUrl, `/api/inbox/${itemId}/resolve`, { method: 'POST', body: { response: 'approve' }, cookie });
+    assert.equal(r.status, 200);
+    await waitFor(() => states(s).length > 1);
+  }
+  const refusedEv = (s: Fix) => prEvents(s).filter((e) => e.state === 'failed' && /nothing was pushed\. Use Retry on the Auto-fix tab/.test(String(e.error)));
+
+  it('approving the Inbox question after the session was cancelled pushes nothing', async () => {
+    const { s, itemId } = await asked();
+    const { onFixSessionEnded } = await import('../server/autofix/pipeline.ts');
+    await onFixSessionEnded(s.workflowId, { cancelled: true });
+    assert.equal((await finding(s)).status, 'new');
+    await approve(s, itemId);
+    assert.equal(finalizeCalls.length, 0, 'no finalize call');
+    assert.equal(refusedEv(s).length, 1, JSON.stringify(prEvents(s)));
+    assert.match(String(refusedEv(s)[0].error), /finding is new/);
+  });
+
+  it('approving the Inbox question after the finding became needs_human pushes nothing', async () => {
+    const { s, itemId } = await asked();
+    await repo().transition(s.findingId, ['fixing'], { status: 'needs_human' });
+    await approve(s, itemId);
+    assert.equal(finalizeCalls.length, 0);
+    assert.match(String(refusedEv(s)[0]?.error), /finding is needs human/);
+  });
+
+  it('approving the Inbox question with mode turned off pushes nothing', async () => {
+    const { s, itemId } = await asked();
+    await saveAutofixPolicy(s.projectId, { mode: 'off' }, { actorId: userId, isAdmin: true });
+    await approve(s, itemId);
+    assert.equal(finalizeCalls.length, 0);
+    assert.equal(refusedEv(s).length, 1, JSON.stringify(prEvents(s)));
+    assert.equal(ghCalls.length, 0);
+  });
+
+  it('POST /api/sessions/:id/pull-request answers 409 for a session whose finding is needs_human', async () => {
+    const s = await makeFix();
+    await repo().transition(s.findingId, ['fixing'], { status: 'needs_human' });
+    const r = await fetchJson(baseUrl, `/api/sessions/${s.workflowId}/pull-request`, { method: 'POST', body: { repoId: s.repoId }, cookie });
+    assert.equal(r.status, 409);
+    assert.match(String((r.body as any).error), /needs human; nothing was pushed/);
+    assert.equal(finalizeCalls.length, 0);
+  });
+
+  it('the earlier session of a retried finding (workflow_id overwritten) is refused on every route', async () => {
+    const s = await makeFix();
+    // The fixer spec's loop run names the earlier session; the retry then linked the finding to a new session.
+    run(`INSERT INTO p10_loop_runs (id, spec_id, status, iteration, last_workflow_id, started_at, finished_at) VALUES (?,?,?,?,?,?,?)`,
+      generateId(), 'builtin-autofix-ci', 'done', 1, s.workflowId, now(), now());
+    await repo().transition(s.findingId, ['fixing'], { status: 'fixing', workflow_id: generateId() });
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(refusedEv(s).length, 1, JSON.stringify(prEvents(s)));
+    assert.match(String(refusedEv(s)[0].error), /handled by a later session/);
+    await createPullRequestForSession(s.workflowId, s.repoId, { via: 'approval' });
+    assert.equal(refusedEv(s).length, 2);
+    await createRequestedSessionPullRequest({ ...ctxOf(s), engine: 'codex' }, { repo: 'shop', base: 'main' });
+    assert.match(String(prEvents(s).at(-1)!.error), /cannot open a pull request itself/);
+    const r = await fetchJson(baseUrl, `/api/sessions/${s.workflowId}/pull-request`, { method: 'POST', body: { repoId: s.repoId }, cookie });
+    assert.equal(r.status, 409);
+    assert.equal(finalizeCalls.length, 0);
+    assert.equal(inbox(s).length, 0);
+  });
+
+  it('a session delegated from a fix session is refused (no ordinary question, nothing pushed)', async () => {
+    const s = await makeFix();
+    const childId = generateId();
+    run(`INSERT INTO p6_workflows (id, project_id, goal, status, engine, trust_tools, repo_ids, parent_id, created_by, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      childId, s.projectId, 'sub task', 'done', 'claude-code', 0, JSON.stringify([s.repoId]), s.workflowId, userId, now(), now());
+    const childRun = generateId();
+    run(`INSERT INTO p6_runs (id, workflow_id, status, created_at) VALUES (?,?,'done',?)`, childRun, childId, now());
+    const child: Fix = { ...s, workflowId: childId, runId: childRun };
+    await setPullRequestSettings(s.projectId, { openPullRequests: true });
+    await handleRepoChanges(ctxOf(child), [clean]);
+    assert.equal(refusedEv(child).length, 1, JSON.stringify(prEvents(child)));
+    assert.match(String(refusedEv(child)[0].error), /delegated from an auto-fix session/);
+    await createPullRequestForSession(childId, s.repoId);
+    assert.equal(refusedEv(child).length, 2);
+    assert.equal(finalizeCalls.length, 0);
+    assert.equal(inbox(child).length, 0);
+    assert.equal((await finding(s)).status, 'fixing', "the parent's finding is untouched");
   });
 
   it('a duplicate change judged go while the first push failed opens no ordinary PR', async () => {

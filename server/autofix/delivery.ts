@@ -19,6 +19,7 @@ import { getAutofixFindingsRepository } from '../repositories/autofix-findings.t
 import type { AutofixFinding } from '../repositories/autofix-findings.ts';
 import { getAuditRepository } from '../repositories/audit.ts';
 import { getLoopSpecsRepository } from '../repositories/loop-specs.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
 import { listBranchFiles, listTreeDifference, scrubSecrets } from '../pull-requests.ts';
 import { readCheckResult } from '../workflows/loop.ts';
 import { formatCheckResult } from '../agent/runner-checks.ts';
@@ -116,6 +117,73 @@ export async function isAutofixWorkflow(workflowId: string): Promise<boolean> {
     if (last?.last_workflow_id === workflowId) return true;
   }
   return false;
+}
+
+/** How many parent sessions are walked up to find the auto-fix session a delegated child belongs to. */
+const AUTOFIX_PARENT_DEPTH = 3;
+/** How many of each fixer spec's latest loop runs are scanned for a session id (bounded). */
+const AUTOFIX_RUNS_SCANNED = 500;
+
+/**
+ * The session and its parents (delegated sessions inherit the repositories), at most AUTOFIX_PARENT_DEPTH levels up. A missing
+ * session, or a cycle, ends the walk.
+ */
+async function selfAndParents(workflowId: string): Promise<string[]> {
+  const ids = [workflowId];
+  let cur = workflowId;
+  for (let i = 0; i < AUTOFIX_PARENT_DEPTH; i++) {
+    const w = await getSessionsRepository().getWorkflowById(cur);
+    const parent = w?.parent_id ? String(w.parent_id) : '';
+    if (!parent || ids.includes(parent)) break;
+    ids.push(parent);
+    cur = parent;
+  }
+  return ids;
+}
+
+/**
+ * Whether a session is (or was) an auto-fix session, whatever its finding's status and the project's mode: a finding has this
+ * workflow_id in any status, or a loop run of a fixer spec started it (an earlier session of a finding that was retried: the retry
+ * overwrote the finding's workflow_id). A session delegated from one (up to AUTOFIX_PARENT_DEPTH levels) counts too. Such a session
+ * never takes the ordinary (unchecked) push: only an ACTIVE fix session delivers, through its gate (autofixPrPlan).
+ * `finding` is the finding found by workflow id (null when only a loop run names the session).
+ */
+export async function autofixSessionInfo(workflowId: string): Promise<{ finding: AutofixFinding | null; delegated: boolean } | null> {
+  const ids = await selfAndParents(workflowId);
+  const findings = getAutofixFindingsRepository();
+  for (const id of ids) {
+    const f = await findings.getByWorkflowId(id);
+    if (f) return { finding: f, delegated: id !== workflowId };
+  }
+  const wanted = new Set(ids);
+  for (const specId of new Set(Object.values(AUTOFIX_SPEC_BY_SOURCE))) {
+    if (!specId) continue;
+    const runs = await getLoopSpecsRepository().listRunsBySpec(specId, AUTOFIX_RUNS_SCANNED);
+    const hit = runs.find((r) => r.last_workflow_id && wanted.has(r.last_workflow_id));
+    if (hit) return { finding: null, delegated: hit.last_workflow_id !== workflowId };
+  }
+  return null;
+}
+
+/** True for an auto-fix session in any state, an earlier session of a retried finding, or a session delegated from one. */
+export async function autofixSessionOf(workflowId: string): Promise<boolean> {
+  return (await autofixSessionInfo(workflowId)) !== null;
+}
+
+/**
+ * The reason shown when an auto-fix session (see autofixSessionOf) that is not the active fix session of its finding would push: null
+ * for any other session (the ordinary flow applies).
+ */
+export async function autofixPushRefusal(workflowId: string): Promise<string | null> {
+  const info = await autofixSessionInfo(workflowId);
+  if (!info) return null;
+  const f = info.finding;
+  let what: string;
+  if (info.delegated) what = 'This session was delegated from an auto-fix session, which delivers its fix only through its own checks';
+  else if (!f || f.workflow_id !== workflowId) what = "This auto-fix session's finding is now handled by a later session";
+  else if (f.status === 'fixing') what = "This auto-fix session's finding is fixing, but auto-fix is off for the project";
+  else what = `This auto-fix session's finding is ${f.status.replace(/_/g, ' ')}`;
+  return `${what}; nothing was pushed. Use Retry on the Auto-fix tab.`;
 }
 
 // ── The gate ─────────────────────────────────────────────────────────────────
