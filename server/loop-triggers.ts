@@ -159,7 +159,8 @@ export function fillGoal(template: string, vars: Record<string, string>): string
 
 export type FireResult =
   | { ok: true; workflowId: string; runId: string; goal: string; run: LoopRunRecord }
-  | { ok: false; reason: string; status: number };
+  /** `startFailed`: the session was created but could not be started (it is left paused and its loop run is marked failed). */
+  | { ok: false; reason: string; status: number; startFailed?: true };
 
 export interface FireOptions {
   source: 'manual' | 'cron' | 'interval' | 'webhook';
@@ -180,6 +181,10 @@ export interface FireOptions {
 }
 
 const ACTIVE = new Set(['pending', 'running']);
+
+let startRunFn: (workflowId: string) => Promise<unknown> = startRun;
+/** Test seam: replace startRun (to make a start fail). Call with null to restore it. */
+export function _setStartRunForTest(fn: ((workflowId: string) => Promise<unknown>) | null): void { startRunFn = fn ?? startRun; }
 
 /** Starts a loop session from the spec, unless a rule says not to. */
 export async function fireLoopSpec(spec: LoopSpecRecord, opts: FireOptions): Promise<FireResult> {
@@ -261,12 +266,14 @@ export async function fireLoopSpec(spec: LoopSpecRecord, opts: FireOptions): Pro
   if (repoIds.length) await requestRepoPrep(id).catch((e) => console.error('[loop-trigger] repo prep failed:', e));
 
   try {
-    await startRun(id);
+    await startRunFn(id);
   } catch (e) {
     const reason = `The loop trigger could not start the session: ${String((e as { message?: string })?.message ?? e).slice(0, 300)}`;
     await sessions.updateWorkflow(id, { status: 'paused', stop_reason: reason, updated_at: now() });
     emit(projectId, { type: 'workflow.updated', workflowId: id, status: 'paused' });
-    return { ok: false, status: 409, reason };
+    // The loop run never ran: finish it, so it is not left 'running'.
+    await specs.finishRun(loopRun, 'failed', now()).catch((err) => console.error('[loop-trigger] finishing the loop run failed:', err));
+    return { ok: false, status: 409, reason, startFailed: true };
   }
   return { ok: true, workflowId: id, runId, goal, run: loopRun };
 }

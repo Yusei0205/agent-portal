@@ -211,13 +211,38 @@ describe('processFinding', () => {
     assert.equal(got.attempts, 0);
   });
 
-  it('another error from fireLoopSpec counts an attempt and leaves the finding new', async () => {
+  it('another error from fireLoopSpec counts an attempt with a cooldown; at the cap, needs_human', async () => {
     const f = await newFinding();
     nextResult = { ok: false, status: 400, reason: 'This loop spec is disabled.' };
     await processFinding(f.id);
     const got = (await repo().getById(f.id))!;
     assert.equal(got.status, 'new');
     assert.equal(got.attempts, 1);
+    assert.ok(got.cooldown_until && Date.parse(got.cooldown_until) > Date.now(), 'a cooldown is set');
+    await repo().transition(f.id, ['new'], { status: 'new', cooldown_until: null });
+    nextResult = { ok: false, status: 400, reason: 'This loop spec is disabled.' };
+    await processFinding(f.id);
+    const capped = (await repo().getById(f.id))!;
+    assert.equal(capped.status, 'needs_human');
+    assert.equal(capped.attempts, 2);
+    assert.equal(inboxItems().find((i) => i.type === 'blocked')?.payload.reason, 'attempt limit reached');
+  });
+
+  it('a session that could not start (startFailed) counts an attempt with a cooldown; at the cap, needs_human', async () => {
+    const f = await newFinding();
+    const startFailed: FireResult = { ok: false, status: 409, reason: 'The loop trigger could not start the session: boom', startFailed: true };
+    nextResult = startFailed;
+    await processFinding(f.id);
+    const got = (await repo().getById(f.id))!;
+    assert.equal(got.status, 'new');
+    assert.equal(got.attempts, 1, 'not a plain busy 409');
+    assert.ok(got.cooldown_until && Date.parse(got.cooldown_until) > Date.now(), 'a cooldown is set');
+    await repo().transition(f.id, ['new'], { status: 'new', cooldown_until: null });
+    nextResult = startFailed;
+    await processFinding(f.id);
+    const capped = (await repo().getById(f.id))!;
+    assert.equal(capped.status, 'needs_human');
+    assert.equal(capped.attempts, 2);
   });
 
   it("a 403 (run_as lost edit access) moves the finding to needs_human with a 'blocked' inbox item", async () => {

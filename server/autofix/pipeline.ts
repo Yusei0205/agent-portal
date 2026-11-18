@@ -266,6 +266,14 @@ async function processOne(findingId: string): Promise<Outcome> {
     await toNeedsHuman(f, ['triaged'], 'the run_as user has no edit access to this project');
     return 'none';
   }
+  if (result.startFailed) {
+    // The session was created but could not start (a runtime problem, not "the spec is busy"): this counts as an attempt, with the
+    // cooldown and the attempt limit, so a persistent start failure does not create a paused session at every sweep. Other findings
+    // of the spec are held back for this pass as for a busy spec.
+    log(`the fix session for ${f.id} could not start: ${result.reason}`);
+    await recordFailedAttempt(f, ['triaged'], policy);
+    return 'busy';
+  }
   if (result.status === 409 || result.status === 429) {
     // The fixer spec is portal-wide: its previous session is still running, or its hourly limit is reached. The finding is retried
     // when a fix session ends (sweep) or the same failure is delivered again (intake).
@@ -273,7 +281,7 @@ async function processOne(findingId: string): Promise<Outcome> {
     return 'busy';
   }
   log(`fix session for ${f.id} did not start (${result.status}): ${result.reason}`);
-  await repo.transition(f.id, ['triaged'], { status: 'new', attempts: f.attempts + 1 });
+  await recordFailedAttempt(f, ['triaged'], policy);
   return 'none';
 }
 

@@ -15,7 +15,7 @@ import { getGitReposRepository } from '../server/repositories/git-repos.ts';
 import { cancelRun } from '../server/workflows/controls.ts';
 import { now } from '../server/util.ts';
 import {
-  parseCron, triggerProblem, timeTriggerDue, webhookSignatureOk, webhookVars, fillGoal, runDueTriggers, fireLoopSpec,
+  parseCron, triggerProblem, timeTriggerDue, webhookSignatureOk, webhookVars, fillGoal, runDueTriggers, fireLoopSpec, _setStartRunForTest,
 } from '../server/loop-triggers.ts';
 
 const at = (iso: string): Date => new Date(iso);
@@ -242,6 +242,27 @@ describe('triggered sessions', () => {
     const r = await fetchJson(baseUrl, `/api/projects/${projectId}/loop-specs/builtin-autofix-ci/run`, { method: 'POST', body: { vars: {} }, cookie });
     assert.equal(r.status, 400, JSON.stringify(r.body));
     assert.match(String((r.body as { error?: string }).error), /auto-fix/i);
+  });
+
+  it('fireLoopSpec: a session that cannot start is paused, its loop run finished as failed, and the result says startFailed', async () => {
+    const spec = (await getLoopSpecsRepository().getSpecById('builtin-investigate-fix'))!;
+    _setStartRunForTest(async () => { throw new Error('runtime unreachable'); });
+    let r;
+    try {
+      r = await fireLoopSpec(spec, { source: 'manual', projectId, userId: adminId });
+    } finally { _setStartRunForTest(null); }
+    assert.equal(r.ok, false);
+    assert.equal((r as { status: number }).status, 409);
+    assert.equal((r as { startFailed?: boolean }).startFailed, true);
+    assert.match((r as { reason: string }).reason, /could not start the session: runtime unreachable/);
+    const [run] = await getLoopSpecsRepository().listRunsBySpec(spec.id, 1);
+    assert.equal(run.status, 'failed');
+    assert.ok(run.finished_at);
+    assert.equal((await getSessionsRepository().getWorkflowById(run.last_workflow_id!))?.status, 'paused');
+    // A busy spec is not a start failure.
+    const ok = await fireLoopSpec(spec, { source: 'manual', projectId, userId: adminId });
+    assert.equal(ok.ok, true);
+    assert.equal((ok as { startFailed?: boolean }).startFailed, undefined);
   });
 
   it('the minute job starts a due interval spec once', async () => {
