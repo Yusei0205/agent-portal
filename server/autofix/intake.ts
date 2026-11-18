@@ -60,7 +60,10 @@ export async function recordFinding(projectId: string, c: FindingCandidate, evid
   const repos = getAutofixFindingsRepository();
   const repo = await findProjectGithubRepo(projectId, c.repoFullName);
   const clean = scrubEvidence(evidence);
-  const fingerprint = computeFingerprint({ repo: c.repoFullName, branch: c.branch, kind: c.kind, error: c.errorText });
+  const fingerprint = computeFingerprint({
+    repo: c.repoFullName, branch: c.branch, kind: c.kind, error: c.errorText,
+    ...(c.fingerprintSubject !== undefined ? { subject: c.fingerprintSubject } : {}),
+  });
   const policy = await getAutofixPolicy(projectId);
   const { finding, created } = await repos.upsertByFingerprint({
     project_id: projectId, source: c.source, kind: c.kind, fingerprint, severity: c.severity, evidence: clean,

@@ -18,9 +18,14 @@ export function normalizeError(text: string): string {
     .trim();
 }
 
-export function computeFingerprint(i: { repo: string; branch: string; kind: string; error: string }): string {
+/**
+ * `subject`: an exact identity the error text must not blur (a review finding's file path, which normalizeError would cut to its
+ * first segment and basename). Absent, the hashed text is exactly what it always was, so existing fingerprints do not change.
+ */
+export function computeFingerprint(i: { repo: string; branch: string; kind: string; error: string; subject?: string }): string {
+  const subject = i.subject === undefined ? '' : `|${i.subject}`;
   return createHash('sha256')
-    .update(`${i.repo}|${branchFamily(i.branch)}|${i.kind}|${normalizeError(i.error)}`)
+    .update(`${i.repo}|${branchFamily(i.branch)}|${i.kind}|${normalizeError(i.error)}${subject}`)
     .digest('hex')
     .slice(0, 16);
 }

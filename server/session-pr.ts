@@ -83,9 +83,12 @@ interface Deps {
   listBranches: (repo: Repository) => Promise<string[]>;
   /** Replaces handleRepoChanges (tests of the callers only). */
   onRepoChanges?: (ctx: SessionPrContext, changes: RepoChange[]) => Promise<void>;
+  /** Chooses a new branch name (tests replace it to check that an auto-fix push refuses a name outside autofix/). */
+  branchNameFor: typeof branchNameFor;
 }
 const defaultDeps: Deps = {
   listBranches: async (repo) => listRemoteBranches(repo, await _getCloneEnv(repo)),
+  branchNameFor,
 };
 let deps: Deps = { ...defaultDeps };
 
@@ -452,7 +455,7 @@ async function runPullRequestSteps(
       // 1. Choose the branch name among the names the remote already has.
       let taken: string[] = [];
       try { taken = await deps.listBranches(repo); } catch { /* the runner and the host still refuse a clash */ }
-      branch = branchNameFor({
+      branch = deps.branchNameFor({
         ticketKey: ticket?.key ?? null,
         title: ticket?.summary || firstLine(String(w.goal ?? ''), 200) || 'changes',
         taken,

@@ -22,7 +22,7 @@ import type { FireOptions, FireResult } from '../server/loop-triggers.ts';
 import { fillGoal } from '../server/loop-triggers.ts';
 import { newLoopState } from '../server/workflows/loop.ts';
 import { processFinding, processNew, _setFireLoopSpec, _drainPipelineForTest, AUTOFIX_SPEC_BY_SOURCE } from '../server/autofix/pipeline.ts';
-import { emitReviewFindings, reviewKindSlug } from '../server/autofix/review-source.ts';
+import { emitReviewFindings, reviewKindSlug, reviewFilePath, REVIEW_EVIDENCE_MAX } from '../server/autofix/review-source.ts';
 import { autofixPrPlan } from '../server/autofix/delivery.ts';
 import { handleReviewLifecycle } from '../server/review-lifecycle.ts';
 
@@ -230,6 +230,45 @@ describe('emitReviewFindings', () => {
     assert.equal(got.length, 1);
     assert.equal(got[0].occurrences, 2);
     assert.match(got[0].evidence, /login\.ts:57/, 'a waiting finding gets the latest evidence');
+  });
+
+  it('the same message on two files that share a basename is two findings', async () => {
+    const r = await makeReview();
+    await addFinding(r.id, { file: 'server/api/users.ts', body: 'Missing input validation.' });
+    await addFinding(r.id, { file: 'server/admin/users.ts', body: 'Missing input validation.' });
+    await addFinding(r.id, { file: 'packages/a/src/index.ts', body: 'Missing input validation.' });
+    await addFinding(r.id, { file: 'packages/b/src/index.ts', body: 'Missing input validation.' });
+    await emit(r.id);
+    assert.equal((await findings()).length, 4);
+  });
+
+  it('a ./-prefixed, Windows-style or differently cased form of the same path is the same finding', async () => {
+    assert.equal(reviewFilePath('./src/Auth/Login.ts'), 'src/auth/login.ts');
+    assert.equal(reviewFilePath('src\\auth\\login.ts'), 'src/auth/login.ts');
+    const r = await makeReview();
+    await addFinding(r.id, { file: 'src/auth/login.ts', line: 1, body: 'Missing input validation.' });
+    await addFinding(r.id, { file: './src/auth/login.ts', line: 9, body: 'Missing input validation.' });
+    await addFinding(r.id, { file: 'src\\auth\\login.ts', line: 20, body: 'Missing input validation.' });
+    await emit(r.id);
+    const got = await findings();
+    assert.equal(got.length, 1);
+    assert.equal(got[0].occurrences, 3);
+  });
+
+  it('a maximal finding keeps its header and stays under the goal\'s 4000-character evidence window', async () => {
+    const r = await makeReview({ head_ref: 'feature/' + 'b'.repeat(190) });
+    const file = 'src/' + 'd/'.repeat(240) + 'deep.ts';
+    await addFinding(r.id, { file, line: 123456, title: 'T'.repeat(500), body: 'M'.repeat(20_000) + '\n\nSuggested fix:\n' + 'S'.repeat(20_000) });
+    await emit(r.id);
+    const [f] = await findings();
+    assert.ok(f.evidence.length <= REVIEW_EVIDENCE_MAX, String(f.evidence.length));
+    assert.ok(f.evidence.length < 4000);
+    assert.ok(f.evidence.startsWith(`Code review ${r.id} of pull request #17`), f.evidence.slice(0, 120));
+    assert.match(f.evidence, /deep\.ts:123456/);
+    assert.match(f.evidence, /\nMessage:\nM{100}/);
+    assert.match(f.evidence, /\nSuggestion:\nS{100}/);
+    // What the goal keeps (the last 4000 characters) is the whole evidence.
+    assert.equal(f.evidence.slice(-4000), f.evidence);
   });
 
   it('a rerun does not re-open or rewrite a finding that is being fixed or has a PR open', async () => {

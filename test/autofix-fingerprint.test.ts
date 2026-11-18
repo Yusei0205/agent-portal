@@ -40,3 +40,16 @@ test('scrubEvidence keeps the last maxChars characters', () => {
   assert.equal(out, 'aaaaaaTAIL');
   assert.equal(scrubEvidence('x'.repeat(9000)).length, 8000);
 });
+
+test('existing fingerprints are unchanged (pinned outputs for CI and session findings, with no subject)', () => {
+  assert.equal(computeFingerprint({ repo: 'acme/shop', branch: 'main', kind: 'tests', error: 'tests failure' }), 'efb1b89e2246b747');
+  assert.equal(computeFingerprint({ repo: 'acme/shop', branch: 'feature/login', kind: 'lint', error: 'Error at /srv/app/src/x.ts:42:7 boom' }), '0ad892ae022361f2');
+  assert.equal(computeFingerprint({ repo: 'session:p1', branch: 'sessions', kind: 'session', error: 'max_turns ACP error: kiro-cli process exited' }), '885ca538f261d051');
+});
+
+test('a subject is hashed exactly, outside the error normalisation', () => {
+  const i = { repo: 'acme/shop', branch: 'main', kind: 'review', error: 'Missing input validation' };
+  assert.notEqual(computeFingerprint({ ...i, subject: 'server/api/users.ts' }), computeFingerprint({ ...i, subject: 'server/admin/users.ts' }));
+  assert.equal(computeFingerprint({ ...i, subject: 'server/api/users.ts' }), computeFingerprint({ ...i, subject: 'server/api/users.ts' }));
+  assert.notEqual(computeFingerprint({ ...i, subject: '' }), computeFingerprint(i), 'an empty subject is still a subject');
+});

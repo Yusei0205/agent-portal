@@ -10,6 +10,8 @@ export interface FindingCandidate {
   kind: string;
   severity: 'low' | 'medium' | 'high';
   errorText: string;
+  /** An exact identity kept out of the error normalisation (see computeFingerprint); only review findings set it. */
+  fingerprintSubject?: string;
   runId?: number;
 }
 

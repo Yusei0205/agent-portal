@@ -12,9 +12,14 @@
  * applies the policy as for CI findings: the kind must be in policy.classes and the head branch must be eligible (a person's PR branch
  * only through branches.extra), so review fixing is opt-in.
  *
- * Fingerprint: repository, branch family, kind and `<file> <message>` without the line number, so the same finding on a rerun or a later
- * commit is one finding. A rerun never re-opens a finding being fixed or with a PR open (recordFinding), nor a resolved one whose fix
- * PR is still open (the reviewed branch has not taken the fix yet).
+ * Fingerprint: repository, branch family, kind, the normalised message and, kept out of the normalisation, the exact file path
+ * (reviewFilePath), without the line number: the same finding on a rerun or a later commit is one finding, and the same message on two
+ * files that share a basename (server/api/users.ts, server/admin/users.ts) is two. A rerun never re-opens a finding being fixed or with
+ * a PR open (recordFinding), nor a resolved one whose fix PR is still open (the reviewed branch has not taken the fix yet).
+ *
+ * Known limits: a person dismisses review findings after the review has finished, so the `accepted !== -1` filter only sees findings
+ * dismissed before a rerun; and rerun dedupe relies on the reviewer wording the message the same way (different wording is a new
+ * finding).
  */
 
 import { getReviewsRepository } from '../repositories/reviews.ts';
@@ -41,13 +46,26 @@ const SAFE_SHA = /^[0-9a-f]{7,64}$/i;
 const SUGGESTION_MARK = '\n\nSuggested fix:\n';
 /** At most this many findings of one review become auto-fix findings (worst first). */
 const MAX_PER_REVIEW = 20;
-const MESSAGE_MAX = 2_000;
-const SUGGESTION_MAX = 1_200;
+/**
+ * The whole evidence stays under this many characters: the fix goal keeps only the last 4000 (pipeline.ts EVIDENCE_IN_GOAL), so a
+ * longer one would lose its header (file and line) first. The header is at most about 900 characters; message and suggestion share
+ * the rest.
+ */
+export const REVIEW_EVIDENCE_MAX = 3_800;
+const SUGGESTION_MAX = 1_000;
 
 /** The category as a kind: lowercase, [a-z0-9-], at most 40 characters; 'review' when nothing is left. */
 export function reviewKindSlug(category: unknown): string {
   const s = String(category ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').slice(0, 40).replace(/-+$/, '');
   return s || 'review';
+}
+
+/**
+ * The file path as a fingerprint component: backslashes as slashes, leading `./` and `/` removed, lowercased (so `./src/A.ts`,
+ * `src\\A.ts` and `src/a.ts` are one file).
+ */
+export function reviewFilePath(p: unknown): string {
+  return String(p ?? '').trim().replace(/\\/g, '/').replace(/^(?:\.\/|\/)+/, '').toLowerCase();
 }
 
 /** One line, no control characters, credentials removed. */
@@ -60,17 +78,22 @@ function splitBody(body: string): { message: string; suggestion: string } {
 }
 
 function evidenceFor(review: ReviewRecord, f: FindingRecord, kind: string, branch: string, sha: string, message: string, suggestion: string): string {
-  const where = `${oneLine(f.file_path, 300) || '(no file)'}${f.line_number != null ? `:${f.line_number}` : ''}`;
+  // A long path keeps its end (the file name), not its start.
+  const path = oneLine(f.file_path, 100_000);
+  const shownPath = path.length > 300 ? `…${path.slice(-299)}` : path;
+  const where = `${shownPath || '(no file)'}${f.line_number != null ? `:${f.line_number}` : ''}`;
   const pr = review.pr_number != null ? ` of pull request #${review.pr_number}` : '';
-  return [
-    `Code review ${review.id}${pr} on branch ${branch}${sha ? ` at commit ${sha.slice(0, 12)}` : ''}: ${where}`,
+  const header = [
+    `Code review ${oneLine(review.id, 80)}${pr} on branch ${branch}${sha ? ` at commit ${sha.slice(0, 12)}` : ''}: ${where}`,
     `Severity: ${SEVERITY[f.severity]}. Category: ${kind}.`,
     `Title: ${oneLine(f.title, 200)}`,
     'Message:',
-    message.slice(0, MESSAGE_MAX),
-    'Suggestion:',
-    suggestion ? suggestion.slice(0, SUGGESTION_MAX) : '(none)',
   ].join('\n');
+  // What is left after the header and the labels goes to the message first; the suggestion gets at most a third of it.
+  const room = Math.max(0, REVIEW_EVIDENCE_MAX - header.length - '\nSuggestion:\n'.length - '\n'.length - '(none)'.length);
+  const sugg = suggestion ? suggestion.slice(0, Math.min(SUGGESTION_MAX, Math.floor(room / 3))) : '';
+  const msg = message.slice(0, room - sugg.length);
+  return `${header}\n${msg}\nSuggestion:\n${sugg || '(none)'}`;
 }
 
 async function emit(reviewId: string): Promise<void> {
@@ -90,7 +113,7 @@ async function emit(reviewId: string): Promise<void> {
   const sha = SAFE_SHA.test(shaRaw) ? shaRaw.toLowerCase() : '';
 
   const wanted = (await getReviewsRepository().listFindings(reviewId))
-    .filter((f) => f.accepted !== -1 && f.severity in SEVERITY)
+    .filter((f) => f.accepted !== -1 && Object.hasOwn(SEVERITY, f.severity))
     .sort((a, b) => RANK[a.severity] - RANK[b.severity] || a.created_at.localeCompare(b.created_at))
     .slice(0, MAX_PER_REVIEW);
   const findings = getAutofixFindingsRepository();
@@ -100,10 +123,12 @@ async function emit(reviewId: string): Promise<void> {
     const { message, suggestion } = splitBody(String(f.body ?? ''));
     const c: FindingCandidate = {
       repoFullName, branch, headSha: sha, source: 'review_finding', kind, severity: SEVERITY[f.severity],
-      errorText: `${String(f.file_path ?? '')} ${message}`,
+      errorText: message,
+      // The exact path, outside normalizeError (which would cut it to its first segment and basename).
+      fingerprintSubject: reviewFilePath(f.file_path),
     };
     // A resolved finding whose fix PR is still open: the reviewed branch has not taken the fix yet, so a rerun would only repeat it.
-    const fp = computeFingerprint({ repo: c.repoFullName, branch: c.branch, kind: c.kind, error: c.errorText });
+    const fp = computeFingerprint({ repo: c.repoFullName, branch: c.branch, kind: c.kind, error: c.errorText, subject: c.fingerprintSubject });
     const existing = await findings.getByFingerprint(projectId, fp);
     if (existing && existing.status === 'resolved' && existing.pr_branch) continue;
     await recordFinding(projectId, c, evidenceFor(review, f, kind, branch, sha, message, suggestion));

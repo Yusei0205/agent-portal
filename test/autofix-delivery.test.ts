@@ -268,6 +268,42 @@ describe('a review fix: a PR stacked on the reviewed branch', () => {
   });
 });
 
+describe('an auto-fix push goes only to an autofix/ branch', () => {
+  const refused = (s: Fix) => prEvents(s).filter((e) => e.state === 'failed' && /not an auto-fix branch/.test(String(e.error)));
+  const prCreated = () => ghCalls.some((c) => c.method === 'POST' && /\/pulls$/.test(c.url));
+
+  it('a fresh push whose chosen name is not under autofix/ is refused before the push', async () => {
+    const s = await makeFix({ source: 'review_finding', kind: 'review', branch: 'feature/login' });
+    _setSessionPrDeps({ listBranches: async () => ['main', 'feature/login'], branchNameFor: () => 'feature/login' });
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls.length, 0, 'nothing is pushed');
+    assert.equal(prCreated(), false);
+    assert.equal(refused(s).length, 1, JSON.stringify(prEvents(s)));
+    assert.equal((await finding(s)).status, 'needs_human');
+  });
+
+  it("a retry whose PR branch (pr_branch) is not under autofix/ is refused before the push", async () => {
+    const s = await makeFix({ source: 'review_finding', kind: 'review', branch: 'feature/login' });
+    await repo().transition(s.findingId, ['fixing'], { status: 'fixing', pr_branch: 'feature/login', pr_number: 9, pr_url: 'https://github.com/acme/shop/pull/9' });
+    pullState = 'open';
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls.length, 0, 'nothing is pushed');
+    assert.equal(prCreated(), false);
+    assert.equal(refused(s).length, 1, JSON.stringify(prEvents(s)));
+  });
+
+  it('a branch carried over from an earlier pull-request event (step 3) is refused when it is not under autofix/', async () => {
+    const s = await makeFix({ source: 'review_finding', kind: 'review', branch: 'feature/login' });
+    run(`INSERT INTO p6_events (run_id, type, payload, created_at) VALUES (?,?,?,?)`, s.runId, 'pull-request',
+      JSON.stringify({ repo: 'shop', repoId: s.repoId, state: 'failed', base: 'main', branch: 'feature/login', commits: 1, files: 2, error: 'earlier' }), now());
+    await createPullRequestForSession(s.workflowId, s.repoId, { approvedBy: userId, via: 'approval' });
+    assert.equal(finalizeCalls.length, 0, 'nothing is pushed');
+    assert.equal(prCreated(), false);
+    assert.equal(refused(s).length, 1, JSON.stringify(prEvents(s)));
+    assert.equal((await finding(s)).status, 'needs_human');
+  });
+});
+
 describe('the gate in the session PR flow', () => {
   it('a diff touching .github/workflows/ci.yml is blocked: nothing is pushed, the finding is needs_human, audit and blocked item', async () => {
     const s = await makeFix();
