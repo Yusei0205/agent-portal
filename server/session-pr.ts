@@ -395,6 +395,14 @@ async function runPullRequest(
   if (plan) await afterAutofixPullRequest(plan.findingId, String(w.id), outcome);
 }
 
+/** Why an auto-fix retry may not push to its PR's branch: the PR is closed (or none is recorded), or its state cannot be read. */
+async function retryPrProblem(repo: Repository, pr: { number: number } | undefined): Promise<string | null> {
+  if (!pr) return 'the fix PR was closed';
+  const state = await githubPullRequestState(repo, pr.number);
+  if (state === 'open') return null;
+  return state === 'closed' ? 'the fix PR was closed' : 'the state of the fix PR could not be read';
+}
+
 async function runPullRequestSteps(
   runId: string, w: WorkflowRecord, r: Resolved, start: PrEvent, who: { userId: string | null }, plan: AutofixPrPlan | null,
 ): Promise<AutofixPrOutcome> {
@@ -420,6 +428,12 @@ async function runPullRequestSteps(
   if (!branch) {
     if (plan?.reuseBranch) {
       // 1a. An auto-fix retry after red CI: the commit goes on top of the open PR's branch (a fast-forward push), so that PR is updated.
+      // Only while that PR is open: a PR a person closed (or one whose state cannot be read) is never reopened or replaced.
+      const reason = await retryPrProblem(repo, plan.existingPr);
+      if (reason) {
+        await emitEv({ state: 'failed', branch: undefined, error: `Nothing was pushed: ${reason}.`, errorCode: 'failed' });
+        return { kind: 'needs-human', reason };
+      }
       branch = plan.reuseBranch;
     } else {
       // 1. Choose the branch name among the names the remote already has.
@@ -523,6 +537,13 @@ async function runPullRequestSteps(
     // The server's own check of what was pushed (the runner shares its machine with the agent): the file list from the host.
     const { verifyPushedBranch } = await import('./autofix/delivery.ts');
     const verdict = await verifyPushedBranch(plan.findingId, repo, baseBranch, branch);
+    if (!verdict.ok && plan.reuseBranch && plan.existingPr && verdict.violations.length === 0) {
+      // A retry pushed to an open PR's branch and the check could not be completed (host error, truncation, rate limit, size): the
+      // branch carries the PR's earlier checked commits, so it is kept (deleting it would close the PR); a person decides.
+      const error = `${verdict.reason}. The branch ${branch} was kept; the pull request was not marked updated.`.slice(0, 500);
+      await emitEv({ state: 'failed', branch, error, errorCode: 'failed' });
+      return { kind: 'needs-human', reason: verdict.reason.slice(0, 300) };
+    }
     if (!verdict.ok) {
       const deleted = await deleteRemoteBranch(repo, branch).catch(() => false);
       const error = `${verdict.reason}. ${deleted ? `The branch ${branch} was deleted` : `Delete the branch ${branch}`}; no pull request was opened.`.slice(0, 500);
@@ -530,8 +551,14 @@ async function runPullRequestSteps(
       return { kind: 'blocked', reason: verdict.reason, violations: verdict.violations, repo: String(repo.name ?? ''), branch };
     }
   }
-  if (plan?.reuseBranch && plan.existingPr && await githubPullRequestState(repo, plan.existingPr.number) !== 'closed') {
-    // The retry's push updated the open PR: nothing more to open, and its review was started when it was opened.
+  if (plan?.reuseBranch) {
+    // The retry's push updated the open PR: nothing more to open, and its review was started when it was opened. A PR closed while
+    // the push ran is not replaced.
+    const reason = await retryPrProblem(repo, plan.existingPr);
+    if (reason || !plan.existingPr) {
+      await emitEv({ state: 'failed', branch, error: `The branch ${branch} was pushed, but ${reason ?? 'the fix PR was closed'}; no pull request was opened.`, errorCode: 'failed' });
+      return { kind: 'needs-human', reason: reason ?? 'the fix PR was closed' };
+    }
     const { number, url } = plan.existingPr;
     await emitEv({ state: 'opened', branch, number, url, title });
     return { kind: 'opened', number, url, branch, repo: String(repo.name ?? ''), ...(pushedSha ? { sha: pushedSha } : {}) };

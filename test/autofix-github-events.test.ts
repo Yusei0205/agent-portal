@@ -26,6 +26,15 @@ describe('parseGithubEvent', () => {
     assert.equal(r.type, 'ci_result');
     if (r.type === 'ci_result') assert.equal(r.conclusion, 'success');
   });
+  it('a run of a fork (head repository differs) is never a ci_result', () => {
+    for (const n of ['workflow_run_failed_autofix', 'workflow_run_success_main']) {
+      const p = fx(n) as { workflow_run: Record<string, unknown> };
+      p.workflow_run.head_repository = { full_name: 'mallory/widgets' };
+      assert.deepEqual(parseGithubEvent('workflow_run', p), { type: 'ignore' }, n);
+      delete p.workflow_run.head_repository;
+      assert.deepEqual(parseGithubEvent('workflow_run', p), { type: 'ignore' }, `${n} without head_repository`);
+    }
+  });
   it('a merged pull_request closing is pr_closed', () => {
     assert.deepEqual(parseGithubEvent('pull_request', fx('pull_request_merged')),
       { type: 'pr_closed', repoFullName: 'acme/widgets', branch: 'autofix/lint-9f8e7d6c', merged: true, prNumber: 42 });

@@ -52,10 +52,14 @@ export function parseGithubEvent(event: string, payload: unknown): GithubEventRe
     const name = text(run.name) || 'CI';
     const runId = typeof run.id === 'number' ? run.id : undefined;
     const about = { workflowName: name, ...(runId !== undefined ? { runId } : {}) };
-    if (conclusion === 'success') return { type: 'ci_result', repoFullName, branch, conclusion: 'success', headSha, ...about };
+    // A CI result speaks for a fix branch only when the run was on this repository's own branch: a fork's run (a PR from a fork whose
+    // branch happens to be named autofix/...) is ignored.
+    const headRepo = text(obj(run.head_repository)?.full_name);
+    const ownRun = headRepo.toLowerCase() === repoFullName.toLowerCase();
+    if (conclusion === 'success') return ownRun ? { type: 'ci_result', repoFullName, branch, conclusion: 'success', headSha, ...about } : IGNORE;
     if (conclusion !== 'failure' && conclusion !== 'timed_out') return IGNORE;
     // A failing run on a fix branch reports on that fix attempt; it never opens a new finding.
-    if (branch.startsWith(AUTOFIX_BRANCH_PREFIX)) return { type: 'ci_result', repoFullName, branch, conclusion: 'failure', headSha, ...about };
+    if (branch.startsWith(AUTOFIX_BRANCH_PREFIX)) return ownRun ? { type: 'ci_result', repoFullName, branch, conclusion: 'failure', headSha, ...about } : IGNORE;
     const kind = classifyKind(name);
     return {
       type: 'finding',

@@ -281,6 +281,8 @@ export type AutofixPrOutcome =
   | { kind: 'push-failed'; error: string }
   /** Nothing went wrong with the fix, but no PR was opened (protected branch name, no runtime, host refused the PR). */
   | { kind: 'not-opened'; error: string; branch?: string }
+  /** A retry could not deliver to its PR (the PR was closed, or the pushed branch could not be checked): needs_human with the reason. */
+  | { kind: 'needs-human'; reason: string }
   /** Not attempted (a newer turn is running): the finding is left as it is. */
   | { kind: 'skipped' }
   /** A protected path (refused by the runner before the push, or found by the server's check after it): needs_human, audited. */
@@ -307,6 +309,10 @@ export async function afterAutofixPullRequest(findingId: string, workflowId: str
         repo: outcome.repo, violations: outcome.violations.slice(0, 20), reason: outcome.reason.slice(0, 300),
         ...(outcome.branch ? { deletedBranch: outcome.branch } : {}),
       });
+      return;
+    }
+    if (outcome.kind === 'needs-human') {
+      await toNeedsHuman(f, ['fixing'], outcome.reason, {}, workflowId);
       return;
     }
     if (outcome.kind === 'push-failed') {

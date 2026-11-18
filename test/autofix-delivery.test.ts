@@ -305,19 +305,69 @@ describe('the gate in the session PR flow', () => {
     assert.equal(f.pr_head_sha, SHA);
   });
 
-  it('a retry whose PR was closed meanwhile opens a new PR from the same branch', async () => {
+  it('a retry whose PR was closed meanwhile pushes nothing, opens no PR and ends needs_human', async () => {
     const s = await makeFix();
     const prBranch = 'autofix/tests-abcdef02';
     await repo().transition(s.findingId, ['fixing'], { status: 'fixing', pr_branch: prBranch, pr_number: 41, pr_url: 'https://github.com/acme/shop/pull/41' });
     _setSessionPrDeps({ listBranches: async () => ['main', prBranch] });
     pullState = 'closed';
     await handleRepoChanges(ctxOf(s), [clean]);
-    assert.equal(finalizeCalls[0].branch, prBranch);
-    const create = ghCalls.find((c) => c.method === 'POST' && /\/pulls$/.test(c.url))!;
-    assert.equal(create.body.head, prBranch);
+    assert.equal(finalizeCalls.length, 0, 'nothing pushed');
+    assert.equal(ghCalls.filter((c) => c.method === 'POST' && /\/pulls$/.test(c.url)).length, 0, 'no PR created');
     const f = await finding(s);
-    assert.equal(f.status, 'pr_open');
+    assert.equal(f.status, 'needs_human');
+    const items = inbox(s).filter((i) => i.type === 'blocked');
+    assert.equal(items.length, 1);
+    assert.equal(items[0].payload.reason, 'the fix PR was closed');
+  });
+
+  it('a retry whose PR state cannot be read pushes nothing and ends needs_human (fail closed)', async () => {
+    const s = await makeFix();
+    const prBranch = 'autofix/tests-abcdef03';
+    await repo().transition(s.findingId, ['fixing'], { status: 'fixing', pr_branch: prBranch, pr_number: 41, pr_url: 'https://github.com/acme/shop/pull/41' });
+    pullState = null; // the default reply has no state
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls.length, 0);
+    assert.equal((await finding(s)).status, 'needs_human');
+  });
+
+  it('on a retry, a pushed-branch check that cannot complete keeps the PR branch (no delete) and ends needs_human', async () => {
+    const s = await makeFix();
+    const prBranch = 'autofix/tests-abcdef04';
+    await repo().transition(s.findingId, ['fixing'], { status: 'fixing', pr_branch: prBranch, pr_number: 42, pr_url: 'https://github.com/acme/shop/pull/42' });
+    pullState = 'open';
+    compareReply = () => new Response('{"message":"rate limited"}', { status: 403 });
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls.length, 1);
+    assert.equal(ghCalls.filter((c) => c.method === 'DELETE').length, 0, 'the open PR branch is kept');
+    assert.equal(ghCalls.filter((c) => c.method === 'POST' && /\/pulls$/.test(c.url)).length, 0);
+    const f = await finding(s);
+    assert.equal(f.status, 'needs_human');
     assert.equal(f.pr_number, 42);
+  });
+
+  it('on a retry, a real protected-path violation found after the push still deletes the branch (blocked)', async () => {
+    const s = await makeFix();
+    const prBranch = 'autofix/tests-abcdef05';
+    await repo().transition(s.findingId, ['fixing'], { status: 'fixing', pr_branch: prBranch, pr_number: 42, pr_url: 'https://github.com/acme/shop/pull/42' });
+    pullState = 'open';
+    compareReply = compareFiles([{ filename: 'src/cart.ts' }, { filename: '.github/workflows/ci.yml' }]);
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.ok(ghCalls.some((c) => c.method === 'DELETE' && c.url.includes(prBranch)));
+    assert.equal((await finding(s)).status, 'needs_human');
+  });
+
+  it('a later fix of a finding whose PR was merged (pr_number kept, pr_branch cleared) opens a new PR on a fresh branch', async () => {
+    const s = await makeFix();
+    await repo().transition(s.findingId, ['fixing'], { status: 'fixing', pr_number: 41, pr_url: 'https://github.com/acme/shop/pull/41', pr_branch: null });
+    const f0 = await finding(s);
+    const old = fixBranchName('tests', f0.fingerprint);
+    _setSessionPrDeps({ listBranches: async () => ['main', old] });
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls[0].branch, `${old}-2`);
+    const create = ghCalls.find((c) => c.method === 'POST' && /\/pulls$/.test(c.url))!;
+    assert.equal(create.body.head, `${old}-2`);
+    assert.equal((await finding(s)).pr_number, 42);
   });
 
   it('by default (AUTOFIX_ALLOW_UNATTENDED_PUSH not set) draft_pr with a clean diff asks a person instead of pushing', async () => {

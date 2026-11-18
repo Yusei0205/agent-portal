@@ -114,16 +114,19 @@ const utcMidnight = (d: Date): string => new Date(Date.UTC(d.getUTCFullYear(), d
 async function triageContext(f: AutofixFinding): Promise<TriageContext> {
   const repo = getAutofixFindingsRepository();
   const at = new Date();
-  const [prOpen, fixing, costTodayUsd, paused, gitRepo] = await Promise.all([
+  const [prOpen, fixing, waiting, costTodayUsd, paused, gitRepo] = await Promise.all([
     repo.list(f.project_id, { status: 'pr_open', limit: 500 }),
     repo.list(f.project_id, { status: 'fixing', limit: 500 }),
+    repo.list(f.project_id, { status: 'new', limit: 500 }),
     repo.sumCostSince(f.project_id, utcMidnight(at)),
     isPaused(f.project_id),
     f.repo_id ? getGitReposRepository().getById(f.repo_id) : Promise.resolve(null),
   ]);
   return {
     paused,
-    openPrCount: prOpen.length,
+    // Open PRs: pr_open findings, and findings being retried on their still-open PR (pr_branch is cleared when the PR closes). The
+    // finding itself is left out: a retry updates its own PR and needs no new one.
+    openPrCount: prOpen.length + [...fixing, ...waiting].filter((x) => x.id !== f.id && x.pr_branch && x.pr_number != null).length,
     costTodayUsd,
     defaultBranch: gitRepo?.default_branch ?? null,
     portalPrBranches: [...prOpen, ...fixing].map((x) => x.fix_branch).filter((b): b is string => Boolean(b)),
@@ -433,19 +436,42 @@ export async function applyCiResult(projectId: string, r: CiResult, opts: { evid
   if (moved) await maybeProcess(f.id);
 }
 
-/** The fix's PR was closed: merged resolves the finding; closed without merging dismisses it for the cooldown. Only from pr_open. */
+/** Statuses in which a finding's PR can still be closed: open, resolved by green CI before a person decided, or being retried. */
+const PR_CLOSABLE: FindingStatus[] = ['pr_open', 'resolved', 'new', 'fixing'];
+
+/** The finding whose still-tracked PR number `prNumber` was opened from `branch`: by fix_branch, or, while a retry runs, by pr_branch. */
+async function findingOfPr(projectId: string, branch: string, prNumber: number): Promise<AutofixFinding | null> {
+  if (!branch.startsWith(AUTOFIX_BRANCH_PREFIX)) return null;
+  const repo = getAutofixFindingsRepository();
+  const byFix = await repo.getByFixBranch(projectId, branch);
+  // pr_branch is cleared once the PR is closed or merged, so a late or repeated closing of a PR already handled changes nothing.
+  if (byFix && byFix.pr_branch === branch && byFix.pr_number === prNumber && PR_CLOSABLE.includes(byFix.status)) return byFix;
+  for (const status of ['new', 'fixing'] as const) {
+    const hit = (await repo.list(projectId, { status, limit: 500 })).find((x) => x.pr_branch === branch && x.pr_number === prNumber);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
+ * The fix's PR was closed (only the finding whose PR number it is; another PR from the same head branch name is ignored). Merged:
+ * resolved. Closed without merging: dismissed for the cooldown, so the same failure is not proposed again at once. Both clear
+ * pr_branch and pr_head_sha (pr_number and pr_url stay for history), so a later recurrence starts a fresh branch and PR. Applies to a
+ * finding in pr_open, resolved (green CI came first) or new/fixing (a retry); a retry session still running finds the finding no
+ * longer 'fixing' and delivers nothing for it.
+ */
 export async function applyPrClosed(projectId: string, r: PrClosed): Promise<void> {
-  const f = await openPrFinding(projectId, r.branch);
+  const f = await findingOfPr(projectId, r.branch, r.prNumber);
   if (!f) return;
-  if (f.pr_number != null && f.pr_number !== r.prNumber) return; // another PR from the same branch name
   const done = { pr_branch: null, pr_head_sha: null, previous_attempt: null };
+  const repo = getAutofixFindingsRepository();
   if (r.merged) {
-    await getAutofixFindingsRepository().transition(f.id, ['pr_open'], { status: 'resolved', ...done });
+    await repo.transition(f.id, PR_CLOSABLE, { status: 'resolved', ...done });
     return;
   }
   const policy = await getAutofixPolicy(f.project_id);
   const cooldown_until = new Date(Date.now() + policy.limits.cooldown_minutes * 60_000).toISOString();
-  await getAutofixFindingsRepository().transition(f.id, ['pr_open'], { status: 'dismissed', cooldown_until, ...done });
+  await repo.transition(f.id, PR_CLOSABLE, { status: 'dismissed', cooldown_until, ...done });
 }
 
 /** The run lifecycle hook: acts when a fix session has ended, not after an iteration the loop goes on from. */

@@ -295,6 +295,115 @@ describe('PR closed', () => {
   });
 });
 
+describe('PR closed after green CI or during a retry', () => {
+  /** A finding made through intake (so a recurrence matches its fingerprint), with its fix PR #42 open. */
+  async function viaIntake(): Promise<{ f: AutofixFinding; candidate: Parameters<typeof recordFinding>[1] }> {
+    await setPaused(projectId, true);
+    const candidate = {
+      repoFullName: 'acme/widgets', branch: 'main', headSha: 'd'.repeat(40), source: 'ci_failed' as const, kind: 'tests',
+      severity: 'medium' as const, errorText: `CI / tests failure ${++seq}`, runId: 5,
+    };
+    const { finding } = await recordFinding(projectId, candidate, 'FAIL once');
+    await setPaused(projectId, false);
+    const branch = fixBranchName(finding.kind, finding.fingerprint);
+    assert.ok(await repo().transition(finding.id, ['new'], {
+      status: 'pr_open', fix_branch: branch, pr_branch: branch, pr_number: 42, pr_url: 'https://github.com/acme/widgets/pull/42', pr_head_sha: HEAD,
+    }));
+    return { f: await get(finding.id), candidate };
+  }
+
+  it('green then closed without merging: dismissed with the cooldown, and a recurrence during it is not proposed', async () => {
+    const { f, candidate } = await viaIntake();
+    await applyCiResult(projectId, ci(f, 'success'));
+    assert.equal((await get(f.id)).status, 'resolved');
+    const t0 = Date.now();
+    await applyPrClosed(projectId, closed(f, false));
+    const got = await get(f.id);
+    assert.equal(got.status, 'dismissed');
+    assert.ok(Date.parse(got.cooldown_until!) >= t0 + 60 * 60_000 - 1000);
+    assert.equal(got.pr_branch, null);
+    assert.equal(got.pr_head_sha, null);
+    assert.equal(got.pr_number, 42, 'kept for history');
+    await recordFinding(projectId, candidate, 'FAIL again');
+    await _drainPipelineForTest();
+    assert.equal((await get(f.id)).status, 'dismissed');
+    assert.equal(calls.length, 0);
+  });
+
+  it('green then merged: resolved with the PR branch cleared, and a later recurrence starts fresh (no retry of the old PR)', async () => {
+    const { f, candidate } = await viaIntake();
+    await applyCiResult(projectId, ci(f, 'success'));
+    await applyPrClosed(projectId, closed(f, true));
+    const got = await get(f.id);
+    assert.equal(got.status, 'resolved');
+    assert.equal(got.pr_branch, null);
+    assert.equal(got.pr_head_sha, null);
+    assert.equal(got.pr_number, 42);
+    await recordFinding(projectId, candidate, 'FAIL after the merge');
+    await _drainPipelineForTest();
+    assert.equal(calls.length, 1);
+    assert.match(String(calls[0].opts.vars?.previous_attempt), /^None/);
+    const reopened = await get(f.id);
+    assert.equal(reopened.status, 'fixing');
+    const { autofixPrPlan } = await import('../server/autofix/delivery.ts');
+    const plan = (await autofixPrPlan(reopened.workflow_id!, 'run-x'))!;
+    assert.equal(plan.reuseBranch, undefined);
+    assert.equal(plan.existingPr, undefined);
+    assert.equal(plan.branchStem, fixBranchName(f.kind, f.fingerprint));
+  });
+
+  it('a closed event with another PR number is ignored, also after green CI', async () => {
+    const f = await prOpen();
+    await applyCiResult(projectId, ci(f, 'success'));
+    await applyPrClosed(projectId, closed(f, false, 99));
+    await applyPrClosed(projectId, closed(f, true, 99));
+    const got = await get(f.id);
+    assert.equal(got.status, 'resolved');
+    assert.equal(got.pr_branch, f.pr_branch);
+  });
+
+  it('the PR closed while its retry runs: the finding is dismissed (found by pr_branch) and the session delivers nothing for it', async () => {
+    const f = await prOpen();
+    const branch = f.fix_branch!;
+    await applyCiResult(projectId, ci(f, 'failure'), { evidence: redEvidence });
+    await _drainPipelineForTest();
+    assert.equal((await get(f.id)).status, 'fixing');
+    await applyPrClosed(projectId, { type: 'pr_closed', repoFullName: 'acme/widgets', branch, merged: false, prNumber: 42 });
+    const got = await get(f.id);
+    assert.equal(got.status, 'dismissed');
+    assert.ok(got.cooldown_until);
+    const { autofixPrPlan } = await import('../server/autofix/delivery.ts');
+    assert.equal(await autofixPrPlan(got.workflow_id!, 'run-x'), null, 'no auto-fix delivery for a dismissed finding');
+  });
+
+  it('three concurrent red events count one attempt and start one session', async () => {
+    const f = await prOpen();
+    await Promise.all([1, 2, 3].map(() => applyCiResult(projectId, ci(f, 'failure'), { evidence: redEvidence })));
+    await _drainPipelineForTest();
+    const got = await get(f.id);
+    assert.equal(got.attempts, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(got.status, 'fixing');
+  });
+
+  it('a retry is counted against max_open_prs for other findings, but not blocked by its own PR', async () => {
+    await saveAutofixPolicy(projectId, { limits: { ...DEFAULT_POLICY.limits, max_attempts: 3, max_open_prs: 1 } }, { actorId: adminId, isAdmin: true });
+    const f = await prOpen();
+    await applyCiResult(projectId, ci(f, 'failure'), { evidence: redEvidence });
+    await _drainPipelineForTest();
+    assert.equal(calls.length, 1, 'the retry itself starts');
+    assert.equal((await get(f.id)).status, 'fixing');
+    const { processFinding } = await import('../server/autofix/pipeline.ts');
+    const { finding: other } = await repo().upsertByFingerprint({
+      project_id: projectId, source: 'ci_failed', kind: 'tests', fingerprint: `other-${++seq}`, severity: 'medium',
+      evidence: 'boom', repo_id: repoId, branch: 'main', commit_sha: null,
+    });
+    await processFinding(other.id);
+    assert.equal((await get(other.id)).status, 'new', 'deferred: the retried PR is still open');
+    assert.equal(calls.length, 1);
+  });
+});
+
 describe('late, duplicate and unrelated events', () => {
   it('a late event for a finding that is no longer pr_open changes nothing', async () => {
     const f = await prOpen();
