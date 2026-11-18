@@ -820,7 +820,7 @@ describe('round 5: no credentials or agent configuration in the runner git calls
     assert.deepEqual(got, { commits: 0, files: 2, paths: [{ path: 'a.txt', added: 1, removed: 1 }, { path: 'new.txt', added: 1, removed: 0 }] });
   });
 
-  it('N1: reportRepoChanges (end of every run) runs no agent filter either', async () => {
+  it('N1: reportRepoChanges (checked: an auto-fix run) runs no agent filter either', async () => {
     const workDir = path.join(root, `rr${++seq}`);
     const remote = path.join(workDir, 'remote.git');
     const w = path.join(workDir, 'repos', 'app');
@@ -835,7 +835,7 @@ describe('round 5: no credentials or agent configuration in the runner git calls
     const events: Record<string, unknown>[] = [];
     try {
       const { reportRepoChanges } = await import('../server/agent/runner-finalize-run.ts');
-      await reportRepoChanges([{ name: 'app', url: 'https://github.com/o/r', branch: 'main', env: AUTH }], workDir, (e) => events.push(e));
+      await reportRepoChanges([{ name: 'app', url: 'https://github.com/o/r', branch: 'main', env: AUTH }], workDir, (e) => events.push(e), { checked: true });
     } finally { delete (globalThis as Record<symbol, unknown>)[URL_HOOK]; }
     assert.equal(fs.existsSync(leak), false, 'a filter ran in reportRepoChanges');
     assert.equal(events.length, 1, JSON.stringify(events));
@@ -939,5 +939,100 @@ describe('round 5: no credentials or agent configuration in the runner git calls
     const ok = validateFinalizeRequest({ ...req, baseSha: 'a'.repeat(40) });
     assert.ok(ok.ok && ok.request.baseSha === 'a'.repeat(40));
     for (const bad of ['x', 'A'.repeat(40), 'a'.repeat(39), 5, '']) assert.equal(validateFinalizeRequest({ ...req, baseSha: bad }).ok, false, String(bad));
+  });
+});
+
+describe('the ordinary change report (no checkedReport): as before the auto-fix work', () => {
+  const AUTH = {
+    GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '',
+    GIT_CONFIG_KEY_1: 'http.https://github.com/.extraHeader', GIT_CONFIG_VALUE_1: 'Authorization: Basic U0VDUkVULVRPS0VO',
+  };
+  const REPORT_GIT = Symbol.for('agent-portal.test.reportGit');
+  const URL_HOOK = Symbol.for('agent-portal.test.remoteUrl');
+
+  /** A work folder with repos/app cloned from a bare remote with one commit on main (`depth`: a shallow clone). */
+  function setup(opts: { depth?: number } = {}): { workDir: string; remote: string; w: string } {
+    const workDir = path.join(root, `ord${++seq}`);
+    const remote = path.join(workDir, 'remote.git');
+    const seed = path.join(workDir, 'seed');
+    const w = path.join(workDir, 'repos', 'app');
+    fs.mkdirSync(path.dirname(w), { recursive: true });
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', remote]);
+    execFileSync('git', ['clone', '-q', remote, seed]);
+    git(seed, 'checkout', '-q', '-b', 'main');
+    for (const n of [1, 2, 3]) { fs.writeFileSync(path.join(seed, 'a.txt'), `${n}\n`); git(seed, 'add', '-A'); git(seed, 'commit', '-qm', `c${n}`); }
+    git(seed, 'push', '-q', 'origin', 'main');
+    execFileSync('git', ['clone', '-q', ...(opts.depth ? ['--depth', String(opts.depth), `file://${remote}`] : [remote]), w]);
+    return { workDir, remote, w };
+  }
+  async function report(workDir: string, repo: Record<string, unknown>): Promise<{ events: Record<string, unknown>[]; calls: Array<{ args: string[]; env: Record<string, string | undefined> }>; urlAsked: number }> {
+    const events: Record<string, unknown>[] = [];
+    const calls: Array<{ args: string[]; env: Record<string, string | undefined> }> = [];
+    let urlAsked = 0;
+    (globalThis as Record<symbol, unknown>)[REPORT_GIT] = (args: string[], env: Record<string, string | undefined>) => calls.push({ args, env });
+    (globalThis as Record<symbol, unknown>)[URL_HOOK] = (u: string) => { urlAsked++; return u; };
+    try {
+      const { reportRepoChanges } = await import('../server/agent/runner-finalize-run.ts');
+      await reportRepoChanges([{ name: 'app', url: 'https://github.com/o/r', env: AUTH, ...repo }], workDir, (e) => events.push(e));
+    } finally {
+      delete (globalThis as Record<symbol, unknown>)[REPORT_GIT];
+      delete (globalThis as Record<symbol, unknown>)[URL_HOOK];
+    }
+    return { events, calls, urlAsked };
+  }
+  const authFree = (env: Record<string, string | undefined>) => !Object.values(env).some((v) => typeof v === 'string' && v.includes('Authorization'));
+
+  it('reports the old event (no paths), makes no fetch and hands no credential to git', async () => {
+    const { workDir, w } = setup();
+    fs.writeFileSync(path.join(w, 'a.txt'), 'changed\n');
+    fs.writeFileSync(path.join(w, 'new.txt'), 'n\n');
+    git(w, 'add', 'new.txt'); git(w, 'commit', '-qm', 'local');
+    fs.writeFileSync(path.join(w, 'untracked.txt'), 'u\n');
+    const { events, calls, urlAsked } = await report(workDir, { branch: 'main' });
+    assert.deepEqual(events, [{ type: 'repo-changes', repo: 'app', base: 'main', commits: 1, files: 3 }]);
+    assert.equal(urlAsked, 0, 'the run URL is never used (no fetch)');
+    assert.deepEqual(calls.map((c) => c.args[0]), ['status', 'rev-list', 'diff']);
+    assert.ok(calls.every((c) => !c.args.includes('fetch')));
+    assert.ok(calls.every((c) => authFree(c.env)), 'no auth header in any git environment');
+    assert.ok(calls.every((c) => Object.entries(c.env).some(([k, v]) => /^GIT_CONFIG_KEY_/.test(k) && v === 'safe.directory')));
+  });
+
+  it('works in a shallow clone (the old output, not "unchanged")', async () => {
+    const { workDir, w } = setup({ depth: 1 });
+    fs.writeFileSync(path.join(w, 'b.txt'), 'b\n');
+    git(w, 'add', 'b.txt'); git(w, 'commit', '-qm', 'local');
+    const { events } = await report(workDir, { branch: 'main' });
+    assert.deepEqual(events, [{ type: 'repo-changes', repo: 'app', base: 'main', commits: 1, files: 1 }]);
+  });
+
+  it('a clean repository reports nothing', async () => {
+    const { workDir } = setup();
+    assert.deepEqual((await report(workDir, { branch: 'main' })).events, []);
+  });
+
+  it('without a branch, symbolic-ref reads the base with only safe.directory in its environment (no auth header)', async () => {
+    const { workDir, w } = setup();
+    fs.writeFileSync(path.join(w, 'a.txt'), 'x\n');
+    const { events, calls } = await report(workDir, {});
+    const sym = calls.find((c) => c.args[0] === 'symbolic-ref');
+    assert.ok(sym, JSON.stringify(calls.map((c) => c.args)));
+    assert.ok(authFree(sym.env));
+    assert.ok(!Object.values(sym.env).some((v) => /GIT_CONFIG_VALUE/.test(String(v))));
+    assert.deepEqual(Object.keys(sym.env).filter((k) => /^GIT_CONFIG_VALUE_/.test(k)), ['GIT_CONFIG_VALUE_0']);
+    assert.deepEqual(events, [{ type: 'repo-changes', repo: 'app', base: 'main', commits: 0, files: 1 }]);
+  });
+
+  it('the checked report never calls symbolic-ref: without a branch it reports nothing', async () => {
+    const { workDir, w } = setup();
+    fs.writeFileSync(path.join(w, 'a.txt'), 'x\n');
+    const events: Record<string, unknown>[] = [];
+    const calls: string[][] = [];
+    (globalThis as Record<symbol, unknown>)[REPORT_GIT] = (args: string[]) => calls.push(args);
+    try {
+      const { reportRepoChanges } = await import('../server/agent/runner-finalize-run.ts');
+      await reportRepoChanges([{ name: 'app', url: 'https://github.com/o/r', env: AUTH }], workDir, (e) => events.push(e), { checked: true });
+    } finally { delete (globalThis as Record<symbol, unknown>)[REPORT_GIT]; }
+    assert.deepEqual(calls, []);
+    assert.deepEqual(events, []);
   });
 });

@@ -290,8 +290,10 @@ async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<voi
           kind: 'autofix', findingId: finding?.id ?? null, findingKind: finding?.kind ?? null,
           title: `Open an auto-fix pull request for ${change.repo}?`,
           body: `The auto-fix session changed ${change.files} files in ${change.commits} commit(s) in ${change.repo} and its checks pass. ${why} Approve to push a new branch and open a draft pull request.`,
-          // A review fix's PR is stacked on the reviewed branch (see AutofixPrPlan.base).
-          repo: change.repo, repoId, base: finding?.source === 'review_finding' && finding.branch ? finding.branch : change.base,
+          // A review fix's PR is stacked on the reviewed branch (see AutofixPrPlan.base); otherwise the repository's default branch, never
+          // a base the runner reported (it can come from the session repository, which the agent controls).
+          repo: change.repo, repoId,
+          base: finding?.source === 'review_finding' && finding.branch ? finding.branch : String(resolved.record.default_branch || change.base),
           commits: change.commits, files: change.files,
           ...changedPathsPayload(change),
         },
@@ -447,8 +449,11 @@ async function runPullRequestSteps(
   const ticket = ticketOf(w);
   const title = plan ? plan.title : prTitle(w);
   const settings = getPullRequestSettings(projectId);
-  // A review fix is stacked on the reviewed PR's branch: its plan names the base (see AutofixPrPlan.base).
-  const baseBranch = plan?.base || start.base || repo.default_branch || 'main';
+  // A review fix is stacked on the reviewed PR's branch: its plan names the base (see AutofixPrPlan.base). Any other auto-fix PR goes
+  // to the repository's default branch, never a base the runner reported (the session repository is the agent's).
+  const baseBranch = plan
+    ? plan.base || repo.default_branch || start.base || 'main'
+    : start.base || repo.default_branch || 'main';
   const engine = (String(w.engine) === 'kiro' ? 'kiro' : String(w.engine) === 'codex' ? 'codex' : 'claude-code') as 'kiro' | 'claude-code' | 'codex';
 
   // An older Inbox approval must not push while a newer turn is changing the same files.

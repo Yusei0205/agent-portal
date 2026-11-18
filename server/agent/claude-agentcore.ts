@@ -89,6 +89,21 @@ export async function finalizeCheckFor(projectId: string, hasTicket: boolean, wo
 }
 
 /**
+ * Whether the runner builds the change report the checked way (`checkedReport`: a runner-private repository, with the changed file
+ * list for the auto-fix gate): only for an auto-fix session. Ordinary sessions keep the report they always had. Never throws.
+ */
+export async function checkedReportFor(workflowId?: string | null): Promise<boolean> {
+  if (!workflowId) return false;
+  try {
+    const { isAutofixWorkflow } = await import('../autofix/delivery.ts');
+    return await isAutofixWorkflow(workflowId);
+  } catch (e) {
+    console.warn('[claude-agentcore] checkedReport flag skipped:', e);
+    return false;
+  }
+}
+
+/**
  * Hands the changed repositories to the pull request step. Called once the run is otherwise finished and its
  * spend is recorded. Never throws. It waits a bounded time (so a quick "ask in the Inbox" result is written before
  * the run closes, and the work is not left running in a frozen Lambda), then lets a slower push/PR carry on alone.
@@ -162,9 +177,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   }, timeoutMs);
 
   let finalizeCheck = false;
+  let checkedReport = false;
   if (opts.repos?.length && ctx.run?.workflowId && ctx.run.projectId) {
     const wf = await getSessionsRepository().getWorkflowById(ctx.run.workflowId).catch(() => null);
     finalizeCheck = await finalizeCheckFor(ctx.run.projectId, Boolean(wf?.jira_key), ctx.run.workflowId);
+    checkedReport = finalizeCheck && await checkedReportFor(ctx.run.workflowId);
   }
   const changes: import('../session-pr.ts').RepoChange[] = [];
   const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
@@ -188,6 +205,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     ...(opts.agent && opts.agents?.[opts.agent] ? { agent: opts.agent } : {}),
     ...(snapshot ? { snapshot } : {}),
     ...(finalizeCheck ? { finalizeCheck: true } : {}),
+    ...(checkedReport ? { checkedReport: true } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
     ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),
     ...(opts.effort ? { effort: opts.effort } : {}),

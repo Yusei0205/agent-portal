@@ -377,6 +377,18 @@ describe('validatePayload — finalizeCheck', () => {
   });
 });
 
+describe('validatePayload — checkedReport (auto-fix runs)', () => {
+  test('a boolean is accepted and kept only when true', () => {
+    assert.equal(ok({ ...minPayload(), finalizeCheck: true, checkedReport: true }).checkedReport, true);
+    assert.equal(ok({ ...minPayload(), checkedReport: false }).checkedReport, undefined);
+    assert.equal(ok(minPayload()).checkedReport, undefined);
+  });
+  test('anything but a boolean is rejected', () => {
+    fail({ ...minPayload(), checkedReport: 'yes' }, '"checkedReport"');
+    fail({ ...minPayload(), checkedReport: 1 }, '"checkedReport"');
+  });
+});
+
 describe('validateFinalizeRequest', () => {
   const good = (): Record<string, unknown> => ({
     mode: 'finalize', repo: 'web', base: 'main', branch: 'portal/RLP-12-fix-login', message: 'RLP-12: Fix login redirect',

@@ -225,29 +225,99 @@ function testRemoteUrl(url: string): string {
 }
 
 /**
+ * Tests only: a function the tests may put on globalThis under this symbol sees every git call of the change report (its arguments
+ * and environment). Absent in the runners.
+ */
+const TEST_REPORT_GIT = Symbol.for('agent-portal.test.reportGit');
+function observeReportGit(args: string[], env: Record<string, string | undefined>): void {
+  const fn = (globalThis as Record<symbol, unknown>)[TEST_REPORT_GIT];
+  if (typeof fn === 'function') (fn as (a: string[], e: Record<string, string | undefined>) => void)(args, env);
+}
+
+/**
+ * The ordinary (non-auto-fix) change report, exactly as before the auto-fix work: run in the session repository with the process
+ * environment plus only the safe.directory trust option (no credentials: nothing here talks to the remote), so the repository's own
+ * settings (Git LFS and other filters, autocrlf) apply and a shallow clone works. No `paths`.
+ */
+function legacyGit(cwd: string, args: string[], env: Record<string, string | undefined>): Promise<{ code: number; stdout: string }> {
+  observeReportGit(args, env);
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd, env: env as NodeJS.ProcessEnv, maxBuffer: 32 * 1024 * 1024, timeout: 120_000, windowsHide: true }, (err, stdout) => {
+      const code = !err ? 0 : typeof (err as { code?: unknown }).code === 'number' ? (err as unknown as { code: number }).code : 1;
+      resolve({ code, stdout: String(stdout ?? '') });
+    });
+  });
+}
+
+async function legacyDetectChanges(dir: string, base: string): Promise<{ commits: number; files: number }> {
+  const n = Number.parseInt(process.env.GIT_CONFIG_COUNT ?? '0', 10) || 0;
+  const env: Record<string, string | undefined> = {
+    ...process.env, GIT_CONFIG_COUNT: String(n + 1), [`GIT_CONFIG_KEY_${n}`]: 'safe.directory', [`GIT_CONFIG_VALUE_${n}`]: realDir(dir),
+    GIT_TERMINAL_PROMPT: '0',
+  };
+  const files = new Set<string>();
+  const status = await legacyGit(dir, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], env);
+  if (status.code !== 0) throw new Error('git status failed');
+  const entries = status.stdout.split('\0').filter(Boolean);
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    files.add(e.slice(3));
+    if (e[0] === 'R' || e[0] === 'C') i++; // the next entry is the rename's source path
+  }
+  let commits = 0;
+  const ref = `origin/${base}`;
+  const count = await legacyGit(dir, ['rev-list', '--count', `${ref}..HEAD`], env);
+  if (count.code === 0) {
+    commits = parseInt(count.stdout.trim(), 10) || 0;
+    if (commits > 0) {
+      const diff = await legacyGit(dir, ['diff', '--name-only', '-z', `${ref}...HEAD`], env);
+      if (diff.code === 0) for (const f of diff.stdout.split('\0')) if (f) files.add(f);
+    }
+  }
+  return { commits, files: files.size };
+}
+
+/**
  * Contract A/B: for each repository this run cloned, emit one `repo-changes` event when it has changes.
  * Read-only: nothing is committed or pushed. A repository that cannot be checked is skipped.
+ *
+ * `checked` (the run payload's `checkedReport`, sent only for auto-fix sessions): the report is built in a runner-private repository
+ * (detectChanges) with the changed file list (`paths`) for the portal's diff guardrails; the session repository's configuration is
+ * never read, and the base comes only from the run's own `branch` for the repository. Otherwise the ordinary report (legacyDetectChanges),
+ * unchanged from before the auto-fix work.
  */
-export async function reportRepoChanges(reposRaw: unknown[] | undefined, workDir: string, emit: Emit): Promise<void> {
+export async function reportRepoChanges(reposRaw: unknown[] | undefined, workDir: string, emit: Emit, opts: { checked?: boolean } = {}): Promise<void> {
   const parsed = parseRunnerRepos(reposRaw);
   if (!parsed.ok) return;
   for (const repo of parsed.repos) {
     const dir = path.join(workDir, 'repos', repo.name);
     try {
       if (!fs.existsSync(path.join(dir, '.git'))) continue;
-      const trusted = withGitOption(repo.env ?? {}, 'safe.directory', realDir(dir));
+      if (opts.checked) {
+        // Never a base read from the session repository (refs/remotes/origin/HEAD is agent-writable): the run's branch or nothing.
+        const base = repo.branch;
+        if (!base) continue;
+        // The repository's credentials go only to the one fetch of the base from the run's own URL for it (never .git/config).
+        const trusted = withGitOption(repo.env ?? {}, 'safe.directory', realDir(dir));
+        const changes = await detectChanges(dir, base, { env: trusted, remoteUrl: testRemoteUrl(repo.url) });
+        if (changes.commits > 0 || changes.files > 0) {
+          // `paths` (per-file line counts) feeds the portal's auto-fix diff guardrails; left out when git could not produce it.
+          emit({ type: 'repo-changes', repo: repo.name, base, commits: changes.commits, files: changes.files, ...(changes.paths ? { paths: changes.paths } : {}) });
+        }
+        continue;
+      }
       let base = repo.branch;
       if (!base) {
-        const head = await gitText(dir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], trusted);
+        // No credentials for a local read: only the trust option for this folder.
+        const env = withGitOption({}, 'safe.directory', realDir(dir));
+        observeReportGit(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], env);
+        const head = await gitText(dir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], env);
         base = head ? head.replace(/^origin\//, '') : undefined;
       }
       if (!base) continue;
-      // The report is built in a runner-private repository (detectChanges): the session repository's configuration is never read, and
-      // the repository's credentials go only to the one fetch of the base from the run's own URL for it (never .git/config).
-      const changes = await detectChanges(dir, base, { env: trusted, remoteUrl: testRemoteUrl(repo.url) });
+      const changes = await legacyDetectChanges(dir, base);
       if (changes.commits > 0 || changes.files > 0) {
-        // `paths` (per-file line counts) feeds the portal's auto-fix diff guardrails; left out when git could not produce it.
-        emit({ type: 'repo-changes', repo: repo.name, base, commits: changes.commits, files: changes.files, ...(changes.paths ? { paths: changes.paths } : {}) });
+        emit({ type: 'repo-changes', repo: repo.name, base, commits: changes.commits, files: changes.files });
       }
     } catch {
       /* best effort: a repository that cannot be checked is reported as unchanged */

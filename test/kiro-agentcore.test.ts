@@ -958,13 +958,13 @@ describe('AgentCore — pull requests from Kiro runs', () => {
 
   after(async () => { await cleanup(); });
 
-  async function runWith(events: AgentCoreSSEEvent[], flag: boolean, handle: (ctx: unknown, changes: unknown) => Promise<void>) {
+  async function runWith(events: AgentCoreSSEEvent[], flag: boolean, handle: (ctx: unknown, changes: unknown) => Promise<void>, checked = false) {
     const sent: Array<Record<string, unknown>> = [];
     _setAgentCoreInvokerOverride(async function* (_arn, _sid, payload) {
       sent.push(payload);
       for (const e of events) yield e;
     });
-    _setRepoChangesHooks({ flag: async () => flag, handle: handle as never });
+    _setRepoChangesHooks({ flag: async () => flag, checked: async () => checked, handle: handle as never });
     const td = makeTestData(cfg);
     const { ctx } = await makeCtx(td.runId, td.workflowId, td.projectId, td.workDir, cfg);
     await runKiroViaAgentCore(ctx, { runtimeArn: FAKE_ARN, runId: td.runId, prompt: 'p', token: SAMPLE_TOKEN, credentialId: null, expectedCiphertext: null, repos: REPOS });
@@ -980,6 +980,13 @@ describe('AgentCore — pull requests from Kiro runs', () => {
     const off = await runWith([done], false, async (c) => { calls.push(c); });
     assert.equal('finalizeCheck' in off.sent[0], false);
     assert.equal(calls.length, 0, 'no changes reported, nothing handled');
+  });
+
+  it('sends checkedReport only for an auto-fix session that also asks for finalizeCheck', async () => {
+    const noop = async () => {};
+    assert.equal((await runWith([done], true, noop, true)).sent[0].checkedReport, true);
+    assert.equal('checkedReport' in (await runWith([done], true, noop, false)).sent[0], false, 'an ordinary session: the old report');
+    assert.equal('checkedReport' in (await runWith([done], false, noop, true)).sent[0], false);
   });
 
   it('hands the runner\'s repo-changes events to handleRepoChanges with engine kiro', async () => {

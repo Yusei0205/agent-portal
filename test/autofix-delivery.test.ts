@@ -259,6 +259,17 @@ describe('a review fix: a PR stacked on the reviewed branch', () => {
     assert.equal(f.fix_branch, branch);
   });
 
+  it('an auto-fix PR (and its Inbox question) uses the default branch, never a base the runner reported', async () => {
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [{ ...clean, base: 'evil' }]);
+    assert.equal(finalizeCalls.length, 1);
+    assert.equal(finalizeCalls[0].base, 'main');
+    assert.equal(ghCalls.find((c) => c.method === 'POST' && /\/pulls$/.test(c.url))!.body.base, 'main');
+    const p = await makeFix({ mode: 'propose' });
+    await handleRepoChanges(ctxOf(p), [{ ...clean, base: 'evil' }]);
+    assert.equal(inbox(p).find((i) => i.type === 'push')!.payload.base, 'main');
+  });
+
   it('the Inbox question of a review fix names the reviewed branch as the base', async () => {
     const s = await makeFix({ source: 'review_finding', kind: 'review', branch: 'feature/login', mode: 'propose' });
     await handleRepoChanges(ctxOf(s), [clean]);
@@ -648,6 +659,15 @@ describe('the gate in the session PR flow', () => {
     assert.equal(await finalizeRunPayloadFlag(s.projectId, false), false);
     assert.equal(await finalizeRunPayloadFlag(s.projectId, false, s.workflowId), true);
     assert.equal(await finalizeRunPayloadFlag(s.projectId, false, 'not-a-fix-session'), false);
+  });
+
+  it('checkedReportFor: the checked change report only for a fix session (ordinary sessions keep the old report)', async () => {
+    const { checkedReportFor } = await import('../server/agent/claude-agentcore.ts');
+    const s = await makeFix();
+    assert.equal(await checkedReportFor(s.workflowId), true);
+    const plain = await makeFix({ withFinding: false });
+    assert.equal(await checkedReportFor(plain.workflowId), false);
+    assert.equal(await checkedReportFor(null), false);
   });
 });
 

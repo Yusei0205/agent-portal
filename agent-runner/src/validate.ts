@@ -107,6 +107,8 @@ export interface InvocationPayload {
   prepareOnly?: boolean;
   /** true = at the end of the run, report which cloned repositories have changes (read-only; nothing is committed or pushed). */
   finalizeCheck?: boolean;
+  /** true = build that report in a runner-private repository with the changed file list (auto-fix sessions only). */
+  checkedReport?: boolean;
   portal?: PortalConfig;
   /** Anthropic credential; without it the run uses Bedrock through the execution role. */
   auth?: AuthConfig;
@@ -149,7 +151,7 @@ const MAX_PROMPT_LENGTH = 100_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
-  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'bedrockEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'portal', 'auth', 'trustTools', 'browser', 'browserAccounts', 'browserHosts', 'browserManualSignIn', 'browserKeepOpen', 'browserResumeSession', 'policy', 'approvals',
+  'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'bedrockEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'checkedReport', 'portal', 'auth', 'trustTools', 'browser', 'browserAccounts', 'browserHosts', 'browserManualSignIn', 'browserKeepOpen', 'browserResumeSession', 'policy', 'approvals',
   'agents', 'agent', 'delegation',
 ]);
 const AWS_ENV_KEYS = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']);
@@ -223,6 +225,9 @@ export function validatePayload(raw: unknown): ValidationResult {
   }
   if (obj.finalizeCheck !== undefined && typeof obj.finalizeCheck !== 'boolean') {
     return err('"finalizeCheck" must be a boolean');
+  }
+  if (obj.checkedReport !== undefined && typeof obj.checkedReport !== 'boolean') {
+    return err('"checkedReport" must be a boolean');
   }
   if (obj.prepareOnly === true && obj.prompt === undefined) {
     obj.prompt = 'prepare';
@@ -423,6 +428,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       ...(obj.prepareOnly === true ? { prepareOnly: true } : {}),
       ...(obj.finalizeCheck === true ? { finalizeCheck: true } : {}),
+      ...(obj.checkedReport === true ? { checkedReport: true } : {}),
       portal,
       auth,
       trustTools: typeof obj.trustTools === 'boolean' ? obj.trustTools : undefined,

@@ -648,6 +648,8 @@ export interface AgentCoreRunOpts {
 interface RepoChangesHooks {
   /** Value of `finalizeCheck` for this run. */
   flag: (run: RunContext['run']) => Promise<boolean>;
+  /** Value of `checkedReport` for this run (auto-fix sessions only; see claude-agentcore.ts checkedReportFor). */
+  checked: (run: RunContext['run']) => Promise<boolean>;
   handle: (ctx: import('../session-pr.ts').SessionPrContext, changes: import('../session-pr.ts').RepoChange[]) => Promise<void>;
 }
 
@@ -659,6 +661,10 @@ const defaultRepoChangesHooks: RepoChangesHooks = {
     const { getSessionsRepository } = await import('../repositories/sessions.ts');
     const w = await getSessionsRepository().getWorkflowById(run.workflowId);
     return finalizeRunPayloadFlag(run.projectId, Boolean(String(w?.jira_key ?? '').trim()), run.workflowId);
+  },
+  checked: async (run) => {
+    const { checkedReportFor } = await import('./claude-agentcore.ts');
+    return checkedReportFor(run.workflowId);
   },
   handle: async (ctx, changes) => {
     const { handleRepoChanges } = await import('../session-pr.ts');
@@ -714,6 +720,7 @@ export async function runKiroViaAgentCore(
     const finalizeCheck = opts.repos?.length && ctx.run?.workflowId
       ? await repoChangesHooks.flag(ctx.run).catch(() => false)
       : false;
+    const checkedReport = finalizeCheck ? await repoChangesHooks.checked(ctx.run).catch(() => false) : false;
     const payload: Record<string, unknown> = {
       mode: 'kiro-run',
       runId: opts.runId,
@@ -734,6 +741,7 @@ export async function runKiroViaAgentCore(
       ...(opts.agent ? { agent: opts.agent } : {}),
       ...(snapshot ? { snapshot } : {}),
       ...(finalizeCheck ? { finalizeCheck: true } : {}),
+      ...(checkedReport ? { checkedReport: true } : {}),
       // Same rule as the local Kiro engine: trusted runs allow what kiro-cli asks about,
       // untrusted runs ask a person (relayed below).
       policy: { trusted: ctx.run.trusted },

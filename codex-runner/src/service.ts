@@ -239,7 +239,7 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
         if (controller.signal.aborted) throw new DOMException('Run cancelled', 'AbortError');
         if (body.checks) send({ type: 'check-result', ...await runCheckSteps(validateCheckSteps(body.checks), workDir) });
         emitRunnerFiles(workDir, send);
-        if (body.finalizeCheck) await reportRepoChanges(body.repos, workDir, send);
+        if (body.finalizeCheck) await reportRepoChanges(body.repos, workDir, send, { checked: body.checkedReport === true });
         await flushWorkspace(snapshot, workDir);
         const stateSaved = await (options.saveState ?? saveCodexState)(home, stateSnapshot);
         if (stateSnapshot && !stateSaved) throw new Error('Codex conversation state was not saved');

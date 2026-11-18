@@ -41,7 +41,7 @@ import { ApprovalRelay, DelegationRelay, isApprovalRequest, isDelegateRequest } 
 import { invokeAgentCore, agentCoreControlSender, runnerApprovals } from './kiro-agentcore.ts';
 import type { RunContext, AgentRun } from './types.ts';
 import { snapshotAccess } from './runner-snapshot-access.ts';
-import { finalizeCheckFor, submitRepoChanges } from './claude-agentcore.ts';
+import { checkedReportFor, finalizeCheckFor, submitRepoChanges } from './claude-agentcore.ts';
 import type { RepoChange } from '../session-pr.ts';
 import { RUNTIME_BEDROCK_MODELS, runApiError, explainModelError } from './runtime-models.ts';
 import { repoChangeOf } from './runner-finalize.ts';
@@ -214,6 +214,8 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
 
   const hasRepos = Boolean(run.runnerRepos?.length);
   const finalizeCheck = hasRepos && run.projectId ? await finalizeCheckFor(run.projectId, Boolean(wf?.jira_key), run.workflowId) : false;
+  // Auto-fix sessions only: the checked change report (an older runner rejects the field, so only auto-fix runs fail closed there).
+  const checkedReport = finalizeCheck ? await checkedReportFor(run.workflowId) : false;
   const changes: RepoChange[] = [];
   // The runner saves the workspace after the run; the pull request step later restores it in the session's own
   // AgentCore session (this run uses a per-run session id), so the repositories are found again to push.
@@ -238,6 +240,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
     ...(hasRepos ? { repos: run.runnerRepos } : {}),
     ...(snapshot ? { snapshot } : {}),
     ...(finalizeCheck ? { finalizeCheck: true } : {}),
+    ...(checkedReport ? { checkedReport: true } : {}),
   };
 
   // Spend from the runner's final result: on the run and in the budget. Returns the cost.

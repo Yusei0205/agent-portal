@@ -55,7 +55,8 @@ export async function runCodexViaAgentCore(
     trusted: ctx.run.trusted, rules: toPolicyRules(ctx.run.permissions.rules), approvals: runnerApprovals(),
     model: ctx.run.model, threadId: ctx.run.engineSessionId, repos: ctx.run.runnerRepos,
     mcpServers: ctx.run.runnerMcpServers, inputFiles: ctx.run.runnerInputFiles, checks: ctx.run.runnerChecks,
-    snapshot: workspace, stateSnapshot: state, finalizeCheck, ...(autofix ? { prTool: false } : {}) };
+    snapshot: workspace, stateSnapshot: state, finalizeCheck, ...(autofix ? { prTool: false } : {}),
+    ...(autofix && finalizeCheck ? { checkedReport: true } : {}) };
   let result: CodexTurnResult | null = null;
   let latest = usageFrom({});
   let failure: string | null = null;
