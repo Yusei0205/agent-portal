@@ -410,6 +410,8 @@ aws ecs update-service \
   --region YOUR_REGION
 ```
 
+**Auto-fix:** the agent-runner, kiro-runner and codex-runner images must be rebuilt and redeployed together with the portal, because the runners' finalize code changed; old runners reject the new request fields and Auto-fix then pushes nothing. Set `AUTOFIX_ALLOW_UNATTENDED_PUSH=1` on the portal task only if you opt in to unattended pushes, and read "Unattended push: security prerequisites" in the user guide first. Without it a person approves every push.
+
 ECS will start the new task, wait for it to pass the health check, then stop the old task.
 The brief overlap is safe because only one task runs at a time with the `desiredCount: 1` setup.
 
