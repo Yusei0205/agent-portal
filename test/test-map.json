@@ -1870,6 +1870,7 @@
         "server/repositories/autofix-findings.ts",
         "server/agent/runner-finalize.ts",
         "server/agent/runner-finalize-run.ts",
+        "codex-runner/src/service.ts",
         "web/src/pages/hub/AutoFix.jsx",
         "web/src/styles/autofix.css"
       ],

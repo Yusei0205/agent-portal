@@ -13,6 +13,7 @@ Date: 2026-11-17. Source: the review ledger of the auto-fix build. Items marked 
 - `pr_url` rendered as an href without an http(s) check (`web/src/pages/hub/AutoFix.jsx`).
 - Stored `run_as` is not re-validated on enable when unchanged (`server/autofix/policy.ts:38`); `fireLoopSpec` re-checks at fire time.
 - Policy limits have no upper bound (`policy.ts` around 125-130); classes are not validated against the known set; `k in DEFAULT_POLICY.limits` accepts prototype keys (use `Object.hasOwn`).
+- A rename-away of a protected file is not detected (`DiffFile` carries only the new path).
 - `yarn.lock` and `pnpm-lock` are not in the default protected set; nested `.github/workflows` and `infra/` are not protected (root-anchored globs).
 - Evidence cap is applied before scrubbing, which can expand text (`server/autofix/review-source.ts`). Queued for the final fix wave.
 - `changedPathsPayload` (`server/session-pr.ts:231`) must strip control characters and skip non-string paths. Queued for the final fix wave.
@@ -27,8 +28,6 @@ Date: 2026-11-17. Source: the review ledger of the auto-fix build. Items marked 
 - Review source: dismissal after completion does not stop the finding; rerun dedupe depends on identical LLM wording; review findings have no category column (kind is always `review`).
 - Dev databases seeded before the seed change keep the old `maxPerHour` default; DynamoDB mode never seeds built-in specs (a warning is logged); `SCHEMA_VERSION` comment is stale.
 - Never-fix dismisses before the policy write (non-atomic) (`server/autofix/routes.ts:241-250`).
-- `globMatches` suffix expansion is quadratic in path segments for very long paths; the pipeline must cap path count and length before `checkDiff`.
-- `isProtectedBranch` linear matcher: confirm with a timing test.
 
 ## UX
 
