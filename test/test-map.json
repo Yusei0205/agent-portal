@@ -39,6 +39,8 @@
         "server/repositories/automations-dynamodb.ts",
         "web/src/pages/Automations.jsx",
         "web/src/styles/automations.css",
+        "web/src/components/AutomationTemplateLibrary.jsx",
+        "web/src/components/WorkflowJiraContextPicker.jsx",
         "infra/lib/automation-bridge.js",
         "server/automations/templates.ts",
         "server/automations/generate.ts"
@@ -49,6 +51,9 @@
         "test/web-automations.test.ts",
         "test/automation-bridge.test.ts",
         "test/automation-templates.test.ts",
+        "test/automation-project-templates.test.ts",
+        "test/automation-run-context.test.ts",
+        "test/jira.test.ts",
         "test/automation-list.test.ts",
         "test/automation-run-options.test.ts",
         "test/automation-generate.test.ts"
@@ -457,6 +462,9 @@
         "web/src/pages/Dashboard.jsx",
         "web/src/components/DashboardInsights.jsx",
         "web/src/components/DashboardDetails.jsx",
+        "web/src/components/MissionControl.jsx",
+        "web/src/lib/useMissionSnapshot.js",
+        "web/src/styles/mission-control.css",
         "web/src/components/CostPanel.jsx",
         "web/src/styles/dashboard.css",
         "web/src/styles/command-center.css",
@@ -466,6 +474,7 @@
         "test/dashboard.test.ts",
         "test/stats-repo.test.ts",
         "test/web-dashboard-insights.test.ts",
+        "test/web-mission-control.test.ts",
         "test/web-portal-interactions.test.ts"
       ],
       "smokeIds": [

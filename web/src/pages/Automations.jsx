@@ -7,6 +7,10 @@ import { href } from '../lib/router.js';
 import { formatRelative } from '../lib/util.js';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { ModelPicker } from './sessions/NewSessionDialog.jsx';
+import { AutomationTemplateLibrary } from '../components/AutomationTemplateLibrary.jsx';
+import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
+import { useAttachmentLimits, limitsHint } from '../lib/attachment-limits.js';
+import { WorkflowJiraContextPicker } from '../components/WorkflowJiraContextPicker.jsx';
 
 const kinds = { start: 'Start', agent: 'Agent task', condition: 'Condition', approval: 'Human approval', end: 'End' };
 const engineLabel = { codex: 'Codex', 'claude-code': 'Claude Code', kiro: 'Kiro', demo: 'Demo' };
@@ -143,19 +147,30 @@ export default function Automations({ projectId }) {
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [notice, setNotice] = useState('');
   const [available, setAvailable] = useState(false); const [dirty, setDirty] = useState(false);
   const [input, setInput] = useState(''); const [runOpts, setRunOpts] = useState(defaultRunOptions);
+  const [runAttachmentIds, setRunAttachmentIds] = useState([]);
+  const [attachmentsBusy, setAttachmentsBusy] = useState(false);
+  const [jiraIssue, setJiraIssue] = useState(null);
+  const runContextRef = useRef(null);
+  const runAttachmentLimits = useAttachmentLimits();
   const [templates, setTemplates] = useState([]); const [newTemplateId, setNewTemplateId] = useState(null); const [newName, setNewName] = useState('');
+  const [templateEditing, setTemplateEditing] = useState(null);
+  const [copyTemplate, setCopyTemplate] = useState(null);
   // "Describe it": the AI-drafted workflow, its description, and the changes asked for
   const [aiText, setAiText] = useState(''); const [aiChanges, setAiChanges] = useState(''); const [draft, setDraft] = useState(null); const [generating, setGenerating] = useState(false);
   const [loading, setLoading] = useState(true);
   const requestId = useRef(null);
+  const attachmentsChanged = useCallback((ids, uploading) => { setRunAttachmentIds(ids); setAttachmentsBusy(uploading); requestId.current = null; }, []);
+  useEffect(() => { setRunAttachmentIds([]); setAttachmentsBusy(false); setJiraIssue(null); setInput(''); requestId.current = null; }, [projectId, definition?.id]);
   const selected = nodes.find((n) => n.id === selectedId);
   const task = async (fn) => { setBusy(true); setError(''); setNotice(''); try { await fn(); } catch (e) { setError(e.message || 'Request failed'); } finally { setBusy(false); } };
 
   const open = useCallback((d) => {
+    setCopyTemplate(null);
     setDefinition(d); setGraph(d.graph); const flow = toFlow(d.graph); setNodes(flow.nodes); setEdges(flow.edges);
     setSelectedId(null); setRun(null); setRuns([]); setVersions(null); setDirty(false); setError(''); setNotice(''); setRunOpts(defaultRunOptions); requestId.current = null;
   }, []);
-  const openWorkflow = useCallback((d) => { open(d); setTab('design'); setView('edit'); }, [open]);
+  const openWorkflow = useCallback((d) => { setTemplateEditing(null); open(d); setTab('design'); setView('edit'); }, [open]);
+  const openTemplate = (template) => { open({ ...template, published_version: null }); setTemplateEditing(template); setTab('design'); setView('template'); };
 
   const refresh = useCallback(async () => {
     const result = await api.get(base);
@@ -200,6 +215,12 @@ export default function Automations({ projectId }) {
   const updateNode = (patch) => { setNodes((list) => list.map((n) => n.id === selectedId ? { ...n, data: { ...n.data, node: { ...n.data.node, ...patch } } } : n)); setDirty(true); };
   const updateGraph = (patch) => { setGraph((g) => ({ ...g, ...patch })); setDirty(true); };
   const save = async () => {
+    if (templateEditing) {
+      const payload = { revision: templateEditing.revision, name: definition.name, description: templateEditing.description, graph: toGraph(graph, nodes, edges) };
+      const result = templateEditing.id ? await api.put(`${base}/templates/${templateEditing.id}`, payload) : await api.post(`${base}/templates`, payload);
+      setTemplateEditing(result.template); setDefinition({ ...result.template, published_version: null }); setDirty(false);
+      await refresh(); return result.template;
+    }
     const result = await api.put(`${base}/${definition.id}`, { revision: definition.revision, name: definition.name, graph: toGraph(graph, nodes, edges) });
     setDefinition(result.definition); setDefinitions((list) => list.map((d) => d.id === result.definition.id ? result.definition : d)); setDirty(false); return result.definition;
   };
@@ -211,10 +232,10 @@ export default function Automations({ projectId }) {
   });
 
   // ── Navigation ──
-  const confirmLeave = async () => !dirty || await requestConfirm('You have unsaved changes to this workflow. Leave without saving them?', 'Leave', 'danger');
+  const confirmLeave = async () => !dirty || await requestConfirm('You have unsaved changes to this draft. Leave without saving them?', 'Leave', 'danger');
   const goList = async () => {
     if (!(await confirmLeave())) return;
-    setDirty(false); setDefinition(null); setError(''); setNotice(''); setView('list');
+    setDirty(false); setDefinition(null); setTemplateEditing(null); setError(''); setNotice(''); setView('list');
     refresh().catch((e) => setError(e.message));
   };
   const startNew = () => {
@@ -224,8 +245,17 @@ export default function Automations({ projectId }) {
     setError(''); setNotice(''); setView('new');
   };
   const pickTemplate = (t) => { setNewTemplateId(t.id); setNewName(uniqueName(templateBaseName(t), definitions.map((d) => d.name))); };
+  const goLibrary = async () => { if (!(await confirmLeave())) return; setDirty(false); setTemplateEditing(null); setView('library'); setError(''); setNotice(''); await refresh().catch((e) => setError(e.message)); };
+  const resetTemplate = async (template) => {
+    if (!(await requestConfirm('Reset this project’s template to the current system default? Project customizations will be replaced. Existing workflows, published versions and runs stay unchanged.', 'Reset to default', 'danger'))) return;
+    await task(async () => { const result = await api.post(`${base}/templates/${template.id}/reset`, { revision: template.revision }); await refresh(); if (view === 'template') openTemplate(result.template); setNotice('System default restored for this project. Existing workflows were not changed.'); });
+  };
+  const deleteTemplate = async (template) => {
+    if (!(await requestConfirm(`Delete the user template "${template.name}"? Existing workflows and runs stay unchanged.`, 'Delete template', 'danger'))) return;
+    await task(async () => { await api.delete(`${base}/templates/${template.id}`, { revision: template.revision }); await refresh(); setNotice('User template deleted. Existing workflows were not changed.'); });
+  };
   const create = () => task(async () => {
-    const r = await api.post(base, newTemplateId === AI ? { name: newName.trim(), graph: draft.graph } : { name: newName.trim(), templateId: newTemplateId });
+    const r = await api.post(base, newTemplateId === AI ? { name: newName.trim(), graph: draft.graph } : { name: newName.trim(), templateId: newTemplateId, templateRevision: templates.find((template) => template.id === newTemplateId)?.revision });
     setDefinitions((list) => [...list, r.definition]); openWorkflow(r.definition);
   });
   // Draft (or refine) a workflow from the description. Nothing is saved until Create.
@@ -245,7 +275,7 @@ export default function Automations({ projectId }) {
   // ── Runs ──
   const start = () => task(async () => {
     requestId.current ||= crypto.randomUUID();
-    const r = await api.post(`${base}/${definition.id}/runs`, { input, requestId: requestId.current, options: runOpts });
+    const r = await api.post(`${base}/${definition.id}/runs`, { input, requestId: requestId.current, options: runOpts, attachmentIds: runAttachmentIds, jiraIssue: jiraIssue?.key || '' });
     setRun(r.run); setRuns((list) => [r.run, ...list.filter((v) => v.id !== r.run.id)]); requestId.current = null;
   });
   const control = (action) => task(async () => {
@@ -277,14 +307,16 @@ export default function Automations({ projectId }) {
     {notice && <p role="status">{notice}</p>}
   </>;
 
+  if (view === 'library') return <div className="page automations-page">{banners}<AutomationTemplateLibrary templates={templates} busy={busy} onBack={goList} onNew={() => { openTemplate({ id: null, name: 'My workflow template', description: '', source: 'user', revision: 0, graph: templates.find((t) => t.id === 'sdlc').graph }); setDirty(true); }} onUse={(template) => { startNew(); pickTemplate(template); }} onEdit={openTemplate} onReset={resetTemplate} onDelete={deleteTemplate} renderPreview={(template) => <TemplateCanvas template={template} />} /><ConfirmDialog state={confirmState} /></div>;
+
   // ───────────────────────────── List ─────────────────────────────
   if (view === 'list' || (view === 'edit' && !definition) || (view === 'new' && !templates.length)) {
     return <div className="page automations-page">
       <header className="automation-heading"><div><h1>Workflows</h1><p className="muted">Build repeatable agent tasks with checks, branches, and human approvals.</p></div>
-        <button className="btn btn-primary" disabled={loading || !templates.length} onClick={startNew}>New workflow</button></header>
+        <div className="automation-actions"><button type="button" className="btn" disabled={loading} onClick={goLibrary}>Template library</button><button className="btn btn-primary" disabled={loading || !templates.length} onClick={startNew}>New workflow</button></div></header>
       {banners}
       {loading ? <p role="status">Loading workflows…</p> : definitions.length === 0 ? <section className="automation-empty">
-        <h2>No workflows yet</h2><p className="muted">Start from a template (SDLC, Development from a Jira ticket, or Testing a ticket) and change every step to fit your process.</p>
+        <h2>No workflows yet</h2><p className="muted">Start from a system or user template and change every step to fit your process.</p>
         <button className="btn btn-primary" onClick={startNew}>Create your first workflow</button>
       </section> : <div style={{ overflowX: 'auto' }}><table className="table automation-list" aria-label="Workflows">
         <thead><tr><th>Name</th><th>Engine</th><th>Steps</th><th>Status</th><th>Latest run</th><th>Updated</th><th><span className="sr-only">Actions</span></th></tr></thead>
@@ -318,7 +350,8 @@ export default function Automations({ projectId }) {
             const t = templates.find((x) => x.id === e.target.value);
             if (t) pickTemplate(t);
           }}>
-            {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+            <optgroup label="System templates">{templates.filter((t) => t.source !== 'user').map((t) => <option key={t.id} value={t.id}>{t.name}{t.customized ? ' · Project override' : ''}</option>)}</optgroup>
+            <optgroup label="User templates">{templates.filter((t) => t.source === 'user').map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</optgroup>
             <option value={AI}>Describe it (generate with AI)</option>
           </select>
         </label>
@@ -353,20 +386,22 @@ export default function Automations({ projectId }) {
 
   // ───────────────────────────── Edit ─────────────────────────────
   return <div className="page automations-page">
-    <Crumbs items={[{ label: 'Workflows', onClick: goList }, { label: definition.name }]} />
+    <Crumbs items={[{ label: 'Workflows', onClick: goList }, ...(templateEditing ? [{ label: 'Template library', onClick: goLibrary }] : []), { label: definition.name }]} />
     <header className="automation-heading"><div><h1>{definition.name}</h1>
-      <p className="muted automation-meta">{definition.published_version === null ? <span className="badge">Draft only</span> : <span className="badge badge-ok">Published v{definition.published_version}</span>} {dirty && <span className="automation-dirty">Unsaved changes</span>}</p></div>
+      <p className="muted automation-meta">{templateEditing ? <span className="badge">{templateEditing.source === 'system' ? 'System template · Project customization' : 'User template'}</span> : definition.published_version === null ? <span className="badge">Draft only</span> : <span className="badge badge-ok">Published v{definition.published_version}</span>} {dirty && <span className="automation-dirty">Unsaved changes</span>}</p></div>
       <div className="automation-actions automation-toolbar">
-        <button className="btn" disabled={busy || !dirty} onClick={() => task(async () => { await save(); setNotice('Draft saved.'); })}>Save draft</button>
-        <button className="btn btn-primary" disabled={busy} onClick={publish}>Publish version</button>
-        <button className="btn" disabled={busy} onClick={() => task(async () => { const r = await api.get(`${base}/${definition.id}/versions`); setVersions(r.versions); setTab('design'); })}>Version history</button>
-        {dirty && <button className="btn" onClick={() => open(definitions.find((d) => d.id === definition.id) || definition)}>Discard changes</button>}
+        <button className="btn" disabled={busy || !dirty} onClick={() => task(async () => { await save(); setNotice(templateEditing ? 'Template saved for this project. Existing workflows were not changed.' : 'Draft saved.'); })}>{templateEditing ? templateEditing.source === 'system' ? 'Save project override' : 'Save user template' : 'Save draft'}</button>
+        {!templateEditing && <><button className="btn btn-primary" disabled={busy} onClick={publish}>Publish version</button><button className="btn" disabled={busy} onClick={() => task(async () => { const r = await api.get(`${base}/${definition.id}/versions`); setVersions(r.versions); setTab('design'); })}>Version history</button><button type="button" className="btn" disabled={busy} onClick={() => setCopyTemplate({ name: uniqueName(definition.name, templates.filter((t) => t.source === 'user').map((t) => t.name)), description: '' })}>Save as template</button></>}
+        {templateEditing?.source === 'system' && <button type="button" className="btn" disabled={busy || (!templateEditing.customized && !dirty)} onClick={() => resetTemplate(templateEditing)}>Reset to default</button>}
+        {dirty && <button className="btn" disabled={busy} onClick={() => templateEditing ? templateEditing.id ? openTemplate(templates.find((t) => t.id === templateEditing.id) || templateEditing) : goLibrary() : open(definitions.find((d) => d.id === definition.id) || definition)}>Discard changes</button>}
       </div></header>
     {banners}
-    <div className="tab-bar" role="tablist" aria-label="Workflow sections">
+    {templateEditing && <p className="automation-template-note">{templateEditing.source === 'system' ? 'Changes apply only to this project’s reusable template. Reset restores the current system default.' : 'This reusable template is shared within this project.'} Existing workflows and published runs keep their own copies.</p>}
+    {copyTemplate && <form className="automation-template-copy" aria-label="Save user template" onSubmit={(event) => { event.preventDefault(); task(async () => { await api.post(`${base}/templates`, { ...copyTemplate, graph: toGraph(graph, nodes, edges) }); await refresh(); setCopyTemplate(null); setNotice('User template created for this project.'); }); }}><h2>Save current draft as a user template</h2><label>Template name<input required maxLength={120} value={copyTemplate.name} onChange={(event) => setCopyTemplate((value) => ({ ...value, name: event.target.value }))} /></label><label>Template description<textarea maxLength={1000} value={copyTemplate.description} onChange={(event) => setCopyTemplate((value) => ({ ...value, description: event.target.value }))} /></label><div className="automation-actions"><button type="submit" className="btn btn-primary" disabled={busy || !copyTemplate.name.trim()}>Create user template</button><button type="button" className="btn" onClick={() => setCopyTemplate(null)}>Cancel template copy</button></div></form>}
+    {!templateEditing && <div className="tab-bar" role="tablist" aria-label="Workflow sections">
       <button role="tab" type="button" aria-selected={tab === 'design'} className={`tab-btn${tab === 'design' ? ' is-active' : ''}`} onClick={() => setTab('design')}>Design</button>
       <button role="tab" type="button" aria-selected={tab === 'runs'} className={`tab-btn${tab === 'runs' ? ' is-active' : ''}`} onClick={() => setTab('runs')}>Runs{activeRuns ? ` (${activeRuns} running)` : ''}</button>
-    </div>
+    </div>}
 
     {tab === 'design' && <>
       {versions && <section className="automation-versions"><h2>Published versions</h2><button className="btn" onClick={() => setVersions(null)}>Close history</button>{versions.length ? versions.map((v) => <div key={v.version}><strong>Version {v.version}</strong> · {new Date(v.created_at).toLocaleString()} <button className="btn" disabled={dirty} onClick={() => { const f = toFlow(v.graph); setGraph(v.graph); setNodes(f.nodes); setEdges(f.edges); setDirty(true); setVersions(null); }}>Copy to draft</button></div>) : <p>No published versions yet.</p>}</section>}
@@ -374,6 +409,7 @@ export default function Automations({ projectId }) {
         <summary>Settings <span className="muted small">· {engineLabel[graph.engine] || graph.engine} · up to {graph.maxSteps} steps · {graph.timeoutMinutes} min · {graph.repoIds.length} {graph.repoIds.length === 1 ? 'repository' : 'repositories'}</span></summary>
         <div className="automation-settings">
           <label>Name<input value={definition.name} maxLength={120} onChange={(e) => { setDefinition((d) => ({ ...d, name: e.target.value })); setDirty(true); }} /></label>
+          {templateEditing && <label>Description<textarea aria-label="Description" value={templateEditing.description || ''} maxLength={1000} onChange={(event) => { setTemplateEditing((value) => ({ ...value, description: event.target.value })); setDirty(true); }} /></label>}
           <label>Engine<select value={graph.engine} onChange={(e) => updateGraph({ engine: e.target.value, budgetUsd: ['codex', 'kiro'].includes(e.target.value) ? null : graph.budgetUsd })}><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="kiro">Kiro</option><option value="demo">Demo</option></select></label>
           <label>Step limit<input type="number" min="1" max="100" value={graph.maxSteps} onChange={(e) => updateGraph({ maxSteps: Number(e.target.value) })} /></label>
           <label>Time limit (minutes)<input type="number" min="1" max="1440" value={graph.timeoutMinutes} onChange={(e) => updateGraph({ timeoutMinutes: Number(e.target.value) })} /></label>
@@ -400,7 +436,7 @@ export default function Automations({ projectId }) {
           {check.kind === 'agent' && <>
             <label>Agent<select value={check.agent} onChange={(e) => updateNode({ agent: e.target.value })}><option value="">Engine default</option>{agents.map((a) => <option key={a.name} value={a.name}>{a.name}</option>)}</select></label>
             <ModelPicker engine={graph.engine} credentialId="" value={check.model} onChange={(model) => updateNode({ model })} />
-            <label>Instructions<textarea rows={7} value={check.prompt} maxLength={6000} onChange={(e) => updateNode({ prompt: e.target.value })} /></label>
+            <label>Instructions<textarea aria-label="Instructions" rows={7} value={check.prompt} maxLength={6000} onChange={(e) => updateNode({ prompt: e.target.value })} /></label>
             <p className="muted">Use {'{{input}}'} for the run request or {'{{steps.design.output}}'} for an earlier step’s summary. Step ID: {check.id}. Tasks share one working copy and conversation. The run uses your default sign-in.</p>
             <h3>Verification checks</h3>{check.checks.map((c, i) => <div className="automation-check" key={i}>
               <label>Command<input value={c.cmd} onChange={(e) => updateNode({ checks: check.checks.map((v, j) => j === i ? { ...v, cmd: e.target.value } : v) })} /></label>
@@ -414,15 +450,21 @@ export default function Automations({ projectId }) {
       </div>
     </>}
 
-    {tab === 'runs' && <section className="automation-execution"><div className="automation-actions"><h2>Run this workflow</h2><span className="muted">Published version: {definition.published_version ?? 'none'}</span></div>
+    {!templateEditing && <section className="automation-execution" hidden={tab !== 'runs'} style={tab !== 'runs' ? { display: 'none' } : undefined}><div className="automation-actions"><h2>Run this workflow</h2><span className="muted">Published version: {definition.published_version ?? 'none'}</span></div>
       {!available && <p role="status">Durable execution is not configured on this deployment.</p>}
       {definition.published_version === null && <p className="muted">Publish a version first (Publish version, above). Runs use the published version, so editing the draft does not change a run in progress.</p>}
       {dirty && <p className="muted">Save or publish your changes first: runs use the published version.</p>}
       <RunOptions projectId={projectId} engine={graph.engine} agents={agents} value={runOpts} onChange={(v) => { setRunOpts(v); requestId.current = null; }} />
-      <label>Run request<textarea rows={2} value={input} maxLength={2000} onChange={(e) => { setInput(e.target.value); requestId.current = null; }} placeholder="Describe what this workflow should build, or give the Jira ticket key…" /></label>
-      <div><button className="btn btn-primary" disabled={busy || !available || definition.published_version === null || dirty} onClick={start}>Run published workflow</button></div>
+      <div className="automation-run-context" ref={runContextRef}>
+        <label>Run request<textarea aria-label="Run request" data-paste-files="true" rows={3} value={input} maxLength={2000} onChange={(e) => { setInput(e.target.value); requestId.current = null; }} placeholder="Describe the outcome and which attached requirements, design documents or screenshots the agents should use…" /></label>
+        <WorkflowJiraContextPicker key={`${projectId}:${definition.id}`} projectId={projectId} enabled={tab === 'runs'} disabled={busy} value={jiraIssue} onChange={(ticket) => { setJiraIssue(ticket); requestId.current = null; }} />
+        <AttachmentPicker key={`${projectId}:${definition.id}`} projectId={projectId} purpose="chat" dropTargetRef={runContextRef} disabled={busy || tab !== 'runs'} maxFileBytes={runAttachmentLimits.fileBytes} maxTotalBytes={runAttachmentLimits.totalBytes} onAttachmentsChange={attachmentsChanged} />
+        <p className="muted small">Attach requirements or technical designs (DOCX/PDF), reference files, or paste screenshots into the request. {limitsHint(runAttachmentLimits)}. Files stay with this run and are supplied to every agent step.</p>
+      </div>
+      <div><button className="btn btn-primary" disabled={busy || attachmentsBusy || !available || definition.published_version === null || dirty} onClick={start}>{attachmentsBusy ? 'Uploading context…' : 'Run published workflow'}</button></div>
       <p className="muted">Runs continue when this page closes. Each agent task has a 12 minute limit. Subscription usage is bounded by time and step limits; dollar budgets apply only to priced providers.</p>
       <label>Run history<select value={run?.id || ''} onChange={(e) => setRun(runs.find((r) => r.id === e.target.value))}><option value="" disabled>No runs</option>{runs.map((r) => <option key={r.id} value={r.id}>{new Date(r.started_at).toLocaleString()} · v{r.version} · {r.status}</option>)}</select></label>
+      {run?.context && (run.context.attachments.length > 0 || run.context.jira) && <section className="automation-run-context-summary" aria-label="Saved run context"><h3>Saved context for this run</h3>{run.context.jira && <p>Jira issue: <strong>{run.context.jira.key}</strong> · snapshot saved at run start</p>}<ul>{run.context.attachments.map((file) => <li key={file.path}>{file.name} <span className="muted small">· {file.source === 'jira' ? 'Jira attachment' : 'Uploaded reference'}</span></li>)}</ul>{run.context.warnings.map((warning, index) => <p className="error-note" key={index}>{warning}</p>)}</section>}
       {run && <>{run.options && (run.options.agent || run.options.model || run.options.trustTools || run.options.integrationIds) ? <p className="muted small">Run options: {[run.options.agent && `agent ${run.options.agent}`, run.options.model && `model ${run.options.model}`, run.options.trustTools && 'tools trusted', run.options.integrationIds && `${run.options.integrationIds.length} integrations`].filter(Boolean).join(' · ')}</p> : null}<div className="automation-actions"><strong>{run.status}{run.cancelRequested ? ' · cancellation requested' : ''}</strong><a href={href(projectId, 'sessions', run.session_id)}>Open session, logs & artifacts</a>{['running', 'waiting'].includes(run.status) && <button className="btn" disabled={busy || run.cancelRequested} onClick={() => control('cancel')}>Cancel run</button>}{run.status === 'waiting' && <button className="btn btn-primary" disabled={busy} onClick={() => control('approve')}>Approve {run.attempts.at(-1)?.label}</button>}</div>
         {run.status === 'waiting' && <p>{runGraph?.nodes.find((n) => n.id === run.cursor)?.prompt}</p>}
         {run.error && <p role="alert">{run.error}</p>}

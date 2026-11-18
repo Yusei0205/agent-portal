@@ -4691,8 +4691,9 @@ async function main() {
           await p.waitForTimeout(600);
           // KPI stats area
           await p.waitForSelector('[aria-label="Summary statistics"]', { timeout: 5000 });
-          // All 5 panels with empty-state messages
-          const panelLabels = ['Agent Network', 'Active Session', 'Recent Sessions', 'Agent Performance'];
+          // The historical network stays collapsed until requested.
+          await p.locator('.db-network-disclosure > summary').click();
+          const panelLabels = ['Agent Network', 'Mission control', 'Recent Sessions', 'Agent Performance'];
           for (const label of panelLabels) {
             const panel = p.locator(`[aria-label="${label}"]`).first();
             await panel.waitFor({ timeout: 5000 });
@@ -4700,11 +4701,11 @@ async function main() {
           // Check empty-state texts
           const bodyText = await p.evaluate(() => document.body.innerText);
           const hasNetworkEmpty  = /no agents have run yet/i.test(bodyText);
-          const hasActiveEmpty   = /no session running right now/i.test(bodyText);
+          const hasActiveEmpty   = /your next outcome starts here/i.test(bodyText);
           const hasRecentEmpty   = /no sessions yet/i.test(bodyText);
           const hasPerfEmpty     = /no agent data for this period/i.test(bodyText);
           if (!hasNetworkEmpty) throw new Error('Agent Network should show "No agents have run yet"');
-          if (!hasActiveEmpty)  throw new Error('Active Session should show "No session running right now"');
+          if (!hasActiveEmpty)  throw new Error('Mission control should offer a useful first-session action');
           if (!hasRecentEmpty)  throw new Error('Recent Sessions should show "No sessions yet"');
           if (!hasPerfEmpty)    throw new Error('Agent Performance should show "No agent data for this period"');
           // No new JS errors

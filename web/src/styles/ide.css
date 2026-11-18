@@ -710,6 +710,8 @@
 .agent-detail-pill.is-running { color: var(--accent); }
 .agent-detail-pill.is-done { color: var(--ok); }
 .agent-detail-pill.is-failed { color: var(--danger); }
+.agent-detail-pill.is-blocked { color: var(--warn); }
+.agent-detail-pill.is-inactive { color: var(--ink-3); }
 .agent-detail-label { margin: 8px 0 2px; font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3); }
 .agent-detail-text { margin: 0; font-size: 0.82rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-detail-stats { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 10px 0 0; font-size: 0.78rem; }

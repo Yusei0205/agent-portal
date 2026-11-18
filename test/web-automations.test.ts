@@ -6,6 +6,8 @@ import { build } from 'esbuild';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { stopLocalAutomationTimers } from '../server/automations/engine.ts';
 import { setCallTextModelOverride } from '../server/testing/model-provider.ts';
+import { sdlcTemplate } from '../server/automations/schema.ts';
+import JSZip from 'jszip';
 
 /** Chooses a template in the Template dropdown by its visible name. */
 async function pickTemplate(page: import('playwright').Page, name: RegExp): Promise<void> {
@@ -19,7 +21,7 @@ async function pickTemplate(page: import('playwright').Page, name: RegExp): Prom
 
 test('visual workflow editor saves, publishes, keeps published content, and fits mobile', async () => {
   const { baseUrl } = await createTestServer();
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) });
   try {
     const setup = await fetchJson(baseUrl, '/api/auth/setup', { body: { email: 'workflow-ui@example.com', name: 'Admin', password: 'password1234', provider: 'demo' } });
     const cookie = setup.cookie!;
@@ -172,6 +174,111 @@ test('visual workflow editor saves, publishes, keeps published content, and fits
     await page.locator(canvas).first().waitFor();
     assert.equal(await page.locator(canvas).count(), 5, 'the generated workflow opens in the editor');
     assert.equal(await definitionsCount(), countBefore + 1);
+
+    // System defaults and user-created templates are managed separately per project.
+    await page.getByRole('button', {name:'Workflows',exact:true}).click();
+    await page.getByRole('button', {name:'Template library',exact:true}).click();
+    const system = page.getByRole('region',{name:'System templates',exact:true});
+    const users = page.getByRole('region',{name:'User templates',exact:true});
+    await system.getByRole('article',{name:'Bug fix with regression test',exact:true}).waitFor();
+    assert.equal(await system.getByRole('article').count(),13);
+    assert.equal(await users.getByRole('article').count(),0);
+    let bug = system.getByRole('article',{name:'Bug fix with regression test',exact:true});
+    await bug.getByRole('button',{name:'Customize for project',exact:true}).click();
+    await page.locator(`${canvas}[data-id="task_1"]`).click();
+    if (process.env.PORTAL_TEMPLATE_SCREENSHOT) await page.screenshot({path:process.env.PORTAL_TEMPLATE_SCREENSHOT+'-editing.png',animations:'disabled'});
+    await page.getByLabel('Instructions',{exact:true}).fill('Use our project-specific reproduction steps for {{input}}.');
+    await page.getByRole('button',{name:'Save project override',exact:true}).click();
+    await page.getByText('Template saved for this project. Existing workflows were not changed.',{exact:true}).waitFor();
+    assert.equal(await page.getByRole('button',{name:'Publish version',exact:true}).count(),0,'template changes cannot publish/run a workflow');
+    await page.getByRole('button',{name:'Template library',exact:true}).click();
+    await bug.getByText('Project override',{exact:true}).waitFor();
+    await page.reload();
+    await page.getByRole('button',{name:'Template library',exact:true}).click();
+    await bug.getByRole('button',{name:'Use template',exact:true}).click();
+    await page.getByRole('button',{name:'Create workflow',exact:true}).click();
+    await page.getByRole('button',{name:'Save as template',exact:true}).waitFor();
+    const createdBug = (((await fetchJson(baseUrl,`/api/projects/${projectId}/automations`,{cookie})).body as any).definitions as any[]).find((d)=>d.template_id==='bug-fix');
+    assert.equal(createdBug.graph.nodes.find((n:any)=>n.id==='task_1').prompt,'Use our project-specific reproduction steps for {{input}}.');
+    await page.getByRole('button',{name:'Save as template',exact:true}).click();
+    await page.getByLabel('Template name',{exact:true}).fill('Team bug fix standard');
+    await page.getByRole('button',{name:'Create user template',exact:true}).click();
+    await page.getByText('User template created for this project.',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Workflows',exact:true}).click();
+    await page.getByRole('button',{name:'Template library',exact:true}).click();
+    await users.getByRole('article',{name:'Team bug fix standard',exact:true}).waitFor();
+    await bug.getByRole('button',{name:'Reset to default',exact:true}).click();
+    await page.getByRole('dialog').getByRole('button',{name:'Reset to default',exact:true}).click();
+    await page.getByText('System default restored for this project. Existing workflows were not changed.',{exact:true}).waitFor();
+    await bug.getByText('System default',{exact:true}).waitFor();
+    const preserved = ((await fetchJson(baseUrl,`/api/projects/${projectId}/automations/${createdBug.id}`,{cookie})).body as any).definition;
+    assert.equal(preserved.graph.nodes.find((n:any)=>n.id==='task_1').prompt,'Use our project-specific reproduction steps for {{input}}.');
+    await page.getByRole('button',{name:'New user template',exact:true}).click();
+    await page.locator('.automation-settings').getByLabel('Name',{exact:true}).fill('Project onboarding');
+    await page.getByLabel('Description',{exact:true}).fill('Reusable onboarding process');
+    await page.getByRole('button',{name:'Save user template',exact:true}).click();
+    await page.getByText('Template saved for this project. Existing workflows were not changed.',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Template library',exact:true}).click();
+    const onboarding = users.getByRole('article',{name:'Project onboarding',exact:true});
+    await onboarding.getByRole('button',{name:'Edit template',exact:true}).click();
+    assert.equal(await page.getByLabel('Description',{exact:true}).inputValue(),'Reusable onboarding process');
+    await page.getByRole('button',{name:'Template library',exact:true}).click();
+    await onboarding.getByRole('button',{name:'Delete template',exact:true}).click();
+    await page.getByRole('dialog').getByRole('button',{name:'Delete template',exact:true}).click();
+    await page.getByText('User template deleted. Existing workflows were not changed.',{exact:true}).waitFor();
+    assert.equal(await onboarding.count(),0);
+
+    // The run form accepts a requirements document and an image pasted into the request.
+    const contextGraph=sdlcTemplate(); contextGraph.engine='demo';
+    contextGraph.nodes=contextGraph.nodes.filter((node)=>['start','approve','end'].includes(node.id));
+    contextGraph.edges=[{id:'context-a',source:'start',target:'approve',branch:'next'},{id:'context-b',source:'approve',target:'end',branch:'next'}];
+    const contextDefinition=((await fetchJson(baseUrl,`/api/projects/${projectId}/automations`,{cookie,body:{name:'Requirements context run',graph:contextGraph}})).body as any).definition;
+    await fetchJson(baseUrl,`/api/projects/${projectId}/automations/${contextDefinition.id}/publish`,{cookie,body:{revision:1}});
+    await page.getByRole('button',{name:'Back to workflows',exact:true}).click();
+    await page.getByRole('button',{name:'Requirements context run',exact:true}).click();
+    await page.route(`**/api/projects/${projectId}/jira`, (route)=>route.fulfill({json:{connected:true,mapping:{projectKeys:['ABC']}}}));
+    await page.route(`**/api/projects/${projectId}/jira/projects`, (route)=>route.fulfill({json:{projects:[{key:'ABC',name:'Product development'}]}}));
+    await page.route(`**/api/projects/${projectId}/jira/issues?*`, (route)=>route.fulfill({json:{issues:[{key:'ABC-123',summary:'Authentication requirements',status:{name:'To Do',category:'new'},priority:'Medium'}],nextPage:null}}));
+    await page.getByRole('tab',{name:/^Runs/}).click();
+    const doc=new JSZip(); doc.file('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Requirements for authentication</w:t></w:r></w:p></w:body></w:document>');
+    await page.locator('.automation-run-context input[type="file"]').setInputFiles({name:'requirements.docx',mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',buffer:await doc.generateAsync({type:'nodebuffer'})});
+    await page.locator('.attachment-picker').getByText('requirements.docx',{exact:true}).waitFor();
+    await page.getByRole('textbox',{name:'Run request',exact:true}).fill('Read requirements.docx and the pasted technical design.');
+    await page.getByRole('textbox',{name:'Run request',exact:true}).evaluate((element)=>{
+      const data=new DataTransfer(); const bytes=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jCFEAAAAASUVORK5CYII='),(char)=>char.charCodeAt(0));
+      data.items.add(new File([bytes],'technical-design.png',{type:'image/png'}));
+      element.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}));
+    });
+    await page.locator('.attachment-picker').getByText('technical-design.png',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'Run published workflow',exact:true}).waitFor();
+    await page.getByRole('tab',{name:'Design',exact:true}).click();
+    await page.getByRole('tab',{name:/^Runs/}).click();
+    assert.equal(await page.locator('.attachment-picker').getByText('requirements.docx',{exact:true}).isVisible(),true,'tab switches preserve selected files');
+    const jiraSearch=page.getByRole('searchbox',{name:'Search Jira tickets',exact:true});
+    const queried=page.waitForRequest((request)=>request.url().includes('/jira/issues?') && new URL(request.url()).searchParams.get('q')==='Authentication');
+    await jiraSearch.fill('Authentication');
+    await queried;
+    const ticketOption=page.getByRole('option',{name:/ABC-123 Authentication requirements/});
+    await ticketOption.waitFor(); await ticketOption.focus(); await page.keyboard.press('Enter');
+    await page.getByRole('status',{name:'Selected Jira ticket: ABC-123',exact:true}).waitFor();
+    await page.getByRole('tab',{name:'Design',exact:true}).click();
+    await page.getByRole('tab',{name:/^Runs/}).click();
+    assert.equal(await page.getByRole('status',{name:'Selected Jira ticket: ABC-123',exact:true}).isVisible(),true,'selected issue survives a tab switch');
+    await page.getByRole('button',{name:'Run published workflow',exact:true}).click();
+    await page.getByRole('alert').filter({hasText:'Jira context could not be loaded'}).waitFor();
+    await page.getByRole('button',{name:'Remove ticket ABC-123',exact:true}).click();
+    await page.getByRole('button',{name:'Run published workflow',exact:true}).click();
+    const savedContext=page.getByRole('region',{name:'Saved run context',exact:true});
+    await savedContext.getByText('requirements.docx',{exact:false}).waitFor();
+    assert.match(await savedContext.innerText(),/technical-design.png/);
+    if(process.env.PORTAL_TEMPLATE_SCREENSHOT) await page.screenshot({path:process.env.PORTAL_TEMPLATE_SCREENSHOT+'-run-context.png',fullPage:true,animations:'disabled'});
+    await page.getByRole('button',{name:'Cancel run',exact:true}).click();
+    await page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('button',{name:'Workflows',exact:true}).click();
+    await page.getByRole('button',{name:'Template library',exact:true}).click();
+    if (process.env.PORTAL_TEMPLATE_SCREENSHOT) await page.screenshot({path:process.env.PORTAL_TEMPLATE_SCREENSHOT+'-desktop.png',fullPage:true,animations:'disabled'});
+    await page.setViewportSize({width:390,height:844});
+    await page.waitForFunction(()=>document.documentElement.scrollWidth<=innerWidth);
+    if (process.env.PORTAL_TEMPLATE_SCREENSHOT) await page.screenshot({path:process.env.PORTAL_TEMPLATE_SCREENSHOT+'-mobile.png',fullPage:true,animations:'disabled'});
     setCallTextModelOverride(null);
     assert.deepEqual(errors, []);
     await context.close();

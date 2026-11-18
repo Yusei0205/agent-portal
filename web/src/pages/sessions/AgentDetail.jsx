@@ -6,12 +6,13 @@ import { useEffect, useRef, useState } from 'react';
 import { href } from '../../lib/router.js';
 import { formatRelative } from '../../lib/util.js';
 
-const STATUS_TEXT = { running: 'Running', pending: 'Starting', done: 'Done', failed: 'Failed', stopped: 'Stopped', paused: 'Paused' };
+const STATUS_TEXT = { running: 'Running', pending: 'Starting', done: 'Done', failed: 'Failed', stopped: 'Stopped', paused: 'Paused', blocked: 'Needs a decision', cancelled: 'Cancelled' };
 
 export function agentStatusClass(status) {
   if (status === 'running' || status === 'pending') return 'is-running';
   if (status === 'failed') return 'is-failed';
-  return 'is-done';
+  if (status === 'blocked') return 'is-blocked';
+  return status === 'done' ? 'is-done' : 'is-inactive';
 }
 
 function formatDuration(ms) {

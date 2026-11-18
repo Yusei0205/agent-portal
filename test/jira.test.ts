@@ -807,6 +807,11 @@ describe('Jira integration', () => {
     assert.ok(r.text.includes(`attachments/${r.attachments[0].path} = trace.png`), 'the text says which file is which');
     const none = await jiraTicket(pid, null, 'please check RLP-1');
     assert.equal(none.attachments.length, 0, 'without a session nothing is saved');
+    const { prepareAutomationContext } = await import('../server/automations/run-context.ts');
+    const context = await prepareAutomationContext(pid, 'workflow-run-jira-context', undefined, 'https://example.atlassian.net/browse/RLP-1');
+    assert.equal(context.jira?.key, 'RLP-1');
+    assert.match(context.jira!.text, /<<<TICKET[\s\S]*TICKET>>>/);
+    assert.ok(context.attachments.some((file) => file.name === 'trace.png' && file.source === 'jira'));
   });
 
   test('issue key validation: wrong project or bad format rejected', async () => {

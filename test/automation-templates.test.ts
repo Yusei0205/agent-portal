@@ -12,7 +12,9 @@ describe('workflow templates', () => {
   const templates = automationTemplates();
 
   it('offers SDLC first, then development and testing', () => {
-    assert.deepEqual(templates.map((t) => t.id), ['sdlc', 'development', 'testing']);
+    assert.deepEqual(templates.slice(0, 3).map((t) => t.id), ['sdlc', 'development', 'testing']);
+    assert.equal(templates.length, 13);
+    assert.equal(new Set(templates.map((t) => t.id)).size, templates.length);
     for (const t of templates) assert.ok(t.name && t.description, `${t.id} has a name and a description`);
   });
 
@@ -71,7 +73,8 @@ describe('workflow templates through the API', () => {
   it('lists the templates and creates a workflow from the chosen one', async () => {
     const list = await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie });
     const ids = ((list.body as { templates: Array<{ id: string }> }).templates).map((t) => t.id);
-    assert.deepEqual(ids, ['sdlc', 'development', 'testing']);
+    assert.deepEqual(ids.slice(0, 3), ['sdlc', 'development', 'testing']);
+    assert.ok(ids.includes('bug-fix') && ids.includes('release-readiness'));
 
     const made = await fetchJson(baseUrl, `/api/projects/${projectId}/automations`, { cookie, body: { name: 'Dev flow', templateId: 'development' } });
     assert.equal(made.status, 201);

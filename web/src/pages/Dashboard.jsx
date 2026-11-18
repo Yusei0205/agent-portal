@@ -25,6 +25,7 @@ import { AiCore } from '../components/AiCore.jsx';
 import { sparkPath } from '../lib/sparkline.js';
 import { CostPanel } from '../components/CostPanel.jsx';
 import { DashboardDetails } from '../components/DashboardDetails.jsx';
+import { MissionControl } from '../components/MissionControl.jsx';
 import { usePageState } from '../lib/page-context.js';
 import { useActiveTemplate } from '../lib/theme.js';
 import { AttentionPanel, RunsTrendPanel } from '../components/DashboardInsights.jsx';
@@ -591,113 +592,7 @@ function RecentSessionsPanel({ sessions }) {
   );
 }
 
-// ── Active Session ────────────────────────────────────────────────────────────
-
-function ActiveSessionPanel({ activeSession, projectId: selectedProjectId }) {
-  if (!activeSession) {
-    return (
-      <aside className="panel db-active" aria-label="Active Session">
-        <h2 className="db-panel-title">
-          <Icon name="play" size={16} aria-hidden="true" />
-          Active Session
-        </h2>
-        <div className="empty-state db-empty-center db-monitor-empty">
-          <Icon name="clock" size={32} style={{ color: 'var(--ink-3)' }} />
-          <p className="muted" style={{ fontSize: '0.84rem' }}>No session running right now.</p>
-          <a className="btn btn-sm" href={selectedProjectId ? href(selectedProjectId, 'sessions') : '#/projects'}>{selectedProjectId ? 'Open sessions' : 'Choose a project'}</a>
-        </div>
-      </aside>
-    );
-  }
-
-  const { id, projectId, title, agent, steps = [] } = activeSession;
-
-  return (
-    <aside className="panel db-active" aria-label="Active Session">
-      <div className="db-panel-header">
-        <h2 className="db-panel-title" style={{ flex: 1 }}>
-          <Icon name="play" size={16} aria-hidden="true" />
-          Active Session
-        </h2>
-        <a href={href(projectId, 'sessions', id)} className="btn btn-sm" aria-label="View session details">
-          <Icon name="external" size={12} aria-hidden="true" />
-          Details
-        </a>
-      </div>
-      {title && (
-        <p className="muted db-active-title" title={title}>
-          {title.length > 50 ? title.slice(0, 49) + '…' : title}
-        </p>
-      )}
-      {agent && (
-        <div style={{ fontSize: '0.76rem', color: 'var(--ink-3)', marginBottom: 8 }}>
-          <Icon name="agents" size={11} aria-hidden="true" style={{ marginRight: 3 }} />
-          {agent}
-        </div>
-      )}
-      {steps.length === 0 ? (
-        <p className="muted" style={{ fontSize: '0.82rem' }}>Starting…</p>
-      ) : (
-        <ol className="db-timeline" aria-label="Session steps">
-          {steps.map((step, i) => {
-            const isCompleted = step.status === 'done' || step.status === 'completed';
-            const isActive    = step.status === 'running' || step.status === 'in-progress';
-            // fix 3: distinct states for failed/cancelled/blocked
-            const isFailed    = step.status === 'failed' || step.status === 'cancelled';
-            const isBlocked   = step.status === 'blocked';
-            const isPaused    = step.status === 'paused';
-            return (
-              <li
-                key={step.id || i}
-                className={`db-step${isCompleted ? ' db-step-done' : isActive ? ' db-step-active' : isFailed ? ' db-step-failed' : isBlocked ? ' db-step-blocked' : isPaused ? ' db-step-paused' : ' db-step-pending'}`}
-                aria-current={isActive ? 'step' : undefined}
-              >
-                <div className="db-step-marker" aria-hidden="true">
-                  {isCompleted && <Icon name="check" size={11} />}
-                  {isActive && <span className="db-step-spin" />}
-                  {isFailed && <Icon name="x" size={11} />}
-                  {isBlocked && <Icon name="warning" size={11} />}
-                </div>
-                <div className="db-step-body">
-                  <span className="db-step-label">{step.label}</span>
-                  {step.agent && step.agent !== agent && (
-                    <span style={{ fontSize: '0.72rem', color: 'var(--ink-3)', display: 'block' }}>
-                      {step.agent}
-                    </span>
-                  )}
-                  {isActive && step.startedAt && (
-                    <span style={{ fontSize: '0.7rem', color: 'var(--ink-3)' }}>
-                      {formatRelative(step.startedAt)}
-                    </span>
-                  )}
-                  {isFailed && (
-                    <span style={{ fontSize: '0.7rem', color: 'var(--danger)', display: 'block' }}>
-                      {step.status === 'cancelled' ? 'Cancelled' : 'Failed'}
-                    </span>
-                  )}
-                  {isBlocked && (
-                    <span style={{ fontSize: '0.7rem', color: 'var(--warn)', display: 'block' }}>
-                      Blocked
-                    </span>
-                  )}
-                  {isPaused && (
-                    <span style={{ fontSize: '0.7rem', color: 'var(--ink-3)', display: 'block' }}>
-                      Paused
-                    </span>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      )}
-    </aside>
-  );
-}
-
-// ── Agent Drill-down Modal ────────────────────────────────────────────────────
-
-// fix 4: accepts optional agentStats (node stats) to show at the top of the modal
+// Recorded agent history, shared by the network and performance table.
 function DrillModal({ agent, agentStats, runs, loading, error, onClose }) {
   // Trap focus inside modal on mount
   const modalRef = useRef(null);
@@ -1319,7 +1214,7 @@ export function Dashboard({ user, projects }) {
           </>
         ) : (
           <>
-            <ActiveSessionPanel activeSession={activeSession} projectId={projectFilter} />
+            <MissionControl activeSession={activeSession} recentSessions={recentSessions} projectId={projectFilter} animated={animated} />
             {data && <RunsTrendPanel daily={data.daily} period={period} onPeriodChange={setPeriod} />}
           </>
         )}

@@ -68,7 +68,7 @@ export function AgentGraph({ agents, workflowId, selectedId = null, onSelect, ro
   // An agent caught in a parent loop is not reachable from the session; give it a row of its own rather than lose it.
   for (const a of agents) if (!placed.has(a.id)) place(a.id);
 
-  const colors = { running: 'var(--accent)', pending: 'var(--ink-3)', done: 'var(--ok)', failed: 'var(--danger)', stopped: 'var(--ink-3)' };
+  const colors = { running: 'var(--accent)', pending: 'var(--ink-3)', done: 'var(--ok)', failed: 'var(--danger)', blocked: 'var(--warn)', paused: 'var(--ink-3)', stopped: 'var(--ink-3)' };
   // The name is a real button so keyboard users can select a node; clicking anywhere on the node does too.
   const pick = (id, label, children) => (
     <button type="button" className="agent-node-btn" aria-label={label} aria-pressed={id === selectedId} onClick={() => onSelect?.(id)}>{children}</button>

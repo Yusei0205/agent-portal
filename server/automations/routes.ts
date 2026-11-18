@@ -3,8 +3,10 @@ import { badRequest, forbidden, generateId, HttpError, notFound, now, str } from
 import { getProjectRow, getMemberRow } from '../project-access.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getAutomationsRepository } from '../repositories/automations.ts';
-import { parseGraph, sdlcTemplate } from './schema.ts';
+import { parseGraph } from './schema.ts';
 import { automationTemplates } from './templates.ts';
+import { projectAutomationTemplates, templateKey, type TemplateRecord } from './project-templates.ts';
+import { prepareAutomationContext } from './run-context.ts';
 import { generateWorkflow, DESCRIPTION_MAX } from './generate.ts';
 import { jiraConnected } from '../jira.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
@@ -79,17 +81,77 @@ export function registerAutomationRoutes(): void {
       if (['running', 'waiting'].includes(r.status)) s.active++;
       if (!s.lastStartedAt || r.started_at > s.lastStartedAt) { s.lastStartedAt = r.started_at; s.lastStatus = r.status; }
     }
-    sendJson(res, 200, { definitions, stats, template: sdlcTemplate(), templates: automationTemplates(), executionAvailable: !process.env.AWS_LAMBDA_FUNCTION_NAME || Boolean(process.env.PORTAL_AUTOMATION_STATE_MACHINE_ARN) });
+    const templates = await projectAutomationTemplates(project);
+    sendJson(res, 200, { definitions, stats, template: templates.find((t) => t.id === 'sdlc')!.graph, templates, executionAvailable: !process.env.AWS_LAMBDA_FUNCTION_NAME || Boolean(process.env.PORTAL_AUTOMATION_STATE_MACHINE_ARN) });
   });
   router.post(prefix, async (req, res) => {
     const project = await access(req, true); const body = req.body as Record<string, unknown>;
-    const chosen = body.templateId === undefined ? null : automationTemplates().find((t) => t.id === body.templateId);
+    const templates = await projectAutomationTemplates(project);
+    const chosen = body.templateId === undefined ? null : templates.find((t) => t.id === body.templateId);
     if (body.templateId !== undefined && !chosen) throw badRequest('Choose one of the listed templates');
-    const graph = parseGraph(body.graph ?? chosen?.graph ?? sdlcTemplate()); await checkRepos(project, graph.repoIds);
+    if (chosen && body.templateRevision !== undefined && body.templateRevision !== chosen.revision) throw conflict();
+    const graph = parseGraph(body.graph ?? chosen?.graph ?? templates.find((t) => t.id === 'sdlc')!.graph); await checkRepos(project, graph.repoIds);
     const wanted = name(body.name); await ensureFreshName(project, wanted, null);
-    const d: Definition = { id: generateId(), project_id: project, revision: 1, name: wanted, graph, published_version: null, created_by: req.user!.id, updated_at: now() };
+    const d: Definition = { id: generateId(), project_id: project, revision: 1, name: wanted, graph, published_version: null, created_by: req.user!.id, updated_at: now(), ...(chosen ? { template_id: chosen.id, template_source: chosen.source, template_revision: chosen.revision } : {}) };
     await (await getAutomationsRepository()).put(project, definitionKey(d.id), d, null);
     sendJson(res, 201, { definition: d });
+  });
+  // Reusable templates are separate records from runnable definitions and immutable published versions.
+  router.get(`${prefix}/templates`, async (req, res) => {
+    const project = await access(req);
+    sendJson(res, 200, { templates: await projectAutomationTemplates(project) });
+  });
+  router.post(`${prefix}/templates`, async (req, res) => {
+    const project = await access(req, true); const body = req.body as Record<string, unknown>;
+    const graph = parseGraph(body.graph, true); await checkRepos(project, graph.repoIds);
+    const templates = await projectAutomationTemplates(project);
+    const wanted = name(body.name);
+    if (templates.filter((t) => t.source === 'user').length >= 100) throw badRequest('A project supports up to 100 user templates');
+    if (templates.some((t) => t.source === 'user' && t.name.toLowerCase() === wanted.toLowerCase())) throw new HttpError(409, 'A user template with this name already exists');
+    const record: TemplateRecord = { id: `user-${generateId()}`, revision: 1, source: 'user', name: wanted,
+      description: str(body.description, 'Description', { max: 1000, optional: true }).trim(), graph, customized: false, baseVersion: 0, updated_at: now(), updated_by: req.user!.id };
+    await (await getAutomationsRepository()).put(project, templateKey(record.id), record, null);
+    const template = (await projectAutomationTemplates(project)).find((t) => t.id === record.id);
+    sendJson(res, 201, { template });
+  });
+  router.put(`${prefix}/templates/:tid`, async (req, res) => {
+    const project = await access(req, true); const body = req.body as Record<string, unknown>;
+    const templates = await projectAutomationTemplates(project);
+    const current = templates.find((t) => t.id === req.params.tid);
+    if (!current) throw notFound('Template not found');
+    if (body.revision !== current.revision) throw conflict();
+    if (body.source !== undefined && body.source !== current.source) throw badRequest('Template source cannot be changed');
+    const graph = parseGraph(body.graph, true); await checkRepos(project, graph.repoIds);
+    const wanted = name(body.name);
+    if (current.source === 'user' && templates.some((t) => t.source === 'user' && t.id !== current.id && t.name.toLowerCase() === wanted.toLowerCase())) throw new HttpError(409, 'A user template with this name already exists');
+    const record: TemplateRecord = { id: current.id, source: current.source, revision: current.revision + 1, name: wanted,
+      description: str(body.description, 'Description', { max: 1000, optional: true }).trim(), graph, customized: current.source === 'system',
+      baseVersion: current.source === 'system' ? current.baseVersion : 0, updated_at: now(), updated_by: req.user!.id };
+    if (!await (await getAutomationsRepository()).put(project, templateKey(record.id), record, current.revision || null)) throw conflict();
+    sendJson(res, 200, { template: (await projectAutomationTemplates(project)).find((t) => t.id === record.id) });
+  });
+  router.post(`${prefix}/templates/:tid/reset`, async (req, res) => {
+    const project = await access(req, true); const body = req.body as Record<string, unknown>;
+    const current = (await projectAutomationTemplates(project)).find((t) => t.id === req.params.tid);
+    if (!current) throw notFound('Template not found');
+    if (current.source !== 'system') throw badRequest('Only system templates have a default to restore');
+    if (body.revision !== current.revision) throw conflict();
+    const shipped = automationTemplates().find((t) => t.id === current.id)!;
+    // Keep a revisioned reset marker so a stale editor cannot recreate an override after reset.
+    const record: TemplateRecord = { id: current.id, source: 'system', revision: current.revision + 1, name: shipped.name,
+      description: shipped.description, graph: shipped.graph, customized: false, baseVersion: shipped.version || 1, updated_at: now(), updated_by: req.user!.id };
+    if (!await (await getAutomationsRepository()).put(project, templateKey(record.id), record, current.revision || null)) throw conflict();
+    sendJson(res, 200, { template: (await projectAutomationTemplates(project)).find((t) => t.id === record.id) });
+  });
+  router.delete(`${prefix}/templates/:tid`, async (req, res) => {
+    const project = await access(req, true); const body = req.body as Record<string, unknown>;
+    const repo = await getAutomationsRepository();
+    const current = await repo.get<TemplateRecord>(project, templateKey(req.params.tid));
+    if (automationTemplates().some((t) => t.id === req.params.tid)) throw badRequest('System templates cannot be deleted; reset the project override instead');
+    if (!current || current.deleted_at || current.source !== 'user') throw notFound('Template not found');
+    if (body?.revision !== current.revision) throw conflict();
+    if (!await repo.put(project, templateKey(current.id), { ...current, revision: current.revision + 1, deleted_at: now(), updated_at: now(), updated_by: req.user!.id }, current.revision)) throw conflict();
+    sendJson(res, 200, { ok: true });
   });
   // Draft a workflow from a plain-language description with AI. Nothing is saved: the page shows the draft, and
   // creating it goes through POST above like any other workflow. `previous` + `changes` refine an earlier draft.
@@ -176,11 +238,14 @@ export function registerAutomationRoutes(): void {
       sendJson(res, 200, { run: old }); return;
     }
     const options = await runOptions(req, project, body.options);
+    const input = str(body.input, 'Input', { max: 2000, optional: true });
+    const sessionId = generateId();
+    const context = await prepareAutomationContext(project, sessionId, body.attachmentIds, str(body.jiraIssue, 'Jira issue', { max: 500, optional: true }));
     const timestamp = now();
     const run: AutomationRun = {
       id, definition_id: d.id, version: version.version, project_id: project, created_by: req.user!.id,
       revision: 1, status: 'running', cursor: version.graph.nodes.find((n) => n.kind === 'start')!.id,
-      input: str(body.input, 'Input', { max: 2000, optional: true }), session_id: generateId(), attempts: [], visits: {}, lastPassed: true, options,
+      input, session_id: sessionId, attempts: [], visits: {}, lastPassed: true, options, context,
       started_at: timestamp, updated_at: timestamp, error: null, leaseUntil: 0, cancelRequested: false,
     };
     if (!await repo.put(project, runKey(id), run, null)) throw conflict();

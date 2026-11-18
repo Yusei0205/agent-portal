@@ -30,3 +30,28 @@
 .automation-ai-notes h3{margin:0 0 4px;font-size:.88rem}
 .automation-ai-notes ul{margin:0;padding-left:18px;font-size:.85rem;list-style:disc}
 .automation-template-pick{display:grid;gap:6px;max-width:640px}.automation-template-pick label{display:grid;gap:4px}
+.automation-template-search{display:grid;gap:7px;max-width:480px;font-size:.82rem}
+.automation-template-section{display:grid;gap:16px;margin-top:16px}
+.automation-template-section>header h2{margin:0 0 6px;font-size:1.05rem}
+.automation-template-section>header p{margin:0;font-size:.82rem;line-height:1.6}
+.automation-template-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:14px}
+.automation-template-card{display:flex;flex-direction:column;gap:12px;min-width:0;padding:20px;border:1px solid var(--line);border-radius:12px;background-color:var(--panel)}
+.automation-template-badges{display:flex;flex-wrap:wrap;gap:6px}
+.automation-template-card h3{font-size:.95rem;line-height:1.5;margin:0}
+.automation-template-card p{font-size:.8rem;line-height:1.65;color:var(--ink-2);margin:0}
+.automation-template-card .automation-template-input{font-size:.73rem;color:var(--ink-3)}
+.automation-template-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:auto;padding-top:5px}
+.automation-template-empty{padding:20px;border:1px dashed var(--line);border-radius:9px;color:var(--ink-3);font-size:.82rem}
+.automation-template-preview{border-top:1px solid var(--line);padding-top:20px}
+.automation-template-note{padding:12px 16px;background:var(--accent-wash);border-left:2px solid var(--accent);font-size:.82rem;line-height:1.7}
+.automation-template-copy{display:grid;gap:12px;padding:20px;border:1px solid var(--line);border-radius:10px}
+.automation-template-copy h2{font-size:1rem;margin:0}.automation-template-copy label{display:grid;gap:6px;max-width:600px}
+.automation-run-context{display:grid;gap:12px;padding:16px;border:1px solid var(--line);border-radius:10px;background-color:var(--panel)}
+.automation-run-context>label{display:grid;gap:7px;font-size:.82rem}.automation-run-context>p{margin:0;line-height:1.6}
+.automation-run-context.is-drop-target{outline:2px solid var(--accent);outline-offset:2px}
+.automation-run-context-summary{padding:16px;border:1px solid var(--line);border-radius:10px;font-size:.8rem;overflow-wrap:anywhere}
+.automation-run-context-summary h3{font-size:.9rem;margin:0 0 10px}.automation-run-context-summary ul{padding-left:20px}
+.automation-jira-context{display:grid;gap:10px;padding:12px;border:1px solid var(--line);border-radius:8px;min-width:0}
+.automation-jira-context legend{padding:0 5px;font-size:.82rem}
+.automation-jira-context-help{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}.automation-jira-context-help>p{flex:1;min-width:min(100%,220px);margin:0;line-height:1.6}
+.automation-jira-context .jira-ticket-card{flex-wrap:wrap;min-width:0}.automation-jira-context .jira-ticket-card-summary{overflow-wrap:anywhere;min-width:0}
