@@ -33,19 +33,13 @@
   padding-top: 4px;
 }
 
-/* ─ Tabs row with inline description ─ */
+/* Configuration tabs */
 .config-tabs-row {
   display: flex;
   align-items: center;
   gap: 16px;
   flex-wrap: wrap;
   margin-bottom: 14px;
-}
-.config-tab-desc {
-  font-size: 0.83rem;
-  color: var(--ink-3);
-  flex: 1;
-  min-width: 0;
 }
 
 /* ─ Team-default status card ─ */
@@ -379,9 +373,14 @@
 .config-tabs-row { min-width: 0; max-width: 100%; }
 .config-tabs-row .tab-bar {
   max-width: 100%;
+  min-width: 0;
   overflow-x: auto;
-  scrollbar-width: thin;
+  overflow-y: hidden;
+  padding-bottom: 1px;
+  margin-bottom: 0;
+  scrollbar-width: none;
 }
+.config-tabs-row .tab-bar::-webkit-scrollbar { display: none; }
 .config-tabs-row .tab-btn {
   white-space: nowrap;
   flex-shrink: 0;

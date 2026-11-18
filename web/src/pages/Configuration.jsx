@@ -248,8 +248,6 @@ export function Configuration({ user, tab: wantedTab }) {
   const isSignIns = tab === SIGN_INS.id;
   const [treeRefreshBump, setTreeRefreshBump] = useState(0);
 
-  const activeTabDef = TABS.find((t) => t.id === tab);
-
   const handleImported = useCallback(() => {
     setTreeRefreshBump((k) => k + 1);
   }, []);
@@ -275,7 +273,7 @@ export function Configuration({ user, tab: wantedTab }) {
         {!isSignIns && <ExportZipButton folder={tab} />}
       </PageHeader>
 
-      {/* Tab row with inline description */}
+      {/* Keep guidance in the selected panel, rather than repeating it beside the tabs. */}
       <div className="config-tabs-row">
         <div className="tab-bar" role="tablist" aria-label="Configuration folders">
           {TABS.map((t) => (
@@ -293,11 +291,6 @@ export function Configuration({ user, tab: wantedTab }) {
             </button>
           ))}
         </div>
-        {activeTabDef && (
-          <p className="config-tab-desc" aria-live="polite">
-            {activeTabDef.description}
-          </p>
-        )}
       </div>
 
       <div
