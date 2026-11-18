@@ -8,6 +8,26 @@ Reference: [AI Agent Portal Design](https://chatgpt.com/share/6afd9718-b1bc-83ec
 
 ## Product direction
 
+### Additional visual references: operations overview and agent workforce
+
+The two screenshots supplied on 2026-11-19 refine the direction below. These are proposed improvements, not shipped UI. Combine the overview's execution timeline and actionable panels with the workforce's consistent agent cards and grouped navigation. Keep the portal's existing theme choices and real project records.
+
+| Priority | Area | Proposed behavior | Existing foundation / dependency |
+| --- | --- | --- | --- |
+| P0 | Overview | Selected-session timeline with one row per agent, recorded execution spans, current-time marker, status legend and inspect-on-select. Offer graph/list alternatives and an accessible mobile list. | Extend AgentTimeline and Mission Control. Missing start/end timestamps must remain visibly unknown. Cross-session timelines require a bounded aggregation API. |
+| P0 | Next actions | Compact queue of pending approvals, failed work and setup gaps; each action opens its source record. Move delivered artifacts alongside active work. | AttentionPanel, Inbox, Mission Control and output previews. Use existing permissions and actual unresolved states. |
+| P0 | Workforce | Searchable project agent cards with role, known skills, effective model and a separate active-run count. Align title, description, chips and footer across cards, including long and empty values. | Audit configured-agent and runtime APIs before joining records. Configured availability and session execution status are separate facts. |
+| P1 | Agent inspector | Select a card to inspect instructions, permitted tools, recent runs and outputs; configuration changes explain their scope and effective time. | Reuse agent configuration and AgentDetail; runtime-only agents link to their owning session. |
+| P1 | Navigation | Group work pages and platform settings; keep project context visible, preserve bookmarks, and progressively expose traces/tools in Developer experience. | Rail, router and the existing experience-preference proposal. Avoid adding duplicate icon rails. |
+| P1 | Usage | Show usage by agent/workflow with period, units and attribution. Link amounts to supporting runs. | Dashboard usage records; show unavailable attribution explicitly. Do not invent dollar costs from tokens or subscriptions. |
+| P2 | Contextual assistant | Suggested questions open a scoped portal session with the selected run/project context and a preview of attached evidence. | Requires a defined context contract; suggestions must not imply unsupported system diagnosis. |
+
+Visual rules: use calm surfaces, generous spacing, one primary accent and semantic status colors. Keep pointer glow subtle on selectable cards, animate recorded state changes and reveal artifacts once. Share card dimensions and footer alignment across themes. Avoid continuous decorative motion in timelines, editors and logs. Honor reduced motion and keyboard focus.
+
+User decision: reuse the existing Agent Setup tab as the Workforce directory. Its default view becomes the searchable card grid; Create agent and Edit configuration reuse the existing setup forms. Card selection opens runtime inspection where records exist, with explicit links to the owning session. Preserve the existing route, access checks and configuration behavior. Do not introduce a separate Workforce navigation item or duplicate agent storage. The navigation label can remain Agent Setup during the transition.
+
+Delivery order: first Workforce cards and their inspector; next the selected-session execution timeline and next-action layout; then navigation/experience controls and attributed usage. Review desktop/mobile, empty/long-content states and real running/paused/failed data at each step. These additions do not replace the current release's validation and deployment work.
+
 Make the core journey clear: define an outcome, select project context, run agents, handle decisions, inspect deliverables, and verify the result. Preserve the working Code/Run/Review workspace and existing routes. Deliver the visual identity through consistent hierarchy, restrained accents, readable technical detail, and animations tied to actual execution events.
 
 ## Existing foundation and improvements

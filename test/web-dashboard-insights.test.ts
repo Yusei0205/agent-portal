@@ -119,6 +119,16 @@ createRoot(document.getElementById('root')).render(<MotionRoot><Dashboard user={
     assert.doesNotMatch(costText, /\$0\.00 total/);
 
     // Supporting text differs, but values and action baselines stay aligned.
+    // Measure settled layout: staggered entrances legitimately have different
+    // transforms while running, especially on faster CI browsers.
+    const settleLayout = () => page.evaluate(async () => {
+      await document.fonts.ready;
+      await Promise.all(Array.from(document.querySelectorAll('.db-kpi-card, .db-main-grid > .panel, .db-bottom-grid > .panel'))
+        .flatMap((element) => element.getAnimations())
+        .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+        .map((animation) => animation.finished.catch(() => {})));
+    });
+    await settleLayout();
     const geometry = await page.locator('.db-kpi-card').evaluateAll((cards) => cards.map((card) => ({
       bottom: card.getBoundingClientRect().bottom,
       value: card.querySelector('.kpi-value')!.getBoundingClientRect().top,
@@ -157,6 +167,7 @@ createRoot(document.getElementById('root')).render(<MotionRoot><Dashboard user={
     await page.route('**/api/insights?*', (route) => route.fulfill({json:{...insights,totalRuns:0}}));
     await page.reload();
     await page.locator('.db-attn.is-clear').waitFor();
+    await settleLayout();
     const clearHeight = await page.locator('.db-attn').evaluate((element) => element.getBoundingClientRect().height);
     assert.ok(clearHeight < 80, `the all-clear strip should be compact, got ${clearHeight}px`);
     const emptyBottoms = await page.locator('.db-main-grid > .panel').evaluateAll((panels) => panels.map((panel) => panel.getBoundingClientRect().bottom));
