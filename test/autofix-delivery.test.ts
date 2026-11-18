@@ -113,6 +113,8 @@ let treeTruncated = false;
 /** The answer for the pushed branch's ref, and for the base's. */
 let refStatus = 200;
 let baseRefStatus = 200;
+/** What GitHub answers for GET /pulls/<n> (null: the default reply, which has no state). */
+let pullState: 'open' | 'closed' | null = null;
 const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status, headers: { 'content-type': 'application/json' } });
 
 async function waitFor(cond: () => boolean | Promise<boolean>, ms = 3000): Promise<void> {
@@ -143,6 +145,7 @@ beforeEach(() => {
   treeTruncated = false;
   refStatus = 200;
   baseRefStatus = 200;
+  pullState = null;
   pushReply = (p) => [{ type: 'repo-pushed', repo: p.repo, branch: p.branch, sha: SHA }];
   _setAgentCoreInvokerOverride(async function* (_arn, _sid, payload) {
     finalizeCalls.push(payload);
@@ -157,6 +160,7 @@ beforeEach(() => {
       if (/\/compare\//.test(String(url))) return compareReply();
       if (init?.method === 'DELETE') return new Response(null, { status: 204 });
       const u = String(url);
+      if (pullState && /\/pulls\/\d+$/.test(u) && (init?.method ?? 'GET') === 'GET') return json({ state: pullState });
       let m: RegExpExecArray | null;
       if ((m = /\/git\/ref\/heads\/(.+)$/.exec(u))) {
         if (m[1] === 'main' ? baseRefStatus !== 200 : refStatus !== 200) return json({ message: 'Not Found' }, m[1] === 'main' ? baseRefStatus : refStatus);
@@ -269,6 +273,51 @@ describe('the gate in the session PR flow', () => {
     assert.equal(f.pr_number, 42);
     assert.equal(f.pr_url, 'https://github.com/acme/shop/pull/42');
     assert.equal(f.fix_branch, branch);
+  });
+
+  it('opening the PR records its branch and the pushed commit on the finding', async () => {
+    const s = await makeFix();
+    await handleRepoChanges(ctxOf(s), [clean]);
+    const f = await finding(s);
+    assert.equal(f.status, 'pr_open');
+    assert.equal(f.pr_branch, fixBranchName('tests', f.fingerprint));
+    assert.equal(f.pr_head_sha, SHA);
+  });
+
+  it('a retry after red CI pushes to the open PR\'s branch (no -2 branch) and opens no second PR', async () => {
+    const s = await makeFix();
+    const prBranch = 'autofix/tests-abcdef01';
+    await repo().transition(s.findingId, ['fixing'], {
+      status: 'fixing', pr_branch: prBranch, pr_number: 42, pr_url: 'https://github.com/acme/shop/pull/42', pr_head_sha: 'f'.repeat(40), attempts: 1,
+    });
+    _setSessionPrDeps({ listBranches: async () => ['main', prBranch] });
+    pullState = 'open';
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls.length, 1);
+    assert.equal(finalizeCalls[0].branch, prBranch);
+    assert.ok(Array.isArray(finalizeCalls[0].denyPaths), 'still the checked auto-fix push');
+    assert.equal(ghCalls.filter((c) => c.method === 'POST' && /\/pulls$/.test(c.url)).length, 0);
+    const f = await finding(s);
+    assert.equal(f.status, 'pr_open');
+    assert.equal(f.pr_number, 42);
+    assert.equal(f.fix_branch, prBranch);
+    assert.equal(f.pr_branch, prBranch);
+    assert.equal(f.pr_head_sha, SHA);
+  });
+
+  it('a retry whose PR was closed meanwhile opens a new PR from the same branch', async () => {
+    const s = await makeFix();
+    const prBranch = 'autofix/tests-abcdef02';
+    await repo().transition(s.findingId, ['fixing'], { status: 'fixing', pr_branch: prBranch, pr_number: 41, pr_url: 'https://github.com/acme/shop/pull/41' });
+    _setSessionPrDeps({ listBranches: async () => ['main', prBranch] });
+    pullState = 'closed';
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls[0].branch, prBranch);
+    const create = ghCalls.find((c) => c.method === 'POST' && /\/pulls$/.test(c.url))!;
+    assert.equal(create.body.head, prBranch);
+    const f = await finding(s);
+    assert.equal(f.status, 'pr_open');
+    assert.equal(f.pr_number, 42);
   });
 
   it('by default (AUTOFIX_ALLOW_UNATTENDED_PUSH not set) draft_pr with a clean diff asks a person instead of pushing', async () => {

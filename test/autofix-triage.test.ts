@@ -9,7 +9,7 @@ const policy = (o: Partial<AutofixPolicy> = {}): AutofixPolicy => ({ ...JSON.par
 const finding = (o: Partial<AutofixFinding> = {}): AutofixFinding => ({
   id: 'f1', project_id: 'p1', source: 'ci' as AutofixFinding['source'], kind: 'tests', fingerprint: 'fp', severity: 'low', evidence: '',
   status: 'new' as AutofixFinding['status'], repo_id: null, branch: 'main', commit_sha: null, workflow_id: null, fix_branch: null, pr_number: null,
-  pr_url: null, attempts: 0, occurrences: 1, cost_usd: 0, cooldown_until: null, created_at: '', updated_at: '', ...o,
+  pr_url: null, attempts: 0, occurrences: 1, cost_usd: 0, cooldown_until: null, pr_branch: null, pr_head_sha: null, previous_attempt: null, created_at: '', updated_at: '', ...o,
 });
 const ctx = (o: Partial<TriageContext> = {}): TriageContext => ({ paused: false, openPrCount: 0, costTodayUsd: 0, defaultBranch: 'main', portalPrBranches: ['portal/pr-1'], now: NOW, ...o });
 

@@ -32,11 +32,20 @@ import { getAutofixPolicy, isPaused } from './policy.ts';
 import type { AutofixPolicy } from './policy.ts';
 import { triage } from './triage.ts';
 import type { TriageContext } from './triage.ts';
+import { AUTOFIX_BRANCH_PREFIX, classifyKind } from './github-events.ts';
+import type { GithubEventResult } from './github-events.ts';
+import { scrubEvidence } from './scrub.ts';
+import { listBranchFiles, scrubSecrets } from '../pull-requests.ts';
+import type { Repository } from '../repos.ts';
 
 /** The built-in spec that fixes each kind of finding. Sources without one (added in Task 12) are left `new`. */
 export const AUTOFIX_SPEC_BY_SOURCE: Partial<Record<FindingSource, string>> = { ci_failed: 'builtin-autofix-ci' };
 
 const EVIDENCE_IN_GOAL = 4_000;
+/** The previous_attempt goal variable is at most this long; the stored account of the attempt leaves room for the branch note. */
+const PREVIOUS_ATTEMPT_MAX = 4_000;
+const PREVIOUS_ATTEMPT_STORED_MAX = 3_500;
+const PREVIOUS_FILES_SHOWN = 40;
 const PROCESS_NEW_BATCH = 20;
 /** At most this many projects are looked at in one sweep after a session ends. */
 const SWEEP_PROJECTS = 100;
@@ -187,6 +196,7 @@ async function processOne(findingId: string): Promise<Outcome> {
     branch: f.branch ?? 'the default branch',
     evidence: f.evidence.length > EVIDENCE_IN_GOAL ? f.evidence.slice(-EVIDENCE_IN_GOAL) : f.evidence,
     verify_command: policy.verify.command,
+    previous_attempt: previousAttemptVar(f),
   };
   let result: FireResult;
   try {
@@ -322,6 +332,120 @@ export async function onFixSessionEnded(workflowId: string, opts: { cancelled?: 
     }
   }
   await processNewEverywhere(f.project_id);
+}
+
+// ── Closing the loop: CI results and PR closings on the fix branch ──────────
+
+type CiResult = Extract<GithubEventResult, { type: 'ci_result' }>;
+type PrClosed = Extract<GithubEventResult, { type: 'pr_closed' }>;
+
+type FilesLister = (f: AutofixFinding) => Promise<string[] | null>;
+
+/** The files the fix branch changes against the repository's default branch, from GitHub (null when they cannot be read). */
+async function listFixFiles(f: AutofixFinding): Promise<string[] | null> {
+  if (!f.fix_branch || !f.repo_id) return null;
+  const rec = await getGitReposRepository().getById(f.repo_id);
+  if (!rec) return null;
+  const r = await listBranchFiles(rec as unknown as Repository, rec.default_branch || 'main', f.fix_branch);
+  return r.ok ? r.files.map((x) => x.path) : null;
+}
+let previousFiles: FilesLister = listFixFiles;
+/** Test seam: replace the lookup of the files the previous fix changed. Call with null to restore it. */
+export function _setPreviousFilesLister(fn: FilesLister | null): void { previousFiles = fn ?? listFixFiles; }
+
+/** One line, no control characters, credentials removed: for a value from a webhook or the host inside the goal. */
+const oneLine = (v: string, max: number): string => scrubSecrets(String(v)).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max);
+
+/** The account of a fix whose PR failed CI, stored on the finding for the retry's goal: header first, then the CI output's tail. */
+function describeFailedFix(f: AutofixFinding, r: CiResult, evidence: string, files: string[] | null): string {
+  const head: string[] = [];
+  const where = [f.pr_number != null ? `pull request #${f.pr_number}` : 'pull request', f.fix_branch ? `branch ${oneLine(f.fix_branch, 120)}` : '',
+    r.headSha ? `commit ${oneLine(r.headSha, 12)}` : ''].filter(Boolean).join(', ');
+  head.push(`The previous fix (${where}) failed CI${r.workflowName ? ` in ${oneLine(r.workflowName, 80)}` : ''}.`);
+  if (files && files.length) {
+    const shown = files.slice(0, PREVIOUS_FILES_SHOWN).map((p) => oneLine(p, 200));
+    head.push(`Files the previous fix changed: ${shown.join(', ')}${files.length > shown.length ? ` (and ${files.length - shown.length} more)` : ''}`);
+  } else {
+    head.push('Files the previous fix changed: unknown (see the branch).');
+  }
+  const header = scrubEvidence(head.join('\n'), 2_000);
+  const room = PREVIOUS_ATTEMPT_STORED_MAX - header.length - 60;
+  const out = evidence.trim() && room > 200
+    ? `${header}\nCI output on the fix branch (log tail, secrets removed):\n${scrubEvidence(evidence, room)}`
+    : `${header}\nNo CI output could be read for the failing run.`;
+  return out.slice(0, PREVIOUS_ATTEMPT_STORED_MAX);
+}
+
+/** The previous_attempt goal variable: how to continue on the open PR's branch, and what the previous attempt did. */
+function previousAttemptVar(f: AutofixFinding): string {
+  const parts: string[] = [];
+  if (f.pr_branch) {
+    const b = oneLine(f.pr_branch, 200);
+    parts.push(`This is a retry on the open pull request${f.pr_number != null ? ` #${f.pr_number}` : ''}. Build on the previous fix so that pull request is updated: before changing anything, run \`git checkout -B ${b} origin/${b}\` and keep its commits.`);
+  }
+  if (f.previous_attempt) parts.push(f.previous_attempt);
+  return parts.length ? parts.join('\n').slice(0, PREVIOUS_ATTEMPT_MAX) : 'None: this is the first attempt.';
+}
+
+/**
+ * The finding whose open PR a CI result or PR closing is about: its fix branch (never a branch outside autofix/), and only while it is
+ * pr_open. Anything else (unknown branch, a finding already resolved, dismissed or being retried) is null, so late and duplicate
+ * events change nothing.
+ */
+async function openPrFinding(projectId: string, branch: string): Promise<AutofixFinding | null> {
+  if (!branch.startsWith(AUTOFIX_BRANCH_PREFIX)) return null;
+  const f = await getAutofixFindingsRepository().getByFixBranch(projectId, branch);
+  return f && f.status === 'pr_open' ? f : null;
+}
+
+/**
+ * A CI run on a fix branch finished. Applies only to a pr_open finding, a run for the commit the portal pushed last (when known), and,
+ * for a CI finding, a workflow of the finding's own kind (a green lint run says nothing about a tests fix).
+ *  - success: resolved;
+ *  - failure: one attempt more; at the attempt limit, needs_human ('attempt limit reached') with a 'blocked' Inbox item; below it, the
+ *    finding goes back to `new` (no cooldown) with an account of the failed fix, and through the normal pipeline (triage, limits, kill
+ *    switch, mode), which starts one retry on the same branch. `opts.evidence` reads the failing run's log (only for a failure that
+ *    applies).
+ */
+export async function applyCiResult(projectId: string, r: CiResult, opts: { evidence?: () => Promise<string> } = {}): Promise<void> {
+  const f = await openPrFinding(projectId, r.branch);
+  if (!f) return;
+  if (f.source === 'ci_failed' && r.workflowName && classifyKind(r.workflowName) !== f.kind) return;
+  if (f.pr_head_sha && r.headSha && r.headSha.toLowerCase() !== f.pr_head_sha.toLowerCase()) return; // a stale run
+  const repo = getAutofixFindingsRepository();
+  if (r.conclusion === 'success') {
+    await repo.transition(f.id, ['pr_open'], { status: 'resolved', previous_attempt: null });
+    return;
+  }
+  const policy = await getAutofixPolicy(f.project_id);
+  const attempts = f.attempts + 1;
+  if (attempts >= policy.limits.max_attempts) {
+    await toNeedsHuman(f, ['pr_open'], 'attempt limit reached', { attempts });
+    return;
+  }
+  const evidence = opts.evidence ? await opts.evidence().catch(() => '') : '';
+  const files = await previousFiles(f).catch(() => null);
+  const moved = await repo.transition(f.id, ['pr_open'], {
+    status: 'new', attempts, cooldown_until: null, previous_attempt: describeFailedFix(f, r, evidence, files),
+    // The retry pushes to the PR's branch (pr_branch); fix_branch is set again when its delivery begins.
+    pr_branch: f.pr_branch ?? f.fix_branch, fix_branch: null,
+  });
+  if (moved) await maybeProcess(f.id);
+}
+
+/** The fix's PR was closed: merged resolves the finding; closed without merging dismisses it for the cooldown. Only from pr_open. */
+export async function applyPrClosed(projectId: string, r: PrClosed): Promise<void> {
+  const f = await openPrFinding(projectId, r.branch);
+  if (!f) return;
+  if (f.pr_number != null && f.pr_number !== r.prNumber) return; // another PR from the same branch name
+  const done = { pr_branch: null, pr_head_sha: null, previous_attempt: null };
+  if (r.merged) {
+    await getAutofixFindingsRepository().transition(f.id, ['pr_open'], { status: 'resolved', ...done });
+    return;
+  }
+  const policy = await getAutofixPolicy(f.project_id);
+  const cooldown_until = new Date(Date.now() + policy.limits.cooldown_minutes * 60_000).toISOString();
+  await getAutofixFindingsRepository().transition(f.id, ['pr_open'], { status: 'dismissed', cooldown_until, ...done });
 }
 
 /** The run lifecycle hook: acts when a fix session has ended, not after an iteration the loop goes on from. */

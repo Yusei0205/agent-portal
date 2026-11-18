@@ -1,12 +1,16 @@
-/** GitHub webhook endpoint for auto-fix: verify, answer 202, then fetch evidence and record in the background. */
+/**
+ * GitHub webhook endpoint for auto-fix: verify, answer 202, then work in the background: a failure becomes a finding (intake), and a
+ * CI result or PR closing on an auto-fix branch moves that fix's finding on (pipeline.ts applyCiResult / applyPrClosed).
+ */
 
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { readWebhookBody, webhookSignatureOk } from '../loop-triggers.ts';
 import { getSecret } from '../secrets.ts';
-import { parseGithubEvent } from './github-events.ts';
+import { AUTOFIX_BRANCH_PREFIX, classifyKind, parseGithubEvent } from './github-events.ts';
 import type { FindingCandidate } from './github-events.ts';
 import { fetchCiEvidence, findProjectGithubRepo, recordFinding } from './intake.ts';
+import { applyCiResult, applyPrClosed } from './pipeline.ts';
 
 export const webhookSecretName = (projectId: string): string => `autofix.webhook.${projectId}`;
 
@@ -47,7 +51,10 @@ export function registerAutofixWebhook(): void {
     }
     const event = String(req.headers['x-github-event'] ?? '');
     const parsed = parseGithubEvent(event, req.body);
-    if (parsed.type === 'ignore') { sendJson(res, 202, { ok: true, ignored: true }); return; }
+    // CI results and PR closings matter only on auto-fix branches; any other branch's are acknowledged and touch nothing.
+    if (parsed.type === 'ignore' || (parsed.type !== 'finding' && !parsed.branch.startsWith(AUTOFIX_BRANCH_PREFIX))) {
+      sendJson(res, 202, { ok: true, ignored: true }); return;
+    }
 
     const fullName = parsed.type === 'finding' ? parsed.candidate.repoFullName : parsed.repoFullName;
     if (!await findProjectGithubRepo(projectId, fullName)) {
@@ -60,7 +67,20 @@ export function registerAutofixWebhook(): void {
         await recordFinding(projectId, candidate, evidence);
       });
     }
-    // ci_result and pr_closed are acknowledged here; the fix loop consumes them in later tasks.
+    if (parsed.type === 'ci_result') {
+      const r = parsed;
+      // The failing run's log is read only when the result applies to an open fix PR (applyCiResult decides).
+      const candidate: FindingCandidate = {
+        repoFullName: r.repoFullName, branch: r.branch, headSha: r.headSha, source: 'ci_failed',
+        kind: classifyKind(r.workflowName ?? ''), severity: 'medium', errorText: `${r.workflowName ?? 'CI'} failure`,
+        ...(r.runId !== undefined ? { runId: r.runId } : {}),
+      };
+      runInBackground(() => applyCiResult(projectId, r, { evidence: () => evidenceFetcher(candidate, projectId) }));
+    }
+    if (parsed.type === 'pr_closed') {
+      const r = parsed;
+      runInBackground(() => applyPrClosed(projectId, r));
+    }
     sendJson(res, 202, { ok: true });
   });
 }

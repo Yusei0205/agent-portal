@@ -48,6 +48,9 @@ function toFinding(i: Item): AutofixFinding {
     occurrences: getNumber(i, 'occurrences'),
     cost_usd: getNumber(i, 'cost_usd'),
     cooldown_until: getString(i, 'cooldown_until'),
+    pr_branch: getString(i, 'pr_branch'),
+    pr_head_sha: getString(i, 'pr_head_sha'),
+    previous_attempt: getString(i, 'previous_attempt'),
     created_at: getString(i, 'created_at') ?? '',
     updated_at: getString(i, 'updated_at') ?? '',
   };
@@ -145,7 +148,8 @@ export class DynamoDbAutofixFindingsRepository implements AutofixFindingsReposit
         id: generateId(), project_id: i.project_id, source: i.source, kind: i.kind, fingerprint: i.fingerprint,
         severity: i.severity, evidence: i.evidence, status: 'new', repo_id: i.repo_id, branch: i.branch,
         commit_sha: i.commit_sha, workflow_id: null, fix_branch: null, pr_number: null, pr_url: null, attempts: 0,
-        occurrences: 1, cost_usd: 0, cooldown_until: null, created_at: ts, updated_at: ts,
+        occurrences: 1, cost_usd: 0, cooldown_until: null, pr_branch: null, pr_head_sha: null, previous_attempt: null,
+        created_at: ts, updated_at: ts,
       };
       try {
         await this.client.send(new TransactWriteItemsCommand({

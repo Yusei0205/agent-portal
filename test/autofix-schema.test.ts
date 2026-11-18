@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { openDb, closeDb, isDbOpen, SCHEMA_VERSION } from '../server/db.ts';
+import { openDb, closeDb, isDbOpen, SCHEMA_VERSION, AUTOFIX_CI_GOAL } from '../server/db.ts';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-afschema-'));
 const file = path.join(dir, 'pre-branch.db');
@@ -42,6 +42,32 @@ describe('auto-fix schema on an existing database', () => {
     // Opening again changes nothing (the steps are idempotent).
     db = openDb(file);
     assert.equal(db.prepare("SELECT id FROM p10_loop_specs WHERE id = 'builtin-autofix-ci'").all().length, 1);
+    closeDb();
+  });
+
+  it('the built-in goal template is upgraded only while it is the unmodified original, and the finding columns are added', () => {
+    const upgradeFile = path.join(dir, 'upgrade.db');
+    let db = openDb(upgradeFile);
+    const goal = () => (db.prepare("SELECT goal_template FROM p10_loop_specs WHERE id = 'builtin-autofix-ci'").get() as { goal_template: string }).goal_template;
+    assert.equal(goal(), AUTOFIX_CI_GOAL);
+    assert.match(goal(), /\{\{previous_attempt\}\}/);
+    // A database seeded by the first version: the original template, and the table without the later columns.
+    const original = AUTOFIX_CI_GOAL.replace('Previous attempt (none if this is the first):\n{{previous_attempt}}\n\n', '');
+    assert.notEqual(original, AUTOFIX_CI_GOAL);
+    db.prepare("UPDATE p10_loop_specs SET goal_template = ? WHERE id = 'builtin-autofix-ci'").run(original);
+    db.exec('ALTER TABLE autofix_findings DROP COLUMN previous_attempt; ALTER TABLE autofix_findings DROP COLUMN pr_head_sha; ALTER TABLE autofix_findings DROP COLUMN pr_branch;');
+    closeDb();
+
+    db = openDb(upgradeFile);
+    assert.equal(goal(), AUTOFIX_CI_GOAL, 'the unmodified original is upgraded');
+    const cols = (db.prepare('PRAGMA table_info(autofix_findings)').all() as Array<{ name: string }>).map((c) => c.name);
+    for (const c of ['pr_branch', 'pr_head_sha', 'previous_attempt']) assert.ok(cols.includes(c), c);
+
+    // An admin's edit of the built-in goal is kept.
+    db.prepare("UPDATE p10_loop_specs SET goal_template = ? WHERE id = 'builtin-autofix-ci'").run('Our own goal for {{kind}}.');
+    closeDb();
+    db = openDb(upgradeFile);
+    assert.equal(goal(), 'Our own goal for {{kind}}.');
     closeDb();
   });
 });

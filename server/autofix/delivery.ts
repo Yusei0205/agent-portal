@@ -10,7 +10,8 @@
  *      go     draft_pr with a clean diff: push and open a draft PR at once (the project's "open pull requests" setting is not consulted:
  *             draft_pr is the admin's explicit opt-in)
  *  - autofixPrPlan: the branch (`autofix/<kind>-<fp8>`), title, body, draft flag and label of the PR, used by runPullRequest on both
- *    the 'go' path and the Inbox approval path.
+ *    the 'go' path and the Inbox approval path. A retry after red CI (pipeline.ts applyCiResult) reuses the finding's PR branch and,
+ *    while that PR is open, updates it instead of opening another.
  *  - afterAutofixPullRequest: links an opened PR to the finding (pr_open) or accounts for a failed push / unopened PR.
  */
 
@@ -176,7 +177,7 @@ export async function autofixGate(ctx: SessionPrContext, change: RepoChange): Pr
   // Downgraded to a person's approval unless the operator allowed unattended pushes (see unattendedPushAllowed).
   const decision: GateDecision = clear && unattendedPushAllowed() ? 'go' : 'ask';
   // Recorded before anything else, so the pipeline sees at the session's end that delivery began (see onFixSessionEnded).
-  await getAutofixFindingsRepository().transition(f.id, ['fixing'], { status: 'fixing', fix_branch: fixBranchName(f.kind, f.fingerprint) });
+  await getAutofixFindingsRepository().transition(f.id, ['fixing'], { status: 'fixing', fix_branch: f.pr_branch ?? fixBranchName(f.kind, f.fingerprint) });
   return decision;
 }
 
@@ -206,6 +207,10 @@ export interface AutofixPrPlan {
   labels: string[];
   /** Sent to the runner's finalize: globs no pushed file may match (the policy's protected paths, as checkDiff applies them). */
   denyPaths: string[];
+  /** A retry after red CI: push to this branch (the finding's PR branch) instead of choosing a new name. */
+  reuseBranch?: string;
+  /** The PR already open from reuseBranch: when it is still open, the push updates it and no PR is created. */
+  existingPr?: { number: number; url: string };
 }
 
 /** The protected paths as checkDiff applies them for this kind: a 'deps' fix may touch the lockfiles (and only those globs are dropped). */
@@ -227,6 +232,8 @@ export async function autofixPrPlan(workflowId: string, runId: string): Promise<
     draft: true,
     labels: [...PR_LABELS],
     denyPaths: denyPathsFor(active.policy, f.kind),
+    ...(f.pr_branch ? { reuseBranch: f.pr_branch } : {}),
+    ...(f.pr_branch && f.pr_number != null && f.pr_url ? { existingPr: { number: f.pr_number, url: f.pr_url } } : {}),
   };
 }
 
@@ -268,7 +275,8 @@ export async function verifyPushedBranch(findingId: string, repo: Repository, ba
 }
 
 export type AutofixPrOutcome =
-  | { kind: 'opened'; number: number; url: string; branch: string; repo: string }
+  /** `sha`: the commit the runner pushed (absent when no push happened in this call), recorded as the PR head CI is judged against. */
+  | { kind: 'opened'; number: number; url: string; branch: string; repo: string; sha?: string }
   /** The runner did not push (permission, workspace, git): one attempt more, as for a failed fix. */
   | { kind: 'push-failed'; error: string }
   /** Nothing went wrong with the fix, but no PR was opened (protected branch name, no runtime, host refused the PR). */
@@ -287,7 +295,8 @@ export async function afterAutofixPullRequest(findingId: string, workflowId: str
     if (!f || f.status !== 'fixing') return;
     if (outcome.kind === 'opened') {
       const linked = await repo.transition(f.id, ['fixing'], {
-        status: 'pr_open', pr_number: outcome.number, pr_url: outcome.url, fix_branch: outcome.branch,
+        status: 'pr_open', pr_number: outcome.number, pr_url: outcome.url, fix_branch: outcome.branch, pr_branch: outcome.branch,
+        pr_head_sha: outcome.sha ?? null,
       });
       if (linked) await audit('autofix.pr.opened', f.id, { prNumber: outcome.number, repo: outcome.repo });
       return;

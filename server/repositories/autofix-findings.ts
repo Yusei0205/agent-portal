@@ -43,6 +43,12 @@ export interface AutofixFinding {
   occurrences: number;
   cost_usd: number;
   cooldown_until: string | null;
+  /** The head branch of the finding's pull request; kept while a retry after red CI works on it, so the retry pushes there. */
+  pr_branch: string | null;
+  /** The commit the portal pushed to the PR branch last: a CI result for any other commit is stale (pipeline.ts applyCiResult). */
+  pr_head_sha: string | null;
+  /** What the previous attempt did and how CI failed on it (scrubbed, capped), for the retry's goal. */
+  previous_attempt: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -75,7 +81,7 @@ export interface AutofixFindingsRepository {
 /** Fields a patch may set (everything except the key fields). */
 export const PATCHABLE_FIELDS = [
   'source', 'kind', 'fingerprint', 'severity', 'evidence', 'status', 'repo_id', 'branch', 'commit_sha', 'workflow_id',
-  'fix_branch', 'pr_number', 'pr_url', 'attempts', 'occurrences', 'cost_usd', 'cooldown_until', 'created_at', 'updated_at',
+  'fix_branch', 'pr_number', 'pr_url', 'attempts', 'occurrences', 'cost_usd', 'cooldown_until', 'pr_branch', 'pr_head_sha', 'previous_attempt', 'created_at', 'updated_at',
 ] as const;
 
 let _instance: AutofixFindingsRepository | null = null;

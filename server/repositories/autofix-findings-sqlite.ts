@@ -31,6 +31,9 @@ function toFinding(row: Row): AutofixFinding {
     occurrences: Number(row.occurrences ?? 1),
     cost_usd: Number(row.cost_usd ?? 0),
     cooldown_until: str(row.cooldown_until),
+    pr_branch: str(row.pr_branch),
+    pr_head_sha: str(row.pr_head_sha),
+    previous_attempt: str(row.previous_attempt),
     created_at: String(row.created_at ?? ''),
     updated_at: String(row.updated_at ?? ''),
   };

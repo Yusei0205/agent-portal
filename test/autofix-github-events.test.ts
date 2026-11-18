@@ -18,7 +18,8 @@ describe('parseGithubEvent', () => {
   });
   it('a failed run on an autofix/ branch is a ci_result, never a finding', () => {
     const r = parseGithubEvent('workflow_run', fx('workflow_run_failed_autofix'));
-    assert.deepEqual(r, { type: 'ci_result', repoFullName: 'acme/widgets', branch: 'autofix/tests-ab12cd34', conclusion: 'failure', headSha: 'b1b2c3d4e5f60718293a4b5c6d7e8f9012345678' });
+    assert.deepEqual(r, { type: 'ci_result', repoFullName: 'acme/widgets', branch: 'autofix/tests-ab12cd34', conclusion: 'failure', headSha: 'b1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+      workflowName: 'CI / tests', runId: 9100002 });
   });
   it('a successful run is a ci_result success', () => {
     const r = parseGithubEvent('workflow_run', fx('workflow_run_success_main'));

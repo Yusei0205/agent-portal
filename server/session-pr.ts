@@ -416,16 +416,22 @@ async function runPullRequestSteps(
   }
 
   let branch = start.branch ?? '';
+  let pushedSha: string | undefined;
   if (!branch) {
-    // 1. Choose the branch name among the names the remote already has.
-    let taken: string[] = [];
-    try { taken = await deps.listBranches(repo); } catch { /* the runner and the host still refuse a clash */ }
-    branch = branchNameFor({
-      ticketKey: ticket?.key ?? null,
-      title: ticket?.summary || firstLine(String(w.goal ?? ''), 200) || 'changes',
-      taken,
-      ...(plan ? { stem: plan.branchStem } : {}),
-    });
+    if (plan?.reuseBranch) {
+      // 1a. An auto-fix retry after red CI: the commit goes on top of the open PR's branch (a fast-forward push), so that PR is updated.
+      branch = plan.reuseBranch;
+    } else {
+      // 1. Choose the branch name among the names the remote already has.
+      let taken: string[] = [];
+      try { taken = await deps.listBranches(repo); } catch { /* the runner and the host still refuse a clash */ }
+      branch = branchNameFor({
+        ticketKey: ticket?.key ?? null,
+        title: ticket?.summary || firstLine(String(w.goal ?? ''), 200) || 'changes',
+        taken,
+        ...(plan ? { stem: plan.branchStem } : {}),
+      });
+    }
     // Second enforcement of the protected list (the runner checks it again before pushing).
     if (isProtectedBranch(branch, settings.protectedBranches, repo.default_branch)) {
       await emitEv({
@@ -476,7 +482,7 @@ async function runPullRequestSteps(
             const c = ev.errorCode;
             if (c === 'no-permission' || c === 'no-workspace' || c === 'failed' || c === 'protected-path') pushCode = c;
           }
-          else if (ev.sha) pushed = true;
+          else if (ev.sha) { pushed = true; pushedSha = String(ev.sha); }
         } else if (ev.type === 'error') {
           pushError = pushError || scrubSecrets(String(ev.message ?? 'The push failed'));
         }
@@ -524,6 +530,12 @@ async function runPullRequestSteps(
       return { kind: 'blocked', reason: verdict.reason, violations: verdict.violations, repo: String(repo.name ?? ''), branch };
     }
   }
+  if (plan?.reuseBranch && plan.existingPr && await githubPullRequestState(repo, plan.existingPr.number) !== 'closed') {
+    // The retry's push updated the open PR: nothing more to open, and its review was started when it was opened.
+    const { number, url } = plan.existingPr;
+    await emitEv({ state: 'opened', branch, number, url, title });
+    return { kind: 'opened', number, url, branch, repo: String(repo.name ?? ''), ...(pushedSha ? { sha: pushedSha } : {}) };
+  }
   let created: { number: number; url: string };
   try {
     created = await createPullRequest({
@@ -539,7 +551,9 @@ async function runPullRequestSteps(
     return { kind: 'not-opened', error, branch };
   }
   await emitEv({ state: 'opened', branch, number: created.number, url: created.url, title });
-  const opened: AutofixPrOutcome = { kind: 'opened', number: created.number, url: created.url, branch, repo: String(repo.name ?? '') };
+  const opened: AutofixPrOutcome = {
+    kind: 'opened', number: created.number, url: created.url, branch, repo: String(repo.name ?? ''), ...(pushedSha ? { sha: pushedSha } : {}),
+  };
 
   // 4. A draft review of the new pull request. The pull request stays when this fails.
   try {

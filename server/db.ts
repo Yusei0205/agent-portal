@@ -2290,6 +2290,9 @@ const M53_AUTOFIX_FINDINGS = `
     occurrences INTEGER NOT NULL DEFAULT 1,
     cost_usd REAL NOT NULL DEFAULT 0,
     cooldown_until TEXT,
+    pr_branch TEXT,
+    pr_head_sha TEXT,
+    previous_attempt TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
@@ -2299,13 +2302,8 @@ const M53_AUTOFIX_FINDINGS = `
   CREATE INDEX IF NOT EXISTS autofix_findings_fix_branch ON autofix_findings(fix_branch);
 `;
 
-/**
- * Auto-fix: the built-in spec the fix pipeline starts for a failed CI check (server/autofix/pipeline.ts). trigger_type is
- * 'webhook' because the p10_loop_specs CHECK has no 'finding' type; the pipeline fires it directly, never through a URL.
- */
-const M54_AUTOFIX_SPECS = `
-  INSERT OR IGNORE INTO p10_loop_specs (id, project_id, name, description, trigger_type, trigger_config, goal_template, stop_config, max_iterations, is_builtin) VALUES
-    ('builtin-autofix-ci', NULL, 'Auto-fix a failed CI check', 'Started by auto-fix for a failed CI check: reproduce it with the verify command, fix it, and hand the change to the PR step.', 'webhook', '{"finding_kind":"ci_failed","maxPerHour":12}', 'Fix the failing {{kind}} check on branch {{branch}}.
+/** The goal template the builtin-autofix-ci spec was first seeded with (before retries after red CI); kept to upgrade it. */
+const AUTOFIX_CI_GOAL_V1 = `Fix the failing {{kind}} check on branch {{branch}}.
 
 Evidence from the failing CI run (log tail, secrets removed):
 {{evidence}}
@@ -2315,7 +2313,31 @@ How to work:
 2. If it already passes, the failure cannot be reproduced here. Change nothing and stop. End your reply with this status line, with state blocked and a summary that starts with the words cannot reproduce:
 WORKFLOW_STATUS {"state":"blocked","summary":"cannot reproduce: <the command you ran and what it printed>","next":"","needs":"a person to look at the failure"}
 3. Otherwise fix the code until {{verify_command}} passes. Change only what this failure needs. Never edit CI workflows (.github/workflows), infrastructure (infra/), or env or secret files (.env files, keys, certificates).
-4. When the check passes, end with a WORKFLOW_STATUS line with state done.', '{"maxIterations":4,"budgetUsd":2}', 4, 1);
+4. When the check passes, end with a WORKFLOW_STATUS line with state done.`;
+
+/** The current goal template of builtin-autofix-ci: V1 plus the previous attempt (a retry after the fix's PR failed CI). */
+export const AUTOFIX_CI_GOAL = `Fix the failing {{kind}} check on branch {{branch}}.
+
+Evidence from the failing CI run (log tail, secrets removed):
+{{evidence}}
+
+Previous attempt (none if this is the first):
+{{previous_attempt}}
+
+How to work:
+1. First run the check: {{verify_command}}
+2. If it already passes, the failure cannot be reproduced here. Change nothing and stop. End your reply with this status line, with state blocked and a summary that starts with the words cannot reproduce:
+WORKFLOW_STATUS {"state":"blocked","summary":"cannot reproduce: <the command you ran and what it printed>","next":"","needs":"a person to look at the failure"}
+3. Otherwise fix the code until {{verify_command}} passes. Change only what this failure needs. Never edit CI workflows (.github/workflows), infrastructure (infra/), or env or secret files (.env files, keys, certificates).
+4. When the check passes, end with a WORKFLOW_STATUS line with state done.`;
+
+/**
+ * Auto-fix: the built-in spec the fix pipeline starts for a failed CI check (server/autofix/pipeline.ts). trigger_type is
+ * 'webhook' because the p10_loop_specs CHECK has no 'finding' type; the pipeline fires it directly, never through a URL.
+ */
+const M54_AUTOFIX_SPECS = `
+  INSERT OR IGNORE INTO p10_loop_specs (id, project_id, name, description, trigger_type, trigger_config, goal_template, stop_config, max_iterations, is_builtin) VALUES
+    ('builtin-autofix-ci', NULL, 'Auto-fix a failed CI check', 'Started by auto-fix for a failed CI check: reproduce it with the verify command, fix it, and hand the change to the PR step.', 'webhook', '{"finding_kind":"ci_failed","maxPerHour":12}', ?, '{"maxIterations":4,"budgetUsd":2}', 4, 1);
 `;
 
 /**
@@ -2326,7 +2348,14 @@ WORKFLOW_STATUS {"state":"blocked","summary":"cannot reproduce: <the command you
  */
 function ensureAutofixSchema(database: DatabaseSync): void {
   database.exec(M53_AUTOFIX_FINDINGS);
-  database.exec(M54_AUTOFIX_SPECS);
+  // Columns added after the table first shipped (retries after red CI on the fix's PR).
+  const cols = new Set((database.prepare('PRAGMA table_info(autofix_findings)').all() as Array<{ name: string }>).map((c) => c.name));
+  for (const c of ['pr_branch', 'pr_head_sha', 'previous_attempt']) {
+    if (!cols.has(c)) database.exec(`ALTER TABLE autofix_findings ADD COLUMN ${c} TEXT`);
+  }
+  database.prepare(M54_AUTOFIX_SPECS).run(AUTOFIX_CI_GOAL);
+  // A database seeded with the first template gets the current one, unless an admin edited the built-in goal since.
+  database.prepare("UPDATE p10_loop_specs SET goal_template = ? WHERE id = 'builtin-autofix-ci' AND goal_template = ?").run(AUTOFIX_CI_GOAL, AUTOFIX_CI_GOAL_V1);
 }
 
 /**
