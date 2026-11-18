@@ -35,6 +35,16 @@ describe('parseGithubEvent', () => {
       assert.deepEqual(parseGithubEvent('workflow_run', p), { type: 'ignore' }, `${n} without head_repository`);
     }
   });
+  it('a failing run of a fork on a branch named main is ignored (never a finding); a same-repository failure still is one', () => {
+    const p = fx('workflow_run_failed_main') as { workflow_run: Record<string, unknown> };
+    assert.equal(parseGithubEvent('workflow_run', p).type, 'finding', 'own repository');
+    p.workflow_run.head_repository = { full_name: 'mallory/widgets' };
+    assert.deepEqual(parseGithubEvent('workflow_run', p), { type: 'ignore' }, 'fork');
+    p.workflow_run.head_repository = { full_name: 'ACME/Widgets' };
+    assert.equal(parseGithubEvent('workflow_run', p).type, 'finding', 'the name is compared without case');
+    delete p.workflow_run.head_repository;
+    assert.deepEqual(parseGithubEvent('workflow_run', p), { type: 'ignore' }, 'no head_repository: ignored (fail closed)');
+  });
   it('a merged pull_request closing is pr_closed', () => {
     assert.deepEqual(parseGithubEvent('pull_request', fx('pull_request_merged')),
       { type: 'pr_closed', repoFullName: 'acme/widgets', branch: 'autofix/lint-9f8e7d6c', merged: true, prNumber: 42 });

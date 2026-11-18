@@ -81,7 +81,7 @@ describe('autofix webhook', () => {
   });
 
   it('a repository that is not in the project returns 404 and stores nothing', async () => {
-    const body = fx('workflow_run_failed_main').replace('acme/widgets', 'acme/other');
+    const body = fx('workflow_run_failed_main').replaceAll('acme/widgets', 'acme/other');
     assert.equal(await deliver(body), 404);
     assert.equal((await findings()).length, 0);
   });
@@ -160,7 +160,7 @@ describe('autofix webhook', () => {
       id: 'repo-cc', project_id: projectId, name: 'cc', url: 'https://git-codecommit.us-east-1.amazonaws.com/v1/repos/acme-cc', provider: 'codecommit', status: 'ready',
       default_branch: 'main', identity: null, last_synced_at: null, last_error: null, created_at: new Date().toISOString(), connection_id: null,
     });
-    assert.equal(await deliver(fx('workflow_run_failed_main').replace('acme/widgets', 'acme-cc')), 404);
+    assert.equal(await deliver(fx('workflow_run_failed_main').replaceAll('acme/widgets', 'acme-cc')), 404);
     assert.equal((await findings()).length, 0);
   });
 

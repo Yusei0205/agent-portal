@@ -229,10 +229,18 @@ export async function handleRepoChanges(ctx: SessionPrContext, changes: RepoChan
 }
 
 const MAX_PAYLOAD_PATHS = 50;
+const MAX_PAYLOAD_PATH_CHARS = 300;
+/**
+ * Control characters (C0, DEL, C1) and bidirectional or zero-width marks: a file name is shown to the approver as it is, so these
+ * (a newline, U+202E RIGHT-TO-LEFT OVERRIDE) could make one path look like another. Each is shown as `?`.
+ */
+const UNSAFE_PATH_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
 /** The changed file names for an Inbox question (names only, at most 50); nothing when the runner did not report them. */
-function changedPathsPayload(change: RepoChange): { paths?: string[]; pathsTruncated?: boolean } {
+export function changedPathsPayload(change: RepoChange): { paths?: string[]; pathsTruncated?: boolean } {
   if (!Array.isArray(change.paths)) return {};
-  const names = change.paths.map((p) => String(p.path).slice(0, 300));
+  const names = change.paths
+    .filter((p) => p && typeof p.path === 'string')
+    .map((p) => p.path.slice(0, MAX_PAYLOAD_PATH_CHARS).replace(UNSAFE_PATH_CHARS, '?'));
   return { paths: names.slice(0, MAX_PAYLOAD_PATHS), pathsTruncated: names.length > MAX_PAYLOAD_PATHS };
 }
 

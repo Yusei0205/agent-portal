@@ -563,6 +563,20 @@ describe('the gate in the session PR flow', () => {
     assert.ok(p.paths.every((x) => typeof x === 'string'));
   });
 
+  it('changedPathsPayload shows control, bidi and zero-width characters as ? and skips non-strings', async () => {
+    const { changedPathsPayload } = await import('../server/session-pr.ts');
+    const got = changedPathsPayload({
+      repo: 'shop', base: 'main', commits: 1, files: 5,
+      paths: [
+        { path: 'src/a\nb.ts', added: 1, removed: 0 }, { path: 'evil\u202Esj.txt', added: 1, removed: 0 },
+        { path: 'z\u200Bw\uFEFF\u2066\u0085\u007F.ts', added: 1, removed: 0 },
+        { path: 42 as unknown as string, added: 1, removed: 0 }, null as never, { path: 'x'.repeat(400), added: 1, removed: 0 },
+      ],
+    });
+    assert.deepEqual(got.paths, ['src/a?b.ts', 'evil?sj.txt', 'z?w????.ts', 'x'.repeat(300)]);
+    assert.equal(got.pathsTruncated, false);
+  });
+
   it('more than 2000 files asks without calling checkDiff', async () => {
     let called = 0;
     _setCheckDiffForTest((...a) => { called++; return checkDiff(...a); });

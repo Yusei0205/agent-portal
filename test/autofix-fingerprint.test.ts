@@ -35,6 +35,15 @@ test('scrubEvidence removes a ghp_ token, an AWS key id (AKIA...), an Authorizat
   assert.ok(out.includes('ok line'));
 });
 
+test('scrubEvidence removes all of a 64-hex secret (nothing of its tail survives)', () => {
+  const hex64 = 'f0e1d2c3b4a5968778695a4b3c2d1e0f'.repeat(2);
+  assert.equal(hex64.length, 64);
+  const out = scrubEvidence(`DEPLOY_SECRET=${hex64}\nGH_TOKEN: "${hex64}"\nok`);
+  assert.ok(!out.includes(hex64.slice(40)), out);
+  assert.ok(!/[0-9a-f]{8,}/.test(out.replace(/ok$/, '')), out);
+  assert.match(out, /DEPLOY_SECRET=\*\*\*/);
+});
+
 test('scrubEvidence keeps the last maxChars characters', () => {
   const out = scrubEvidence('a'.repeat(100) + 'TAIL', 10);
   assert.equal(out, 'aaaaaaTAIL');

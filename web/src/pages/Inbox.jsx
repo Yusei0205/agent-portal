@@ -81,7 +81,7 @@ function ChangedPaths({ payload }) {
     <details className="inbox-paths">
       <summary className="small">{paths.length}{payload.pathsTruncated ? '+' : ''} changed file{paths.length === 1 ? '' : 's'}</summary>
       <ul className="small" style={{ margin: '4px 0 8px', paddingLeft: 18, overflowWrap: 'anywhere' }}>
-        {paths.map((x) => <li key={x}><code>{x}</code></li>)}
+        {paths.map((x, i) => <li key={i}><code>{x}</code></li>)}
         {payload.pathsTruncated && <li className="muted">and more not listed</li>}
       </ul>
     </details>
