@@ -38,6 +38,7 @@ const NAV_SECTIONS = [
     label: '',
     items: [
       { tab: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
+      { tab: 'inbox', label: 'Needs attention', icon: 'inbox', badge: true },
       { tab: 'usage', label: 'Usage', icon: 'chart' },
     ],
   },
@@ -53,6 +54,14 @@ const NAV_SECTIONS = [
       { tab: 'workspaces', label: 'Workspaces', icon: 'projects', activeFor: ['setup'] },
       // defaults to /p/:pid/reviews/code; also highlights for the legacy 'review' and 'branchscans' tabs
       { tab: 'reviews',    label: 'Reviews',    icon: 'git-pull-request', subTab: 'code', activeFor: ['review', 'branchscans'] },
+    ],
+  },
+  {
+    id: 'project-tools',
+    label: 'Project tools',
+    projectScoped: true,
+    secondary: true,
+    items: [
       { tab: 'tests',      label: 'Tests',      icon: 'flask'     },
       { tab: 'tickets',    label: 'Tickets',    icon: 'ticket'    },
       { tab: 'mail',       label: 'Mail',       icon: 'inbox'     },
@@ -73,6 +82,7 @@ const NAV_SECTIONS = [
     // What the portal signs in to: code hosts, model providers and AWS, tools. One page with tabs.
     id: 'connect',
     label: 'Connect',
+    secondary: true,
     items: [
       { tab: 'connect', label: 'Connections', icon: 'plug', subTab: 'code-hosts', activeFor: ['connect'] },
     ],
@@ -81,6 +91,7 @@ const NAV_SECTIONS = [
     // How the agent behaves: your own .kiro, .claude and .aws folders.
     id: 'agents',
     label: 'Agents',
+    secondary: true,
     items: [
       { tab: 'config', label: 'Agent setup', icon: 'file-cog' },
     ],
@@ -89,6 +100,7 @@ const NAV_SECTIONS = [
     // Portal-wide policy and access.
     id: 'portal-admin',
     label: 'Portal',
+    secondary: true,
     items: [
       { tab: 'settings', label: 'Settings',   icon: 'settings' },
       { tab: 'users',    label: 'Users',      icon: 'shield-user', adminOnly: true },
@@ -375,6 +387,10 @@ function ProjectPicker({ projects, currentProjectId, onSelect, collapsed }) {
 function NavSection({
   section, route, navProjectId, user, inboxCount, onNavigate, collapsed,
 }) {
+  const containsRoute = section.items.some((item) => [item.tab, ...(item.activeFor || [])].includes(route.tab));
+  const [expanded, setExpanded] = useState(containsRoute);
+  useEffect(() => { if (containsRoute) setExpanded(true); }, [containsRoute, route.tab]);
+  const disclosure = section.secondary && !collapsed;
   const visibleItems = section.items.filter(
     (item) => !item.adminOnly || user?.is_admin,
   );
@@ -388,13 +404,17 @@ function NavSection({
       {/* Section heading — visible when expanded; thin divider when collapsed */}
       {collapsed ? (
         <div className="rail-section-divider" aria-hidden="true" />
+      ) : disclosure ? (
+        <button type="button" id={sectionId} className="rail-section-toggle" aria-expanded={expanded} aria-controls={`${sectionId}-items`} onClick={() => setExpanded((value) => !value)}>
+          {section.label}<Icon name={expanded ? 'chevronDown' : 'chevronRight'} size={12} aria-hidden="true" />
+        </button>
       ) : section.label ? (
         <div id={sectionId} className="rail-section-label" aria-hidden="true">
           {section.label}
         </div>
       ) : null}
 
-      <ul className="rail-section-list" aria-label={section.label}>
+      <ul id={`${sectionId}-items`} className="rail-section-list" aria-label={section.label} hidden={disclosure && !expanded}>
         {visibleItems.map((item) => {
           // Item is disabled when it requires a project but none is selected
           const isProjectScoped = section.projectScoped || item.projectScoped;
@@ -430,7 +450,7 @@ function NavSection({
                 className={cls}
                 aria-current={active ? 'page' : undefined}
                 aria-disabled={disabled ? 'true' : undefined}
-                aria-label={item.label}
+                aria-label={item.badge && inboxCount > 0 ? `${item.label} (${inboxCount} unread)` : item.label}
                 data-tooltip={tooltipText}
                 onClick={disabled ? (e) => e.preventDefault() : onNavigate}
               >
@@ -444,6 +464,7 @@ function NavSection({
                 )}
                 <Icon name={item.icon} size={16} aria-hidden="true" />
                 <span>{item.label}</span>
+                {item.badge && inboxCount > 0 && <span className="rail-inbox-count" aria-hidden="true">{inboxCount > 99 ? '99+' : inboxCount}</span>}
               </a>
             </li>
           );

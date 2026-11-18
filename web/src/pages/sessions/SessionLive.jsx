@@ -15,6 +15,7 @@ import { PullRequestCards } from './PullRequestCard.jsx';
 import { SessionAgentsStrip } from './SessionAgentsStrip.jsx';
 import { SessionFlowStrip } from './SessionFlowStrip.jsx';
 import { SessionExecution } from './SessionExecution.jsx';
+import { summarizeExecution } from '../../lib/execution-summary.js';
 import { editDiffLines } from '../../lib/edit-diff.js';
 import { groupToolRuns, groupStats, lastPlanId } from '../../lib/tool-groups.js';
 import { formatDuration } from '../../lib/agent-timeline.js';
@@ -1155,6 +1156,7 @@ export function SessionLive({
   vaultFolder = null,
   onOpenWorkspaceFile,
   view = 'chat',
+  onTelemetry,
 }) {
   const { events, connected, error } = useRunStream(runId);
 
@@ -1262,13 +1264,20 @@ export function SessionLive({
   const allEvents = React.useMemo(() => [...earlierEvents, ...events], [earlierEvents, events]);
   // Execution View: every tool call of the session, paired with its result, oldest first.
   const executionEvents = React.useMemo(
-    () => (view === 'execution' ? pairToolEvents(dropRoutineStatus(allEvents)) : null),
-    [view, allEvents],
+    () => (view === 'execution' || onTelemetry ? pairToolEvents(dropRoutineStatus(allEvents)) : null),
+    [view, allEvents, onTelemetry],
   );
   const approvalState = React.useMemo(
     () => approvalStates([...earlierEvents, ...events], runId),
     [earlierEvents, events, runId],
   );
+  useEffect(() => {
+    if (!onTelemetry) return;
+    const pendingApproval = (executionEvents || []).some((event) => event.type === 'approval-request'
+      && !approvalState.resolutions.has(String(event.payload?.inputId || event.payload?.id || event.id))
+      && !approvalState.endedRuns.has(String(event.run_id || runId)));
+    onTelemetry({ events: executionEvents || [], summary: summarizeExecution(executionEvents || []), connected, pendingApproval, loaded: loadedInitialTranscript, error });
+  }, [executionEvents, connected, loadedInitialTranscript, error, approvalState, runId, onTelemetry]);
 
   // A message typed while the agent works, a /command's answer or an engine switch made during or after the current
   // run sits at its place in time within that run, not among the earlier history above it.
@@ -1557,7 +1566,7 @@ export function SessionLive({
 
   // ── Empty / error states ──────────────────────────────────────────────────
 
-  if (!runId && !pendingMessages.length) {
+  if (!runId && !pendingMessages.length && !earlierEvents.length) {
     return (
       <div className="ws-placeholder" style={{ flex: 1 }}>
         <div className="ws-placeholder-icon">
@@ -1612,7 +1621,7 @@ export function SessionLive({
       )}
 
       {/* Execution View: the same session, as a task list, tool counts and a timeline (the conversation stays mounted, hidden) */}
-      {executionEvents && (
+      {view === 'execution' && executionEvents && (
         <div className="exe-scroll">
           <SessionExecution
             events={executionEvents}
@@ -1629,7 +1638,7 @@ export function SessionLive({
         ref={scrollRef}
         className="live-scroll"
         onScroll={onScroll}
-        style={{ flex: 1, overflowY: 'auto', padding: '8px 0', display: executionEvents ? 'none' : undefined }}
+        style={{ flex: 1, overflowY: 'auto', padding: '8px 0', display: view === 'execution' ? 'none' : undefined }}
         role="log"
         aria-live="polite"
         aria-label="Agent conversation"

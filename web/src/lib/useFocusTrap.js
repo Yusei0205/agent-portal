@@ -69,7 +69,7 @@ export function useFocusTrap() {
       // Restore focus to the element that was focused before the dialog opened
       const prev = previousFocusRef.current;
       if (prev && typeof prev.focus === 'function') {
-        try { prev.focus(); } catch { /* ignore */ }
+        try { prev.focus({ preventScroll: true }); } catch { /* ignore */ }
       }
     };
   }, []);

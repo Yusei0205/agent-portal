@@ -1,13 +1,13 @@
 /**
  * Source Control panel — git status and diff viewer.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 
 const STATUS_LABELS = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', '?': 'Untracked' };
 
-function DiffView({ diff }) {
+export function DiffView({ diff }) {
   if (!diff) return null;
   const lines = diff.split('\n');
   return (
@@ -30,13 +30,15 @@ function DiffView({ diff }) {
 /**
  * @param {{ workflowId: string }} props
  */
-export function IdeSourceControl({ workflowId }) {
+export function IdeSourceControl({ workflowId, onStatusChange, onDiffSelected, refreshKey = 0 }) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedFile, setSelectedFile] = useState(null);
   const [diff, setDiff] = useState(null);
   const [diffLoading, setDiffLoading] = useState(false);
+  const diffVersion = useRef(0);
+  useEffect(() => { setSelectedFile(null); setDiff(null); return () => { diffVersion.current++; }; }, [workflowId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,6 +46,7 @@ export function IdeSourceControl({ workflowId }) {
     try {
       const data = await api.get(`/api/workflows/${workflowId}/ide/git/status`);
       setStatus(data);
+      onStatusChange?.(data);
     } catch (e) {
       if (e.status === 404) {
         setStatus({ repos: [] });
@@ -53,23 +56,29 @@ export function IdeSourceControl({ workflowId }) {
     } finally {
       setLoading(false);
     }
-  }, [workflowId]);
+  }, [workflowId, onStatusChange]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   const openDiff = async (repo, file) => {
+    const version = ++diffVersion.current;
     setSelectedFile(`${repo}:${file.path}`);
     setDiff(null);
     setDiffLoading(true);
+    onDiffSelected?.({ repo, path: file.path, loading: true, diff: null });
     try {
       const data = await api.get(
         `/api/workflows/${workflowId}/ide/git/diff?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(file.path)}`,
       );
+      if (version !== diffVersion.current) return;
       setDiff(data.diff ?? '(binary or no diff)');
+      onDiffSelected?.({ repo, path: file.path, loading: false, diff: data.diff ?? '(binary or no diff)' });
     } catch (e) {
+      if (version !== diffVersion.current) return;
       setDiff(`Error: ${e.message}`);
+      onDiffSelected?.({ repo, path: file.path, loading: false, diff: null, error: e.message });
     } finally {
-      setDiffLoading(false);
+      if (version === diffVersion.current) setDiffLoading(false);
     }
   };
 
@@ -126,7 +135,7 @@ export function IdeSourceControl({ workflowId }) {
                 aria-label={`${STATUS_LABELS[file.status] ?? file.status}: ${file.path}`}
                 aria-pressed={selectedFile === `${repo.name}:${file.path}`}
                 onClick={() => openDiff(repo.name, file)}
-                onKeyDown={(e) => { if (e.key === 'Enter') openDiff(repo.name, file); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDiff(repo.name, file); } }}
               >
                 <span className={`ide-sc-status ${file.status}`} aria-hidden="true">{file.status}</span>
                 <span style={{ flex: 1, fontFamily: 'var(--mono)', fontSize: '0.79rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -143,7 +152,7 @@ export function IdeSourceControl({ workflowId }) {
       </div>
 
       {/* Diff view */}
-      {selectedFile && (
+      {selectedFile && !onDiffSelected && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ padding: '4px 10px', borderBottom: '1px solid var(--line)', display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.77rem', color: 'var(--ink-3)', flexShrink: 0 }}>
             <Icon name="git-diff" size={12} />

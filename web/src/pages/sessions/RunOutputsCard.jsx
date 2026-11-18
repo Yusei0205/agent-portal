@@ -13,14 +13,10 @@ import { Icon } from '../../components/Icon.jsx';
 import { navigate } from '../../lib/router.js';
 import { formatBytes, getFileTypeMeta, isImageFile, isExcerptable, excerptLines } from '../../lib/outputFileUtils.js';
 import { AddToVaultButton } from './AddToVaultButton.jsx';
+import { ArtifactHeading } from '../../components/ArtifactCard.jsx';
+import { useArtifactReveal } from '../../lib/artifact-reveal.js';
 
 const MAX_COLLAPSED = 4;
-// A file made in the last two minutes is "new": its row slides in with a soft highlight sweep. Older files just appear.
-const FRESH_MS = 2 * 60 * 1000;
-function isFresh(file) {
-  const t = Date.parse(file?.created_at ?? '');
-  return Number.isFinite(t) && Date.now() - t < FRESH_MS;
-}
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -86,7 +82,7 @@ function FileExcerpt({ file, onOpen }) {
  */
 function FileRow({ file, workflowId, onPreview, index = 0 }) {
   const isImg = isImageFile(file);
-  const fresh = isFresh(file);
+  const fresh = useArtifactReveal(`${workflowId}:${file.id}:v${file.version || 1}`, true, file.created_at);
   const { icon, label } = getFileTypeMeta(file.mime_type, file.name);
 
   return (
@@ -196,10 +192,7 @@ export function RunOutputsCard({ files, workflowId, projectId, vaultFolder, onPr
     >
       {/* Header */}
       <div className="run-outputs-card-header">
-        <Icon name="file" size={13} aria-hidden="true" />
-        <span>
-          {files.length} output file{files.length !== 1 ? 's' : ''} created
-        </span>
+        <ArtifactHeading title={`${files.length} output file${files.length !== 1 ? 's' : ''} created`} kind="Session outputs" state="ready" />
       </div>
 
       {/* File list */}

@@ -283,6 +283,9 @@
         "web/src/pages/sessions/SessionLive.jsx",
         "web/src/pages/sessions/SessionsShell.jsx",
         "web/src/pages/sessions/SessionWorkspace.jsx",
+        "web/src/pages/sessions/SessionCommandBar.jsx",
+        "web/src/pages/sessions/SessionExecution.jsx",
+        "web/src/styles/session-studio.css",
         "web/src/pages/sessions/SessionChanges.jsx",
         "web/src/pages/sessions/NewSessionDialog.jsx",
         "web/src/pages/sessions/SwitchEngineDialog.jsx",
@@ -346,6 +349,7 @@
         "test/web-session-status.test.ts",
         "test/web-tool-groups.test.ts",
         "test/web-session-groups.test.ts",
+        "test/web-command-center.test.ts",
         "test/web-execution-stages.test.ts",
         "test/web-sparkline.test.ts"
       ],
@@ -429,6 +433,7 @@
         "test/agent-orbit.test.ts",
         "test/agent-timeline.test.ts",
         "test/web-agent-detail.test.ts",
+        "test/web-command-center.test.ts",
         "test/browser-live.test.ts",
         "test/chat-attachments-ui.test.ts",
         "test/web-session-agents.test.ts",
@@ -451,13 +456,17 @@
         "server/repositories/stats-dynamodb.ts",
         "web/src/pages/Dashboard.jsx",
         "web/src/components/DashboardInsights.jsx",
+        "web/src/components/DashboardDetails.jsx",
         "web/src/components/CostPanel.jsx",
-        "web/src/styles/dashboard.css"
+        "web/src/styles/dashboard.css",
+        "web/src/styles/command-center.css",
+        "web/src/styles/motion.css"
       ],
       "tests": [
         "test/dashboard.test.ts",
         "test/stats-repo.test.ts",
-        "test/web-dashboard-insights.test.ts"
+        "test/web-dashboard-insights.test.ts",
+        "test/web-portal-interactions.test.ts"
       ],
       "smokeIds": [
         "dashboard"
@@ -506,10 +515,13 @@
     "create": {
       "description": "Create hub page (container for Diagrams / Documents / Decks tabs)",
       "sources": [
-        "web/src/pages/Create.jsx"
+        "web/src/pages/Create.jsx",
+        "web/src/components/CreateActivity.jsx",
+        "web/src/components/CreationPreview.jsx"
       ],
       "tests": [
-        "test/create-repos.test.ts"
+        "test/create-repos.test.ts",
+        "test/web-portal-interactions.test.ts"
       ],
       "smokeIds": [
         "create"
@@ -1093,7 +1105,8 @@
         "web/src/styles/palette.css"
       ],
       "tests": [
-        "test/overlay-dismiss.test.ts"
+        "test/overlay-dismiss.test.ts",
+        "test/web-portal-interactions.test.ts"
       ],
       "smokeIds": [
         "shell"
@@ -2059,7 +2072,9 @@
     {
       "description": "Shared router and navigation",
       "sources": [
-        "web/src/lib/router.js"
+        "web/src/lib/router.js",
+        "web/src/lib/page-context.js",
+        "web/src/lib/usePointerGlow.js"
       ],
       "affects": [
         "shell",
@@ -2069,6 +2084,16 @@
       ],
       "part": "ui",
       "rationale": "Route changes affect navigation in shell, project listing, post-login redirect, and setup wizard steps. Web-only file — affects only UI parts."
+    },
+    {
+      "description": "Artifact lifecycle cards and one-time result reveal",
+      "sources": [
+        "web/src/components/ArtifactCard.jsx",
+        "web/src/lib/artifact-reveal.js"
+      ],
+      "affects": ["create", "sessions", "generated-docs", "presentations"],
+      "part": "ui",
+      "rationale": "Shared generation status and result reveal used by Create and session outputs."
     },
     {
       "description": "Template library",

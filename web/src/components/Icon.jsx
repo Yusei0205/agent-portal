@@ -1,5 +1,7 @@
 // SVG icon registry — 24×24 viewBox, stroke-based icons.
 const PATHS = {
+  activity:     'M3 12h4l3-8 4 16 3-8h4',
+  maximize:     'M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5',
   // Navigation
   play:         'M7 4v16l13-8L7 4Z',
   star:         'M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.2l-5.6 3 1.1-6.2L3 9.6l6.2-.9L12 3Z',

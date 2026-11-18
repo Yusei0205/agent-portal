@@ -16,6 +16,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { AnimatePresence, LayoutGroup, m, useReducedMotion } from 'motion/react';
 import { api } from '../lib/api.js';
 import { subscribeGlobal } from '../lib/events.js';
 import { href } from '../lib/router.js';
@@ -23,6 +24,9 @@ import { Icon } from '../components/Icon.jsx';
 import { AiCore } from '../components/AiCore.jsx';
 import { sparkPath } from '../lib/sparkline.js';
 import { CostPanel } from '../components/CostPanel.jsx';
+import { DashboardDetails } from '../components/DashboardDetails.jsx';
+import { usePageState } from '../lib/page-context.js';
+import { useActiveTemplate } from '../lib/theme.js';
 import { AttentionPanel, RunsTrendPanel } from '../components/DashboardInsights.jsx';
 import { formatRelative, formatUsage } from '../lib/util.js';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
@@ -169,26 +173,16 @@ function Sparkline({ values, color, label }) {
   );
 }
 
-function StatCard({ icon, iconColor, label, value, rawValue, sub, deltaValue, deltaLabel, deltaDir, animated, trend, trendLabel, style: cardStyle }) {
-  // The highlight on the card follows the pointer (the CSS reads --mx and --my).
-  const follow = (e) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    e.currentTarget.style.setProperty('--mx', `${e.clientX - r.left}px`);
-    e.currentTarget.style.setProperty('--my', `${e.clientY - r.top}px`);
-  };
+function StatCard({ metric, selected, icon, iconColor, label, value, rawValue, sub, deltaValue, deltaLabel, deltaDir, animated, trend, trendLabel, onExplore, style: cardStyle }) {
   return (
     <article
-      className="kpi-card db-kpi-card"
+      className={`kpi-card db-kpi-card${selected ? ' is-selected' : ''}`}
       aria-label={label}
       style={cardStyle}
-      onPointerMove={animated ? follow : undefined}
+      data-metric={metric}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+      <div className="db-kpi-identity">
         <div className="kpi-label">{label}</div>
-        <div className="kpi-icon-tile" style={iconColor ? { background: `color-mix(in srgb, ${iconColor} 15%, transparent)`, color: iconColor } : {}}>
-          <Icon name={icon} size={16} aria-hidden="true" />
-        </div>
-      </div>
       <div className="kpi-value stat-value">
         {value !== null && value !== undefined
           ? (animated && typeof rawValue === 'number' && isFinite(rawValue)
@@ -196,6 +190,17 @@ function StatCard({ icon, iconColor, label, value, rawValue, sub, deltaValue, de
             : value)
           : '—'}
       </div>
+      </div>
+      {/* A non-painted projection source lets the drawer animate from the card
+          without moving or fading the card's actual title and value. */}
+      <m.div className="db-kpi-identity db-kpi-motion-source" aria-hidden="true" layoutId={animated ? `metric-${metric}` : undefined} initial={false} transition={{ type: 'spring', stiffness: 420, damping: 38 }}>
+        <div className="kpi-label">{label}</div>
+        <div className="kpi-value stat-value">{value ?? '—'}</div>
+      </m.div>
+      <div className="kpi-icon-tile" style={iconColor ? { background: `color-mix(in srgb, ${iconColor} 15%, transparent)`, color: iconColor } : {}}>
+        <Icon name={icon} size={16} aria-hidden="true" />
+      </div>
+      <div className="db-kpi-support">
       {sub && <div style={{ fontSize: '0.78rem', color: 'var(--ink-3)' }}>{sub}</div>}
       {deltaLabel !== undefined && (
         <div className={`kpi-delta${deltaDir === 'up' ? ' ok' : deltaDir === 'down' ? ' warn' : ' muted'}`}>
@@ -205,6 +210,8 @@ function StatCard({ icon, iconColor, label, value, rawValue, sub, deltaValue, de
         </div>
       )}
       {trend && <Sparkline values={trend} color={iconColor} label={trendLabel} />}
+      </div>
+      {onExplore && <button type="button" className="db-card-action" aria-label={`Explore ${label}`} aria-haspopup="dialog" aria-expanded={Boolean(selected)} onClick={onExplore}>View details <Icon name="chevronRight" size={13} aria-hidden="true" /></button>}
     </article>
   );
 }
@@ -586,7 +593,7 @@ function RecentSessionsPanel({ sessions }) {
 
 // ── Active Session ────────────────────────────────────────────────────────────
 
-function ActiveSessionPanel({ activeSession }) {
+function ActiveSessionPanel({ activeSession, projectId: selectedProjectId }) {
   if (!activeSession) {
     return (
       <aside className="panel db-active" aria-label="Active Session">
@@ -594,9 +601,10 @@ function ActiveSessionPanel({ activeSession }) {
           <Icon name="play" size={16} aria-hidden="true" />
           Active Session
         </h2>
-        <div className="empty-state db-empty-center" style={{ padding: '28px 16px' }}>
+        <div className="empty-state db-empty-center db-monitor-empty">
           <Icon name="clock" size={32} style={{ color: 'var(--ink-3)' }} />
           <p className="muted" style={{ fontSize: '0.84rem' }}>No session running right now.</p>
+          <a className="btn btn-sm" href={selectedProjectId ? href(selectedProjectId, 'sessions') : '#/projects'}>{selectedProjectId ? 'Open sessions' : 'Choose a project'}</a>
         </div>
       </aside>
     );
@@ -986,16 +994,25 @@ export function Dashboard({ user, projects }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [period, setPeriod] = useState('today');
+  const [period, setPeriod] = usePageState('dashboard-period', 'today', (value) => ['today', '7d', '30d'].includes(value));
+  const [detailMetric, setDetailMetric] = useState(null);
   // An old /p/:id/insights link redirects here and leaves the project to preselect.
-  const [projectFilter, setProjectFilter] = useState(() => {
+  const [projectFilter, setProjectFilter] = usePageState('dashboard-project', '', (value) => typeof value === 'string');
+  useEffect(() => {
     try {
-      const p = sessionStorage.getItem('dash-project') || '';
+      const p = sessionStorage.getItem('dash-project');
       sessionStorage.removeItem('dash-project');
-      return p;
-    } catch { return ''; }
-  });
-  const { animated, toggleAnimated } = useAnimations();
+      if (p) setProjectFilter(p);
+    } catch { /* Storage is optional. */ }
+  }, []);
+  useEffect(() => {
+    if (Array.isArray(projects) && projectFilter && !projects.some((project) => project.id === projectFilter)) setProjectFilter('');
+  }, [projects, projectFilter]);
+  const { animated: animationsOn, toggleAnimated } = useAnimations();
+  const reducedMotion = useReducedMotion();
+  const template = useActiveTemplate();
+  const animated = animationsOn && !reducedMotion && !['none', 'reduced'].includes(template?.effects?.motion);
+  const pendingAgent = useRef(null);
   const debounceRef = useRef(null);
   // fix 6: ref for toggling db-paused when tab is hidden
   const rootRef = useRef(null);
@@ -1005,23 +1022,29 @@ export function Dashboard({ user, projects }) {
   const [drillRuns, setDrillRuns] = useState(null);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillError, setDrillError] = useState(null);
+  const dashboardRequest = useRef(0);
+  const agentRequest = useRef(0);
 
   const load = useCallback(async () => {
+    const request = ++dashboardRequest.current;
     setLoading(true);
     setError(null);
     try {
       const qs = new URLSearchParams({ period });
       if (projectFilter) qs.set('projectId', projectFilter);
       const r = await api.get(`/api/dashboard?${qs}`);
-      setData(r);
+      if (request === dashboardRequest.current) setData(r);
     } catch (e) {
-      setError(e.message);
+      if (request === dashboardRequest.current) setError(e.message);
     } finally {
-      setLoading(false);
+      if (request === dashboardRequest.current) setLoading(false);
     }
   }, [period, projectFilter]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    return () => { dashboardRequest.current++; agentRequest.current++; };
+  }, [load]);
 
   // SSE debounced live-reload
   useEffect(() => {
@@ -1035,25 +1058,27 @@ export function Dashboard({ user, projects }) {
   }, [load]);
 
   // fix 4: open the shared drill-down modal; agentStats comes from a network-node click
-  const openDrill = useCallback(async (agentName, agentStats = null) => {
+  const openDrill = useCallback(async (agentName, agentStats = null, runPeriod = period) => {
+    const request = ++agentRequest.current;
     setDrillAgent(agentName);
     setDrillAgentStats(agentStats);
     setDrillLoading(true);
     setDrillError(null);
     setDrillRuns(null);
     try {
-      const qs = new URLSearchParams({ period });
+      const qs = new URLSearchParams({ period: runPeriod });
       if (projectFilter) qs.set('projectId', projectFilter);
       const r = await api.get(`/api/dashboard/agents/${encodeURIComponent(agentName)}/runs?${qs}`);
-      setDrillRuns(r.runs || []);
+      if (request === agentRequest.current) setDrillRuns(r.runs || []);
     } catch (e) {
-      setDrillError(e.message);
+      if (request === agentRequest.current) setDrillError(e.message);
     } finally {
-      setDrillLoading(false);
+      if (request === agentRequest.current) setDrillLoading(false);
     }
   }, [period, projectFilter]);
 
   const closeDrill = useCallback(() => {
+    agentRequest.current++;
     setDrillAgent(null);
     setDrillAgentStats(null);
     setDrillRuns(null);
@@ -1115,9 +1140,10 @@ export function Dashboard({ user, projects }) {
   const dailyRate = (data?.daily ?? []).map((d) => (d.done + d.failed > 0 ? d.done / (d.done + d.failed) : null));
 
   return (
+    <LayoutGroup id="dashboard-metrics">
     <div
       ref={rootRef}
-      className={`page wide db-root${animated ? ' db-anim' : ''}`}
+      className={`page wide db-root${animated ? ' db-anim' : ''}${loading && data ? ' db-updating' : ''}`}
       aria-label="Dashboard"
     >
       {/* ── Header ── */}
@@ -1125,13 +1151,19 @@ export function Dashboard({ user, projects }) {
         <div className="db-header-core">
           <AiCore state={coreState} size={84} animated={animated} />
           <div>
+            <span className="db-eyebrow">Operations overview</span>
             <h1 className="db-greeting">{greetText}</h1>
             <p className="muted" style={{ fontSize: '0.84rem', marginTop: 2 }}>{sub}</p>
           </div>
         </div>
         <div className="db-controls" role="group" aria-label="Dashboard controls">
+          <a className="btn btn-primary db-open-sessions" href={projectFilter ? href(projectFilter, 'sessions') : '#/projects'}>
+            <Icon name="terminal" size={14} aria-hidden="true" />
+            {projectFilter ? 'Open sessions' : 'Choose project'}
+          </a>
           {/* Period selector */}
-          <div role="group" aria-label="Time period">
+          <div className="db-period-selector" role="group" aria-label="Time period" style={{ '--period-index': ['today', '7d', '30d'].indexOf(period) }}>
+            <span className="db-period-highlight" aria-hidden="true" />
             {[
               { value: 'today', label: 'Today'   },
               { value: '7d',   label: '7 days'   },
@@ -1140,7 +1172,7 @@ export function Dashboard({ user, projects }) {
               <button
                 key={p.value}
                 type="button"
-                className={`btn btn-sm${period === p.value ? ' btn-primary' : ''}`}
+                className="btn btn-sm db-period-button"
                 onClick={() => setPeriod(p.value)}
                 aria-pressed={period === p.value}
               >
@@ -1175,6 +1207,7 @@ export function Dashboard({ user, projects }) {
 
           {/* Animation toggle */}
           <AnimToggle animated={animated} onToggle={toggleAnimated} />
+          {loading && data && <span className="db-update-status" role="status">Updating results…</span>}
         </div>
       </section>
 
@@ -1187,6 +1220,12 @@ export function Dashboard({ user, projects }) {
       )}
 
       {/* ── KPI cards ── */}
+      <AttentionPanel
+        idleClosing={data?.idleClosing}
+        recentSessions={recentSessions}
+        projectFilter={projectFilter}
+        refreshKey={data?.generatedAt}
+      />
       <div className="db-kpis" aria-label="Summary statistics">
         {loading && !data ? (
           <>
@@ -1204,6 +1243,9 @@ export function Dashboard({ user, projects }) {
               icon="agents"
               iconColor="var(--accent)"
               label="Total Agents"
+              metric="agents"
+              selected={detailMetric === 'agents'}
+              onExplore={() => setDetailMetric('agents')}
               rawValue={summary.totalAgents}
               value={fmt(summary.totalAgents)}
               sub={`${summary.activeAgents ?? 0} active now`}
@@ -1213,6 +1255,9 @@ export function Dashboard({ user, projects }) {
               icon="terminal"
               iconColor="var(--info)"
               label="Running Sessions"
+              metric="running"
+              selected={detailMetric === 'running'}
+              onExplore={() => setDetailMetric('running')}
               rawValue={summary.runningSessions}
               value={fmt(summary.runningSessions)}
               sub={`${summary.queuedSessions ?? 0} queued`}
@@ -1222,22 +1267,28 @@ export function Dashboard({ user, projects }) {
               icon="check"
               iconColor="var(--ok)"
               label="Runs Completed Today"
+              metric="completed"
+              selected={detailMetric === 'completed'}
+              onExplore={() => setDetailMetric('completed')}
               rawValue={summary.completedToday}
               value={fmt(summary.completedToday)}
               sub={dayStartLabel(summary.dayStartUtc)}
               trend={dailyDone}
               trendLabel="Runs completed per day"
               deltaValue={completedDelta != null ? Math.abs(completedDelta) : undefined}
-              deltaLabel={completedDelta != null
+              deltaLabel={completedDelta === 0 ? 'No change vs yesterday' : completedDelta != null
                 ? `${completedDelta >= 0 ? '+' : ''}${completedDelta} vs yesterday`
                 : undefined}
-              deltaDir={completedDelta == null ? undefined : completedDelta >= 0 ? 'up' : 'down'}
+              deltaDir={!completedDelta ? undefined : completedDelta > 0 ? 'up' : 'down'}
               animated={animated}
             />
             <StatCard
               icon="chart"
               iconColor={rateKnown && summary.successRate >= 0.9 ? 'var(--ok)' : 'var(--warn)'}
               label="Success Rate"
+              metric="success"
+              selected={detailMetric === 'success'}
+              onExplore={() => setDetailMetric('success')}
               value={rateKnown ? fmtPct(summary.successRate) : null}
               sub={rateKnown
                 ? `${summary.failedRuns ?? 0} failed${summary.stoppedRuns ? ` · ${summary.stoppedRuns} stopped by you (not counted)` : ''}`
@@ -1254,19 +1305,7 @@ export function Dashboard({ user, projects }) {
         )}
       </div>
 
-      {/* ── What is waiting on the person, and how the runs are going ── */}
-      <AttentionPanel
-        idleClosing={data?.idleClosing}
-        recentSessions={recentSessions}
-        projectFilter={projectFilter}
-        refreshKey={data?.generatedAt}
-      />
-      {data && <RunsTrendPanel daily={data.daily} period={period} />}
-
-      {/* ── Cost (was the Insights page) ── */}
-      <CostPanel period={period} projectId={projectFilter} user={user} refreshKey={data?.generatedAt} />
-
-      {/* ── Main grid: Network | Active Session ── */}
+      {/* Active work and outcomes share the primary monitoring area. */}
       <div className="db-main-grid">
         {loading && !data ? (
           <>
@@ -1280,16 +1319,23 @@ export function Dashboard({ user, projects }) {
           </>
         ) : (
           <>
-            <AgentNetworkPanel
-              nodes={network.nodes}
-              edges={network.edges}
-              onNodeClick={handleNodeClick}
-              animated={animated}
-            />
-            <ActiveSessionPanel activeSession={activeSession} />
+            <ActiveSessionPanel activeSession={activeSession} projectId={projectFilter} />
+            {data && <RunsTrendPanel daily={data.daily} period={period} onPeriodChange={setPeriod} />}
           </>
         )}
       </div>
+
+      <CostPanel period={period} projectId={projectFilter} user={user} refreshKey={data?.generatedAt} />
+
+      <details className="db-network-disclosure">
+        <summary><Icon name="agents" size={16} aria-hidden="true" /> Agent network <span>Explore agent activity and collaboration</span></summary>
+        <AgentNetworkPanel
+          nodes={network.nodes}
+          edges={network.edges}
+          onNodeClick={handleNodeClick}
+          animated={animated}
+        />
+      </details>
 
       {/* ── Bottom grid: Recent Sessions | Agent Performance ── */}
       <div className="db-bottom-grid">
@@ -1320,6 +1366,20 @@ export function Dashboard({ user, projects }) {
       </div>
 
       {/* ── fix 4: shared drill-down modal used by both network-node clicks and table row clicks ── */}
+      <AnimatePresence onExitComplete={() => {
+        const next = pendingAgent.current;
+        if (next) { pendingAgent.current = null; openDrill(next.agent, null, next.period); }
+      }}>
+        {detailMetric && <DashboardDetails
+          key={detailMetric}
+          metric={detailMetric}
+          value={detailMetric === 'agents' ? fmt(summary.totalAgents) : detailMetric === 'running' ? fmt(summary.runningSessions) : detailMetric === 'completed' ? fmt(summary.completedToday) : rateKnown ? fmtPct(summary.successRate) : '—'}
+          animated={animated}
+          data={data} period={period} projectId={projectFilter} projects={projects}
+          onClose={() => setDetailMetric(null)}
+          onAgent={(agent, runPeriod) => { pendingAgent.current = { agent, period: runPeriod }; setDetailMetric(null); }}
+        />}
+      </AnimatePresence>
       {drillAgent && (
         <DrillModal
           agent={drillAgent}
@@ -1331,6 +1391,7 @@ export function Dashboard({ user, projects }) {
         />
       )}
     </div>
+    </LayoutGroup>
   );
 }
 

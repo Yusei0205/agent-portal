@@ -31,7 +31,9 @@ import { SessionLive } from './SessionLive.jsx';
 import { IdeHeader } from './IdeHeader.jsx';
 import { IdeExplorer } from './IdeExplorer.jsx';
 import { IdeEditor } from './IdeEditor.jsx';
-import { IdeSourceControl } from './IdeSourceControl.jsx';
+import { DiffView, IdeSourceControl } from './IdeSourceControl.jsx';
+import { SessionCommandBar, SessionReviewOverview } from './SessionCommandBar.jsx';
+import { SessionExecution } from './SessionExecution.jsx';
 import { IdeTerminal } from './IdeTerminal.jsx';
 import { IdeBrowser } from './IdeBrowser.jsx';
 import { IdeAgents } from './IdeAgents.jsx';
@@ -1233,11 +1235,20 @@ export function IdeWorkspace({ id, project }) {
   // ── Panel state ──────────────────────────────────────────────────────────
 
   const savedLayout = loadLayout();
+  const initialMode = ['code', 'run', 'review'].includes(savedLayout.workspaceMode) ? savedLayout.workspaceMode : 'code';
+  const [workspaceMode, setWorkspaceMode] = useState(initialMode);
+  const workspaceRef = useRef(null);
+  const [telemetry, setTelemetry] = useState(null);
+  const [gitStatus, setGitStatus] = useState(null);
+  const [gitError, setGitError] = useState(null);
+  const [reviewDiff, setReviewDiff] = useState(null);
+  const gitReadVersion = useRef(0);
+  const handleGitStatus = useCallback((status) => { setGitStatus(status); setGitError(null); }, []);
 
-  const [sidebarPanel, setSidebarPanel] = useState(savedLayout.sidebarPanel ?? null);
+  const [sidebarPanel, setSidebarPanel] = useState(savedLayout.workspaceMode ? savedLayout.sidebarPanel ?? null : window.innerWidth > 1050 ? 'explorer' : null);
   const [terminalOpen, setTerminalOpen] = useState(savedLayout.terminalOpen ?? false);
   // Editor panel: collapsed by default (false). Auto-expands when a file is opened.
-  const [editorPanelOpen, setEditorPanelOpen] = useState(savedLayout.editorPanelOpen ?? false);
+  const [editorPanelOpen, setEditorPanelOpen] = useState(savedLayout.workspaceMode ? savedLayout.editorPanelOpen ?? true : true);
 
   // Persist callbacks accept the final size from onEnd so there are no stale-closure bugs.
   const persistSidebar  = useCallback((w) => saveLayout({ ...loadLayout(), sidebarW: w }), []);
@@ -1246,11 +1257,26 @@ export function IdeWorkspace({ id, project }) {
 
   // The side panel (Files, Browser, Outputs, Agents…) sits to the right of the conversation by default, so the chat
   // stays the main workspace; the person can move it to the left, like an IDE explorer.
-  const [panelSide, setPanelSide] = useState(savedLayout.panelSide === 'left' ? 'left' : 'right');
+  const [panelSide, setPanelSide] = useState(savedLayout.workspaceMode && savedLayout.panelSide === 'right' ? 'right' : 'left');
   // Chat: the conversation. Execution: the same session as a task list, tool counts and a timeline.
-  const [sessionView, setSessionView] = useState(savedLayout.sessionView === 'execution' ? 'execution' : 'chat');
   // Focus mode: only the conversation, full width (Alt+F). Not remembered: a new session opens with the panels back.
   const [focusMode, setFocusMode] = useState(false);
+  const showReviewDiff = useCallback((diff) => {
+    setReviewDiff(diff); setWorkspaceMode('review'); setEditorPanelOpen(true); setFocusMode(false);
+  }, []);
+  const selectMode = useCallback((mode) => {
+    setWorkspaceMode(mode);
+    setFocusMode(false);
+    setPanelSide('left');
+    setTerminalOpen(false);
+    setEditorPanelOpen(true);
+    const wide = (workspaceRef.current?.clientWidth || window.innerWidth) > 760;
+    setSidebarPanel(wide && mode !== 'run' ? mode === 'review' ? 'source' : 'explorer' : null);
+  }, []);
+  useEffect(() => {
+    document.dispatchEvent(new CustomEvent('portal:session-layout', { detail: { mode: workspaceMode } }));
+    return () => document.dispatchEvent(new CustomEvent('portal:session-layout', { detail: { mode: null } }));
+  }, [workspaceMode, loading]);
   useEffect(() => {
     document.dispatchEvent(new CustomEvent('portal:session-focus', { detail: focusMode }));
     return () => { if (focusMode) document.dispatchEvent(new CustomEvent('portal:session-focus', { detail: false })); };
@@ -1270,15 +1296,19 @@ export function IdeWorkspace({ id, project }) {
 
   // Open file tracking (passed from explorer to editor)
   const [openFile, setOpenFile] = useState(null);
+  const openWorkspaceFile = useCallback(async (path, line) => {
+    const resolved = await resolveConversationPath(api, id, path);
+    setOpenFile({ scope: 'work', path: resolved, name: resolved.split('/').pop(), ext: '.' + resolved.split('.').pop(), line, key: `work:${resolved}` });
+  }, [id]);
 
   // Persist panel visibility on change
   useEffect(() => {
-    saveLayout({ ...loadLayout(), sidebarPanel, terminalOpen, editorPanelOpen, panelSide, sessionView });
-  }, [sidebarPanel, terminalOpen, editorPanelOpen, panelSide, sessionView]);
+    saveLayout({ ...loadLayout(), sidebarPanel, terminalOpen, editorPanelOpen, panelSide, workspaceMode });
+  }, [sidebarPanel, terminalOpen, editorPanelOpen, panelSide, workspaceMode]);
 
   // Auto-expand editor panel when a file is opened from the explorer
   useEffect(() => {
-    if (openFile) setEditorPanelOpen(true);
+    if (openFile) { setEditorPanelOpen(true); setWorkspaceMode('code'); setFocusMode(false); }
   // openFile object reference changes on every file-open, which is what we want.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openFile]);
@@ -1289,6 +1319,7 @@ export function IdeWorkspace({ id, project }) {
     const clamp = () => {
       const maxW = Math.max(140, Math.floor((window.innerWidth - 40) * 0.45));
       setSidebarW((w) => (w > maxW ? maxW : w));
+      if ((workspaceRef.current?.clientWidth || window.innerWidth) <= 760) setSidebarPanel(null);
     };
     window.addEventListener('resize', clamp, { passive: true });
     return () => window.removeEventListener('resize', clamp);
@@ -1309,6 +1340,22 @@ export function IdeWorkspace({ id, project }) {
       setLoading(false);
     }
   }, [id, project.id]);
+
+  const loadGit = useCallback(async () => {
+    const version = ++gitReadVersion.current;
+    try {
+      const status = await api.get(`/api/workflows/${id}/ide/git/status`);
+      if (version === gitReadVersion.current) { setGitStatus(status); setGitError(null); }
+    } catch (error) {
+      if (version !== gitReadVersion.current) return;
+      if (error.status === 404) { setGitStatus({ repos: [] }); setGitError(null); }
+      else setGitError('Repository status could not be loaded. Use the Changes panel to retry.');
+    }
+  }, [id]);
+  useEffect(() => {
+    setGitStatus(null); setGitError(null); setTelemetry(null); setReviewDiff(null); setOpenFile(null); loadGit();
+    return () => { gitReadVersion.current++; };
+  }, [loadGit]);
 
   // Fetch session output files
   const loadOutputFiles = useCallback(async () => {
@@ -1444,6 +1491,7 @@ export function IdeWorkspace({ id, project }) {
         timerRef.current = setTimeout(load, 300);
         // Also refresh output files when a run completes / updates
         loadOutputFiles();
+        loadGit();
       }
       // Refresh transcript when a command result arrives in another tab
       if (event.type === 'workflow.command-result' && event.workflowId === id) {
@@ -1459,7 +1507,7 @@ export function IdeWorkspace({ id, project }) {
       }
     });
     return () => { unsub(); clearTimeout(timerRef.current); clearTimeout(outputsHighlightTimer.current); };
-  }, [project.id, id, load, loadOutputFiles]);
+  }, [project.id, id, load, loadOutputFiles, loadGit]);
 
   // ── Keyboard shortcuts — via registry only (no duplicate raw listeners) ────
 
@@ -1505,7 +1553,7 @@ export function IdeWorkspace({ id, project }) {
   const displayTitle  = title ?? workflow?.title ?? '';
 
   return (
-    <div className={`ide-workspace${focusMode ? ' ide-workspace--focus' : ''}`} aria-label="Session workspace">
+    <div ref={workspaceRef} className={`ide-workspace session-studio session-studio--${workspaceMode}${focusMode ? ' ide-workspace--focus' : ''}`} aria-label="Session workspace" data-workspace-mode={workspaceMode}>
       {/* Header */}
       <IdeHeader
         workflow={workflow ? { ...workflow, title: displayTitle } : null}
@@ -1519,6 +1567,10 @@ export function IdeWorkspace({ id, project }) {
       />
 
       {/* Body */}
+      <SessionCommandBar mode={workspaceMode} onMode={selectMode} focus={focusMode} onFocus={() => setFocusMode((value) => !value)} onDecision={() => setFocusMode(true)} workflow={workflow} telemetry={telemetry} git={gitStatus} gitError={gitError} outputs={outputFiles}
+        onFiles={() => { setFocusMode(false); setSidebarPanel('explorer'); }}
+        onTerminal={() => { setFocusMode(false); setTerminalOpen((value) => focusMode ? true : !value); }} terminalOpen={terminalOpen}
+        onOpenFile={openWorkspaceFile} onOutputs={() => { setFocusMode(false); setSidebarPanel('outputs'); }} onPreview={setPreviewOutputFile} />
       <div className={`ide-body ide-body--${panelSide}`}>
         {/* Activity bar */}
         <nav className="ide-activity-bar" aria-label="Activity bar">
@@ -1634,7 +1686,7 @@ export function IdeWorkspace({ id, project }) {
               />
             )}
             {sidebarPanel === 'source' && (
-              <IdeSourceControl workflowId={id} />
+              <IdeSourceControl workflowId={id} onStatusChange={handleGitStatus} refreshKey={`${latestRun?.status || ''}:${telemetry?.summary?.files.length || 0}`} onDiffSelected={showReviewDiff} />
             )}
             {sidebarPanel === 'browser' && !browserPopped && (
               <IdeBrowser
@@ -1700,15 +1752,19 @@ export function IdeWorkspace({ id, project }) {
             {/* Editor panel — conditionally rendered; auto-expands on file open */}
             {editorPanelOpen && (
               <div
-                className="ide-editor-area"
+                className="ide-editor-area session-work-pane"
                 style={{ width: editorW }}
-                aria-label="Editor"
+                aria-label={workspaceMode === 'run' ? 'Execution workspace' : workspaceMode === 'review' ? 'Review workspace' : 'Editor'}
               >
-                <IdeEditor
+                <div className="session-work-pane-header"><Icon name={workspaceMode === 'run' ? 'activity' : workspaceMode === 'review' ? 'git-diff' : 'code-2'} size={14} aria-hidden="true" /><strong>{workspaceMode === 'run' ? 'Execution timeline' : workspaceMode === 'review' ? 'Changes & verification' : 'Workspace editor'}</strong><span>{workspaceMode === 'code' ? 'Ctrl+S to save' : 'Recorded session activity'}</span></div>
+                {workspaceMode === 'run' ? <div className="session-timeline-scroll"><SessionExecution events={telemetry?.events || []} status={workflow?.status} running={['running', 'pending'].includes(workflow?.status)} onOpenFile={openWorkspaceFile} /></div> : workspaceMode === 'review' ? <div className="session-review-pane">
+                  <SessionReviewOverview summary={telemetry?.summary} git={gitStatus} gitError={gitError} outputs={outputFiles} projectId={project.id} onBrowse={() => { setFocusMode(false); setSidebarPanel('source'); }} onOutputs={() => setSidebarPanel('outputs')} />
+                  {reviewDiff ? <div className="session-review-diff"><div className="session-diff-heading"><code>{reviewDiff.path}</code><button type="button" className="btn-icon" aria-label="Close file diff" onClick={() => setReviewDiff(null)}><Icon name="x" size={12} /></button></div>{reviewDiff.loading ? <p role="status">Loading diff…</p> : reviewDiff.error ? <p className="error-note" role="alert">{reviewDiff.error}</p> : <DiffView diff={reviewDiff.diff} />}</div> : <div className="session-review-placeholder"><Icon name="git-diff" size={28} aria-hidden="true" /><p>Select a changed file to inspect its diff here.</p></div>}
+                </div> : <IdeEditor
                   workflowId={id}
                   openFile={openFile}
                   onFileOpened={() => {}}
-                />
+                />}
                 {/* Resize handle on right edge of editor area */}
                 <div
                   className="ide-resize-handle-x"
@@ -1743,33 +1799,11 @@ export function IdeWorkspace({ id, project }) {
               style={{ flex: 1, borderLeft: 'none' }}
               aria-label="Agent conversation"
             >
-              <div className="ide-view-switch">
-                <div className="ide-view-tabs" role="tablist" aria-label="Session view">
-                {[['chat', 'Chat'], ['execution', 'Execution']].map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    role="tab"
-                    aria-selected={sessionView === key}
-                    className={`ide-view-tab${sessionView === key ? ' is-active' : ''}`}
-                    onClick={() => setSessionView(key)}
-                  >{label}</button>
-                ))}
-                </div>
-                <button
-                  type="button"
-                  className={`ide-view-tab ide-focus-btn${focusMode ? ' is-active' : ''}`}
-                  aria-pressed={focusMode}
-                  onClick={() => setFocusMode((f) => !f)}
-                  title={focusMode ? 'Leave focus mode (Alt+F)' : 'Focus mode (Alt+F): hide the other panels'}
-                >{focusMode ? 'Exit focus' : 'Focus'}</button>
-              </div>
+              <div className="session-conversation-header"><Icon name="agents" size={14} aria-hidden="true" /><strong>Agent conversation</strong><span>{focusMode ? 'Focus mode · Alt+F to return' : 'Message, inspect, decide'}</span></div>
               <SessionLive
-                view={sessionView}
-                onOpenWorkspaceFile={async (path, line) => {
-                  const resolved = await resolveConversationPath(api, id, path);
-                  setOpenFile({ scope: 'work', path: resolved, name: resolved.split('/').pop(), ext: '.' + resolved.split('.').pop(), line, key: `work:${resolved}` });
-                }}
+                view="chat"
+                onTelemetry={setTelemetry}
+                onOpenWorkspaceFile={openWorkspaceFile}
                 runId={latestRunId}
                 workflowId={id}
                 projectId={project.id}
@@ -1781,6 +1815,18 @@ export function IdeWorkspace({ id, project }) {
                 onBrowserEvent={handleBrowserEvent}
                 outputFiles={outputFiles}
                 vaultFolder={outputVaultFolder}
+              />
+              <ComposerBar
+                workflow={workflow}
+                projectId={project.id}
+                onSent={load}
+                idleStopped={idleStopped}
+                onDismissIdle={() => setIdleStopped(null)}
+                onOptimisticSend={handleOptimisticSend}
+                onSendSuccess={handleSendSuccess}
+                onSendError={handleSendError}
+                onCommandDone={() => { load(); setCommandTick((k) => k + 1); }}
+                onShellCommand={(command) => { (window.__portalTermQueue ||= []).push({ workflowId: id, command, at: Date.now() }); setTerminalOpen(true); }}
               />
             </div>
           </div>
@@ -1838,21 +1884,7 @@ export function IdeWorkspace({ id, project }) {
         </div>
       </div>
 
-      {/* Composer */}
-      <ComposerBar
-        workflow={workflow}
-        projectId={project.id}
-        onSent={load}
-        idleStopped={idleStopped}
-        onDismissIdle={() => setIdleStopped(null)}
-        onOptimisticSend={handleOptimisticSend}
-        onSendSuccess={handleSendSuccess}
-        onSendError={handleSendError}
-        onCommandDone={() => { load(); setCommandTick((k) => k + 1); }}
-        onShellCommand={(command) => { (window.__portalTermQueue ||= []).push({ workflowId: id, command, at: Date.now() }); setTerminalOpen(true); }}
-      />
-
-      {/* Status bar: model, context, tokens, cost and plan usage, right under the message box */}
+      {/* Workspace status: model, context, tokens, cost and plan usage. */}
       <IdeStatusBar
         projectId={project.id}
         workflowId={id}

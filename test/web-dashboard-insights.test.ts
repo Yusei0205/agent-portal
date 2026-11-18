@@ -48,8 +48,11 @@ const inbox = {
 const insights = { totalCost: 0, totalCredits: 0, totalRuns: 20, totalTokens: 0, failureRate: 0, avgRunDuration: 0, dailyCosts: [], costByProject: [], costByUser: [], runsByStatus: [] };
 
 test('the dashboard shows what needs the person, a runs trend, honest numbers and no empty columns', async () => {
-  const entry = `import React from 'react'; import {createRoot} from 'react-dom/client'; import {Dashboard} from './web/src/pages/Dashboard.jsx'; import './web/src/styles/tokens.css'; import './web/src/styles/base.css'; import './web/src/styles/components.css'; import './web/src/styles/dashboard.css';
-createRoot(document.getElementById('root')).render(<Dashboard user={{ name: 'Tan', email: 't@x.com', is_admin: true }} projects={[]} />);`;
+  const entry = `import React from 'react'; import {createRoot} from 'react-dom/client'; import {Dashboard} from './web/src/pages/Dashboard.jsx'; import './web/src/styles.css'; import '@fontsource-variable/inter/index.css'; import '@fontsource-variable/exo-2/index.css'; import '@fontsource-variable/space-grotesk/index.css'; import '@fontsource/orbitron/400.css';
+import {applyTheme, setMode, setActiveTemplate} from './web/src/lib/theme.js'; applyTheme();
+import {MotionRoot} from './web/src/components/MotionRoot.jsx';
+window.addEventListener('test:cyber', () => { setMode('dark'); setActiveTemplate('cyber-hud'); });
+createRoot(document.getElementById('root')).render(<MotionRoot><Dashboard user={{ name: 'Tan', email: 't@x.com', is_admin: true }} projects={[]} /></MotionRoot>);`;
   const bundled = await build({ stdin: { contents: entry, resolveDir: process.cwd(), loader: 'jsx' }, bundle: true, write: false, outfile: 'a.js', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"production"' }, logLevel: 'silent', loader: { '.svg': 'dataurl', '.woff2': 'dataurl', '.woff': 'dataurl' } });
   const file = (ext: string) => bundled.outputFiles.find((f) => f.path.endsWith(ext))!;
   const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}) });
@@ -114,6 +117,59 @@ createRoot(document.getElementById('root')).render(<Dashboard user={{ name: 'Tan
     const costText = await cost.innerText();
     assert.match(costText, /none reported any cost, credits or tokens/);
     assert.doesNotMatch(costText, /\$0\.00 total/);
+
+    // Supporting text differs, but values and action baselines stay aligned.
+    const geometry = await page.locator('.db-kpi-card').evaluateAll((cards) => cards.map((card) => ({
+      bottom: card.getBoundingClientRect().bottom,
+      value: card.querySelector('.kpi-value')!.getBoundingClientRect().top,
+      action: card.querySelector('.db-card-action')!.getBoundingClientRect().top,
+    })));
+    for (const key of ['bottom', 'value', 'action'] as const) assert.ok(Math.max(...geometry.map((box) => box[key])) - Math.min(...geometry.map((box) => box[key])) < 2, `desktop KPI ${key} should align`);
+    const panelBottoms = await page.locator('.db-main-grid > .panel').evaluateAll((panels) => panels.map((panel) => panel.getBoundingClientRect().bottom));
+    assert.ok(Math.abs(panelBottoms[0] - panelBottoms[1]) < 2, 'paired monitoring panels should share a bottom edge');
+    const resultBottoms = await page.locator('.db-bottom-grid > .panel').evaluateAll((panels) => panels.map((panel) => panel.getBoundingClientRect().bottom));
+    assert.ok(Math.abs(resultBottoms[0] - resultBottoms[1]) < 2, 'recent sessions and performance panels should share a bottom edge');
+
+    // Decisions precede metrics, while the network is available on demand.
+    assert.ok(await page.evaluate(() => Boolean(document.querySelector('.db-attn')!.compareDocumentPosition(document.querySelector('.db-kpis')!) & Node.DOCUMENT_POSITION_FOLLOWING)));
+    const network = page.getByRole('region', { name: 'Agent Network' });
+    assert.equal(await network.isVisible(), false);
+    await page.locator('.db-network-disclosure > summary').click();
+    assert.equal(await network.isVisible(), true);
+    await page.locator('.db-network-disclosure > summary').click();
+    assert.equal(await page.getByRole('link', { name: 'Choose project', exact: true }).getAttribute('href'), '#/projects');
+
+    // Keep the overview usable at phone width, including two compact KPI columns.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= window.innerWidth);
+    if (process.env.PORTAL_UI_SCREENSHOT_PATH) await page.screenshot({ path: process.env.PORTAL_UI_SCREENSHOT_PATH, fullPage: true });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'dashboard should not scroll horizontally');
+    await page.evaluate(() => window.dispatchEvent(new Event('test:cyber')));
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.evaluate(async () => { await document.fonts.ready; await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'HUD dashboard should fit desktop');
+    if (process.env.PORTAL_UI_SCREENSHOT_PATH) await page.screenshot({ path: process.env.PORTAL_UI_SCREENSHOT_PATH.replace(/\.png$/, '-cyber-desktop.png'), fullPage: true });
+
+    // The empty dashboard uses a compact all-clear strip and equally sized panels.
+    const emptyDashboard = { ...dashboard, summary: { ...dashboard.summary, totalAgents:0, runningSessions:0, completedToday:0, completedYesterday:0, finishedRuns:0, successRate:0, failedRuns:0, stoppedRuns:0 }, agents:[], daily:[], recentSessions:[], idleClosing:[] };
+    await page.route('**/api/dashboard?*', (route) => route.fulfill({json:emptyDashboard}));
+    await page.route('**/api/inbox?*', (route) => route.fulfill({json:{items:[],total:0}}));
+    await page.route('**/api/insights?*', (route) => route.fulfill({json:{...insights,totalRuns:0}}));
+    await page.reload();
+    await page.locator('.db-attn.is-clear').waitFor();
+    const clearHeight = await page.locator('.db-attn').evaluate((element) => element.getBoundingClientRect().height);
+    assert.ok(clearHeight < 80, `the all-clear strip should be compact, got ${clearHeight}px`);
+    const emptyBottoms = await page.locator('.db-main-grid > .panel').evaluateAll((panels) => panels.map((panel) => panel.getBoundingClientRect().bottom));
+    assert.ok(Math.abs(emptyBottoms[0] - emptyBottoms[1]) < 2, 'empty monitoring panels should align');
+    if (process.env.PORTAL_UI_SCREENSHOT_PATH) await page.screenshot({path:process.env.PORTAL_UI_SCREENSHOT_PATH.replace(/\.png$/, '-empty-desktop.png'),fullPage:true,animations:'disabled'});
+    await page.getByRole('button', {name:'Show last 30 days',exact:true}).click();
+    assert.equal(await page.getByRole('button', {name:'30 days',exact:true}).getAttribute('aria-pressed'), 'true');
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await page.setViewportSize({width:390,height:844});
+    await page.waitForFunction(() => document.documentElement.scrollWidth <= innerWidth);
+    const mobile = await page.locator('.db-kpi-card').evaluateAll((cards) => cards.map((card) => ({top:card.getBoundingClientRect().top, action:card.querySelector('.db-card-action')!.getBoundingClientRect().top})));
+    assert.ok(Math.abs(mobile[0].action-mobile[1].action) < 2 && Math.abs(mobile[2].action-mobile[3].action) < 2, 'mobile card actions should align within each row');
+    if (process.env.PORTAL_UI_SCREENSHOT_PATH) await page.screenshot({path:process.env.PORTAL_UI_SCREENSHOT_PATH.replace(/\.png$/, '-empty-mobile.png'),fullPage:true,animations:'disabled'});
     assert.deepEqual(errors, []);
   } finally { await browser.close(); }
 });

@@ -172,7 +172,13 @@ function NewDiagramModal({ projectId, repos, packsAvailable, onClose, onCreated 
 
 // ── Diagram view modal ────────────────────────────────────────────────────────
 
-function ViewDiagramModal({ diagram, onClose }) {
+export function ViewDiagramModal({ diagram, onClose }) {
+  const trapRef = useFocusTrap();
+  useEffect(() => {
+    const escape = (event) => { if (event.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [onClose]);
   const [detail, setDetail] = useState(null);
   const [drawioXml, setDrawioXml] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -196,11 +202,11 @@ function ViewDiagramModal({ diagram, onClose }) {
       }
     };
     load();
-  }, [diagram]);
+  }, [diagram.project_id, diagram.id, diagram.version]);
 
   return (
     <div className="modal-backdrop modal-wide" role="dialog" aria-modal="true" aria-labelledby="view-diagram-title">
-      <div className="modal modal-xl">
+      <div className="modal modal-xl" ref={trapRef}>
         <div className="modal-header">
           <h2 id="view-diagram-title">{diagram.title}</h2>
           <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">✕</button>

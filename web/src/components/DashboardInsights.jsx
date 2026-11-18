@@ -119,10 +119,10 @@ export function AttentionPanel({ idleClosing, recentSessions, projectFilter, ref
   const hidden = Math.max(rows.length - shown.length, inboxTotal - (inbox || []).length, 0);
 
   return (
-    <section className="panel db-attn" aria-label="Needs attention">
+    <section className={`panel db-attn${inbox !== null && rows.length === 0 ? ' is-clear' : ''}`} aria-label="Needs attention">
       <div className="db-panel-header">
         <h2 className="db-panel-title">
-          <Icon name="warning" size={16} aria-hidden="true" />
+          <Icon name={inbox !== null && rows.length === 0 ? 'check' : 'warning'} size={16} aria-hidden="true" />
           Needs attention
           {rows.length > 0 && <span className="db-attn-count" aria-label={`${rows.length} items`}>{rows.length}</span>}
         </h2>
@@ -156,7 +156,7 @@ function fmtMinutes(ms) {
   return (ms / 60_000).toFixed(ms < 600_000 ? 1 : 0);
 }
 
-export function RunsTrendPanel({ daily, period }) {
+export function RunsTrendPanel({ daily, period, onPeriodChange }) {
   const days = daily || [];
   const total = days.reduce((s, d) => s + d.done + d.failed + d.cancelled, 0);
   const done = days.reduce((s, d) => s + d.done, 0);
@@ -165,7 +165,7 @@ export function RunsTrendPanel({ daily, period }) {
   const data = useMemo(() => days.map((d) => ({ ...d, avgMin: Math.round((d.avgDurationMs / 60_000) * 10) / 10 })), [days]);
 
   return (
-    <section className="panel db-trend" aria-label="Runs per day" style={{ marginBottom: 16 }}>
+    <section className="panel db-trend" aria-label="Runs per day">
       <h2 className="db-panel-title">
         <Icon name="chart" size={16} aria-hidden="true" />
         Runs per day
@@ -174,7 +174,12 @@ export function RunsTrendPanel({ daily, period }) {
         </span>
       </h2>
       {total === 0 ? (
-        <p className="muted" style={{ padding: '12px 0' }}>No runs finished in this period.</p>
+        <div className="db-monitor-empty">
+          <Icon name="chart" size={26} aria-hidden="true" />
+          <p className="muted">No runs finished in this period.</p>
+          {onPeriodChange && period !== '30d' && <button type="button" className="btn btn-sm" onClick={() => onPeriodChange('30d')}>Show last 30 days</button>}
+          {period === '30d' && <p className="muted small">Completed runs will appear here.</p>}
+        </div>
       ) : (
         <>
           <p className="sr-only">

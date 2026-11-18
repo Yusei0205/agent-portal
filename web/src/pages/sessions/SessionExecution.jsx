@@ -72,6 +72,18 @@ function Tile({ label, value, tone }) {
   );
 }
 
+function ToolInspection({ call, events }) {
+  const event = events.find((item) => String(item.id) === call.id);
+  const input = event?.payload?.toolInput ?? event?.payload?.input ?? call.preview;
+  const result = event?._end?.payload;
+  const output = result?.output ?? result?.result ?? result?.text ?? result?.content ?? result;
+  const show = (value) => {
+    const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
+    return text?.length > 12000 ? `${text.slice(0, 12000)}\n… Truncated in this view. Open the conversation for the full output.` : text;
+  };
+  return <div className="session-tool-inspection"><h4>Input</h4><pre>{show(input) || 'No input recorded.'}</pre><h4>Recorded result</h4><pre>{output ? show(output) : 'No result payload has been recorded for this tool call.'}</pre></div>;
+}
+
 const SHOWN_CALLS = 60;
 
 /**
@@ -113,7 +125,7 @@ export function SessionExecution({ events, running = false, status = '', planMod
       {top}
       <div className="exe-tiles">
         <Tile label="tool calls" value={counts.total} />
-        <Tile label="running" value={counts.running} tone={counts.running ? 'live' : undefined} />
+        <Tile label="running" value={running ? counts.running : 0} tone={running && counts.running ? 'live' : undefined} />
         <Tile label="failed" value={counts.failed} tone={counts.failed ? 'bad' : undefined} />
         <Tile label="files changed" value={files.length} />
         <Tile label={running ? 'elapsed so far' : 'elapsed'} value={sum.elapsedMs === null ? '–' : formatDuration(sum.elapsedMs)} />
@@ -187,10 +199,15 @@ export function SessionExecution({ events, running = false, status = '', planMod
           <ol className="exe-timeline">
             {shown.map((c) => (
               <li key={c.id} className={`exe-call exe-call--${c.status}`}>
+                <details className="session-tool-details">
+                <summary aria-label={`Inspect ${c.name} tool call`}>
                 <span className="exe-call-dot" aria-label={c.status} />
                 <span className="exe-call-name">{c.name}</span>
                 <span className="exe-call-arg" title={c.preview}>{c.preview}</span>
-                <span className="exe-call-time">{c.durationMs === null ? (c.status === 'running' ? 'running…' : '') : formatDuration(c.durationMs)}</span>
+                <span className="exe-call-time">{c.durationMs === null ? (c.status === 'running' ? running ? 'running…' : 'no result' : '') : formatDuration(c.durationMs)}</span>
+                </summary>
+                <ToolInspection call={c} events={events} />
+                </details>
               </li>
             ))}
           </ol>

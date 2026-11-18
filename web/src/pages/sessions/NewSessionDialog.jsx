@@ -514,10 +514,14 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
 
         {/* Body */}
         <div className="dialog-body stack">
+          <div className="launch-intro">
+            <strong>Start with an outcome</strong>
+            <p>Describe your goal, choose an engine, and connect the code you want to work on. You can also start with an empty goal and send it in chat.</p>
+          </div>
           {/* Goal */}
           <div className="field">
             <label htmlFor="ns-goal">
-              Goal <span className="muted" style={{ fontWeight: 400 }}>(optional — leave empty to open the session, check out the repositories, and type your first message there)</span>
+              Goal <span className="muted" style={{ fontWeight: 400 }}>(optional)</span>
             </label>
             <textarea
               id="ns-goal"
@@ -639,16 +643,6 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
             />
           )}
 
-          {/* Model picker (Kiro and Claude Code) */}
-          {engine !== 'demo' && (
-            <ModelPicker
-              engine={engine}
-              credentialId={credentialId}
-              value={model}
-              onChange={setModel}
-            />
-          )}
-
           {/* Credential picker (when >1) */}
           {engine !== 'demo' && initLoaded && (
             <CredentialPicker
@@ -678,40 +672,52 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
             </div>
           )}
 
-          {/* Terse replies: every real engine (Claude, Kiro, Codex) */}
-          {engine !== 'demo' && (
-            <div className="field">
-              <label className="choice" style={{ cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={caveman}
-                  onChange={(e) => {
-                    setCaveman(e.target.checked);
-                    try { localStorage.setItem('portal.newSession.caveman', e.target.checked ? '1' : '0'); } catch { /* not remembered */ }
-                  }}
+          <details className="launch-advanced">
+            <summary>Advanced options · model, reply style, iterations</summary>
+            <div className="stack">
+              {engine !== 'demo' && (
+                <ModelPicker
+                  engine={engine}
+                  credentialId={credentialId}
+                  value={model}
+                  onChange={setModel}
                 />
-                <span>
-                  <strong>Terse replies (caveman)</strong>{' '}
-                  <span className="muted">
-                    Short answers with no filler, code and commands unchanged. Say &ldquo;normal mode&rdquo; in the chat to switch it off.
-                  </span>
-                </span>
-              </label>
-            </div>
-          )}
+              )}
+              {/* Terse replies: every real engine (Claude, Kiro, Codex) */}
+              {engine !== 'demo' && (
+                <div className="field">
+                  <label className="choice" style={{ cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={caveman}
+                      onChange={(e) => {
+                        setCaveman(e.target.checked);
+                        try { localStorage.setItem('portal.newSession.caveman', e.target.checked ? '1' : '0'); } catch { /* not remembered */ }
+                      }}
+                    />
+                    <span>
+                      <strong>Terse replies (caveman)</strong>{' '}
+                      <span className="muted">
+                        Short answers with no filler, code and commands unchanged. Say &ldquo;normal mode&rdquo; in the chat to switch it off.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              )}
 
-          {/* Max iterations */}
-          <div className="field" style={{ maxWidth: 180 }}>
-            <label htmlFor="ns-iters">Max iterations</label>
-            <input
-              id="ns-iters"
-              type="number"
-              min={1}
-              max={100}
-              value={maxIterations}
-              onChange={(e) => setMaxIterations(e.target.value)}
-            />
-          </div>
+              <div className="field" style={{ maxWidth: 180 }}>
+                <label htmlFor="ns-iters">Max iterations</label>
+                <input
+                  id="ns-iters"
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={maxIterations}
+                  onChange={(e) => setMaxIterations(e.target.value)}
+                />
+              </div>
+            </div>
+          </details>
 
           {/* Repositories (legacy: shown when no workspaces and repos exist) */}
           {workspaces.length === 0 && readyRepos.length > 0 && (

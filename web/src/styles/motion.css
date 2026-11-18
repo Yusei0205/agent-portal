@@ -25,13 +25,8 @@
 .db-header-core { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .db-header-core > div { min-width: 0; }
 
-/* ── KPI cards: the highlight follows the pointer, a sparkline shows the trend ── */
+/* ── KPI cards: a sparkline shows the trend; delegated pointer light lives in command-center.css ── */
 .db-kpi-card { position: relative; overflow: hidden; }
-.db-kpi-card::before {
-  content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity 0.25s ease;
-  background: radial-gradient(180px circle at var(--mx, 50%) var(--my, 50%), color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%);
-}
-.db-anim .db-kpi-card:hover::before { opacity: 1; }
 .kpi-spark { display: block; width: 100%; height: 28px; margin-top: 6px; overflow: visible; }
 .kpi-spark-line { fill: none; stroke: var(--spark, var(--accent)); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .kpi-spark-area { fill: color-mix(in srgb, var(--spark, var(--accent)) 14%, transparent); stroke: none; }

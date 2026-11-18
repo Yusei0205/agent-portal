@@ -29,10 +29,14 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
 
   // The sessions list can fold away to give the conversation the whole width. It stays mounted (search and filters are kept).
   const [listCollapsed, setListCollapsed] = useState(loadCollapsed);
-  const toggleList = () => setListCollapsed((c) => {
-    try { localStorage.setItem(LS_LIST_COLLAPSED, c ? '0' : '1'); } catch { /* storage unavailable: not remembered */ }
-    return !c;
-  });
+  const [layoutFolded, setLayoutFolded] = useState(false);
+  const toggleList = () => {
+    if (layoutFolded) { setLayoutFolded(false); setListCollapsed(false); return; }
+    setListCollapsed((collapsed) => {
+      try { localStorage.setItem(LS_LIST_COLLAPSED, collapsed ? '0' : '1'); } catch { /* storage unavailable: not remembered */ }
+      return !collapsed;
+    });
+  };
   // Focus mode (Alt+F in the session) hides the list too, without changing the remembered choice.
   const [focus, setFocus] = useState(false);
   useEffect(() => {
@@ -40,7 +44,12 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
     document.addEventListener('portal:session-focus', on);
     return () => document.removeEventListener('portal:session-focus', on);
   }, []);
-  const collapsed = Boolean(selectedId) && (listCollapsed || focus);
+  useEffect(() => {
+    const onLayout = (event) => setLayoutFolded(['code', 'review'].includes(event.detail?.mode));
+    document.addEventListener('portal:session-layout', onLayout);
+    return () => document.removeEventListener('portal:session-layout', onLayout);
+  }, []);
+  const collapsed = Boolean(selectedId) && (listCollapsed || focus || layoutFolded);
 
   const handleSelect = (id) => {
     navigate(href(projectId, 'sessions', id));

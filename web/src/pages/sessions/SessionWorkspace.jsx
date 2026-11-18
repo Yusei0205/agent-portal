@@ -9,5 +9,5 @@ import { IdeWorkspace } from './IdeWorkspace.jsx';
  * }} props
  */
 export function SessionWorkspace({ id, project }) {
-  return <IdeWorkspace id={id} project={project} />;
+  return <IdeWorkspace key={id} id={id} project={project} />;
 }

@@ -542,7 +542,7 @@
 }
 .ws-composer-row {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 6px;
 }
 /* In manual mode the row has an explicit height and the textarea fills it */
@@ -550,10 +550,10 @@
   min-height: 0;
   align-items: stretch;
 }
-/* Buttons stay pinned to the bottom in manual mode */
+/* Keep the controls on the same centre line in both sizing modes. */
 .ws-composer--manual .ws-composer-row > .btn-icon,
 .ws-composer--manual .ws-composer-actions {
-  align-self: flex-end;
+  align-self: center;
 }
 /* A message box dragged down to about one line: a single centred line, with the buttons centred on it. (Taller boxes keep
    the buttons at the bottom, like any chat box.) */
@@ -565,6 +565,7 @@
 .ws-composer--manual .ws-composer-row.ws-composer-row--compact > .ws-composer-input { height: 32px; min-height: 32px; max-height: 32px; }
 .ws-composer-input {
   flex: 1;
+  min-width: 0;
   font-size: 0.84rem;
   min-height: 32px;
   padding: 5px 9px;
@@ -587,12 +588,11 @@
   gap: 4px;
   flex-shrink: 0;
 }
-/* The attach button, the > prompt and the send button are as tall as one line of the textarea (32px) and stay at the
-   bottom of the row, so with one line their centres line up with the text; with more lines they stay at the bottom. */
+/* Equal control sizes keep the attachment, prompt and send action aligned. */
 .ws-composer-row > .btn-icon,
 .ws-composer-actions .btn { height: 32px; min-height: 32px; box-sizing: border-box; }
 .ws-composer-row > .btn-icon { width: 32px; }
-.ws-composer-actions .btn { padding-top: 0; padding-bottom: 0; justify-content: center; }
+.ws-composer-actions .btn { width: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 
 /* ── Inbox page ──────────────────────────────────────────────── */
 .inbox-item {
@@ -1121,7 +1121,7 @@
 
 /* Message box: prompt glyph and key hints */
 .ws-composer-prompt {
-  align-self: flex-start; flex: none;
+  align-self: center; flex: none;
   height: 32px; display: inline-flex; align-items: center;
   font-family: var(--mono); font-weight: 700; color: var(--accent);
 }

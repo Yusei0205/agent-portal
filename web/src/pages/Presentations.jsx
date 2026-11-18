@@ -27,10 +27,16 @@ function StatusBadge({ stale, hasPptx, status }) {
 
 // ── Slide preview modal ───────────────────────────────────────────────────────
 
-function SlidePreviewModal({ name, slides, onClose }) {
+export function SlidePreviewModal({ name, slides, onClose }) {
+  const trapRef = useFocusTrap();
+  useEffect(() => {
+    const escape = (event) => { if (event.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', escape);
+    return () => document.removeEventListener('keydown', escape);
+  }, [onClose]);
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="preview-title">
-      <div className="modal modal-wide">
+      <div className="modal modal-wide" ref={trapRef}>
         <div className="modal-header">
           <h2 id="preview-title">Slides — {name}</h2>
           <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">✕</button>

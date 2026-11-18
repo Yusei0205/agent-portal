@@ -8,6 +8,8 @@ import { CommandPalette } from './components/CommandPalette.jsx';
 import { ShortcutsSheet } from './components/ShortcutsSheet.jsx';
 import { getTemplate, getActiveTemplateId, fetchAndApplyTheme } from './lib/theme.js';
 import { subscribeGlobal } from './lib/events.js';
+import { usePageScroll } from './lib/page-context.js';
+import { usePointerGlow } from './lib/usePointerGlow.js';
 import { Rail, DEFAULT_RAIL_W, MIN_RAIL_W, MAX_RAIL_W } from './components/Rail.jsx';
 import { Login, AcceptInvite, ResetPassword } from './pages/Auth.jsx';
 import SetupWizard from './pages/setup/SetupWizard.jsx';
@@ -87,6 +89,9 @@ function Placeholder({ tab }) {
 
 function Shell({ user, onSignOut }) {
   const route = useRoute();
+  const mainRef = useRef(null);
+  usePageScroll(`${route.projectId || ''}:${route.tab}`, mainRef);
+  usePointerGlow(mainRef, `${route.projectId || ''}:${route.tab}`);
   const [projects, setProjects] = useState(null);
   const [navOpen, setNavOpen] = useState(false);
   const [inboxCount, setInboxCount] = useState(0);
@@ -543,6 +548,7 @@ function Shell({ user, onSignOut }) {
         {/* A new key per page replays the short fade-in (CSS only, opacity only: a transform here would become the
             containing block of every fixed dialog inside the page, and a page must never wait for a script to show). */}
         <main
+          ref={mainRef}
           key={`${route.projectId || ''}:${route.tab}`}
           id="main"
           className={`main main-enter${isSessionsRoute ? ' full-height' : ''}`}
