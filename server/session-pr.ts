@@ -35,6 +35,7 @@ import { runtimeFor } from './agent/repo-prep.ts';
 import { branchNameFor, classifyPushError, isProtectedBranch } from './agent/runner-finalize.ts';
 import type { DiffFile } from './autofix/guardrails.ts';
 import type { AutofixPrOutcome, AutofixPrPlan } from './autofix/delivery.ts';
+import { AUTOFIX_BRANCH_PREFIX } from './autofix/github-events.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -276,7 +277,9 @@ async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<voi
           kind: 'autofix', findingId: finding?.id ?? null, findingKind: finding?.kind ?? null,
           title: `Open an auto-fix pull request for ${change.repo}?`,
           body: `The auto-fix session changed ${change.files} files in ${change.commits} commit(s) in ${change.repo} and its checks pass. ${why} Approve to push a new branch and open a draft pull request.`,
-          repo: change.repo, repoId, base: change.base, commits: change.commits, files: change.files,
+          // A review fix's PR is stacked on the reviewed branch (see AutofixPrPlan.base).
+          repo: change.repo, repoId, base: finding?.source === 'review_finding' && finding.branch ? finding.branch : change.base,
+          commits: change.commits, files: change.files,
           ...changedPathsPayload(change),
         },
       });
@@ -422,7 +425,8 @@ async function runPullRequestSteps(
   const ticket = ticketOf(w);
   const title = plan ? plan.title : prTitle(w);
   const settings = getPullRequestSettings(projectId);
-  const baseBranch = start.base || repo.default_branch || 'main';
+  // A review fix is stacked on the reviewed PR's branch: its plan names the base (see AutofixPrPlan.base).
+  const baseBranch = plan?.base || start.base || repo.default_branch || 'main';
   const engine = (String(w.engine) === 'kiro' ? 'kiro' : String(w.engine) === 'codex' ? 'codex' : 'claude-code') as 'kiro' | 'claude-code' | 'codex';
 
   // An older Inbox approval must not push while a newer turn is changing the same files.
@@ -454,6 +458,11 @@ async function runPullRequestSteps(
         taken,
         ...(plan ? { stem: plan.branchStem } : {}),
       });
+    }
+    // An auto-fix push goes only to an autofix/ branch: never the reviewed PR's own branch, nor any other a person works on.
+    if (plan && !branch.startsWith(AUTOFIX_BRANCH_PREFIX)) {
+      await emitEv({ state: 'failed', branch: undefined, error: `The branch ${branch} is not an auto-fix branch, so nothing was pushed.`, errorCode: 'failed' });
+      return { kind: 'not-opened', error: `the branch ${branch} is not an auto-fix branch` };
     }
     // Second enforcement of the protected list (the runner checks it again before pushing).
     if (isProtectedBranch(branch, settings.protectedBranches, repo.default_branch)) {
@@ -538,6 +547,10 @@ async function runPullRequestSteps(
   }
 
   // 3. Protected check again for a retry that reuses a pushed branch, then the pull request.
+  if (plan && !branch.startsWith(AUTOFIX_BRANCH_PREFIX)) {
+    await emitEv({ state: 'failed', branch, error: `The branch ${branch} is not an auto-fix branch.`, errorCode: 'failed' });
+    return { kind: 'not-opened', error: `the branch ${branch} is not an auto-fix branch` };
+  }
   if (isProtectedBranch(branch, settings.protectedBranches, repo.default_branch)) {
     await emitEv({ state: 'failed', branch, error: `The branch ${branch} is protected.`, errorCode: 'failed' });
     return { kind: 'not-opened', error: `the branch ${branch} is protected`, branch };

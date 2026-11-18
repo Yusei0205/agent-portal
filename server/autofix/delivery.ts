@@ -70,6 +70,7 @@ function fenced(text: string): string {
 }
 
 export function prTitleFor(f: AutofixFinding): string {
+  if (f.source === 'review_finding') return `Auto-fix: review finding${f.branch ? ` on ${inline(f.branch, 60)}` : ''}`;
   return `Auto-fix: ${inline(f.kind, 40) || 'failure'} failure${f.branch ? ` on ${inline(f.branch, 60)}` : ''}`;
 }
 
@@ -211,6 +212,11 @@ export interface AutofixPrPlan {
   reuseBranch?: string;
   /** The PR already open from reuseBranch: when it is still open, the push updates it and no PR is created. */
   existingPr?: { number: number; url: string };
+  /**
+   * The PR's base instead of the reported one: for a review fix, the reviewed PR's head branch (a stacked PR). The push still goes
+   * only to the autofix/ branch; the reviewed branch is never pushed to.
+   */
+  base?: string;
 }
 
 /** The protected paths as checkDiff applies them for this kind: a 'deps' fix may touch the lockfiles (and only those globs are dropped). */
@@ -234,6 +240,7 @@ export async function autofixPrPlan(workflowId: string, runId: string): Promise<
     denyPaths: denyPathsFor(active.policy, f.kind),
     ...(f.pr_branch ? { reuseBranch: f.pr_branch } : {}),
     ...(f.pr_branch && f.pr_number != null && f.pr_url ? { existingPr: { number: f.pr_number, url: f.pr_url } } : {}),
+    ...(f.source === 'review_finding' && f.branch ? { base: f.branch } : {}),
   };
 }
 

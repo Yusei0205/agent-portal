@@ -37,6 +37,7 @@ const repo = () => getAutofixFindingsRepository();
 /** A finished fix session whose last run's check passed (unless `checkOk` is false), with its finding 'fixing'. */
 async function makeFix(opts: {
   mode?: AutofixPolicy['mode']; checkOk?: boolean | null; withFinding?: boolean; attempts?: number; limits?: Partial<AutofixPolicy['limits']>;
+  source?: AutofixFinding['source']; kind?: string; branch?: string;
 } = {}): Promise<Fix> {
   const projectId = generateId();
   run('INSERT INTO projects (id, slug, name, description, notes, created_at) VALUES (?,?,?,?,?,?)',
@@ -62,9 +63,9 @@ async function makeFix(opts: {
   let findingId = '';
   if (opts.withFinding !== false) {
     const { finding } = await repo().upsertByFingerprint({
-      project_id: projectId, source: 'ci_failed', kind: 'tests', fingerprint: `${FP}${++seq}`, severity: 'medium',
+      project_id: projectId, source: opts.source ?? 'ci_failed', kind: opts.kind ?? 'tests', fingerprint: `${FP}${++seq}`, severity: 'medium',
       evidence: 'FAIL test/cart.test.ts: expected 2, got 3\nGITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789',
-      repo_id: repoId, branch: 'main', commit_sha: 'abc123',
+      repo_id: repoId, branch: opts.branch ?? 'main', commit_sha: 'abc123',
     });
     findingId = finding.id;
     await repo().transition(findingId, ['new'], { status: 'fixing', workflow_id: workflowId, attempts: opts.attempts ?? 0 });
@@ -232,6 +233,38 @@ describe('createPullRequest draft and labels', () => {
     await createPullRequest({ repo: ghRepo, base: 'main', head: 'x', title: 't', body: 'b' });
     assert.equal(ghCalls.length, 1);
     assert.deepEqual(Object.keys(ghCalls[0].body).sort(), ['base', 'body', 'head', 'title']);
+  });
+});
+
+describe('a review fix: a PR stacked on the reviewed branch', () => {
+  it("pushes only the autofix/ branch and opens the PR against the reviewed PR's head branch", async () => {
+    const s = await makeFix({ source: 'review_finding', kind: 'review', branch: 'feature/login' });
+    _setSessionPrDeps({ listBranches: async () => ['main', 'feature/login'] });
+    // The runner reports the change against the branch it cloned (the default branch).
+    await handleRepoChanges(ctxOf(s), [clean]);
+    const f = await finding(s);
+    const branch = fixBranchName('review', f.fingerprint);
+    assert.match(branch, /^autofix\/review-/);
+    assert.equal(finalizeCalls.length, 1);
+    assert.equal(finalizeCalls[0].base, 'feature/login', 'the runner checks the push against the reviewed branch');
+    assert.equal(finalizeCalls[0].branch, branch, 'the push goes to the autofix/ branch, never feature/login');
+    assert.equal(finalizeCalls[0].baseSha, HEAD_C, 'the base is pinned to the tip of feature/login as read from GitHub');
+    const create = ghCalls.find((c) => c.method === 'POST' && /\/pulls$/.test(c.url))!;
+    assert.equal(create.body.base, 'feature/login');
+    assert.equal(create.body.head, branch);
+    assert.equal(create.body.draft, true);
+    assert.match(create.body.title, /review finding on feature\/login/);
+    assert.ok(ghCalls.some((c) => /\/compare\/feature%2Flogin\.\.\.|\/compare\/feature\/login\.\.\./.test(c.url)), ghCalls.map((c) => c.url).join('\n'));
+    assert.equal(f.status, 'pr_open');
+    assert.equal(f.fix_branch, branch);
+  });
+
+  it('the Inbox question of a review fix names the reviewed branch as the base', async () => {
+    const s = await makeFix({ source: 'review_finding', kind: 'review', branch: 'feature/login', mode: 'propose' });
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls.length, 0);
+    const [item] = inbox(s).filter((i) => i.type === 'push');
+    assert.equal(item.payload.base, 'feature/login');
   });
 });
 

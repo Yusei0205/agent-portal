@@ -269,6 +269,12 @@ ${assistantText.slice(0, 3900)}`,
       return;
     }
 
+    // The review is done with its findings stored: auto-fix may take the medium and worse ones (only when the project's auto-fix is
+    // on; see autofix/review-source.ts). In the background, and it never throws into the review flow.
+    import('./autofix/review-source.ts')
+      .then((m) => m.emitReviewFindings(review.id))
+      .catch((e) => console.error('[review] auto-fix intake failed:', e instanceof Error ? e.message : e));
+
     // Fire auto-post if the review was set to auto-post, or if the global
     // prCommentMode is 'automatic' (F10).
     const shouldAutoPost = review.post_mode === 'auto' || getPrCommentMode() === 'automatic';

@@ -7,6 +7,7 @@ import { registerSessionIntake } from '../server/autofix/session-intake.ts';
 import { getAutofixFindingsRepository } from '../server/repositories/autofix-findings.ts';
 import { getSessionsRepository } from '../server/repositories/sessions.ts';
 import { saveAutofixPolicy } from '../server/autofix/policy.ts';
+import { _drainPipelineForTest } from '../server/autofix/pipeline.ts';
 import { RECOVERY_PREFIX, MAX_AUTO_RECOVERIES } from '../server/workflows/recovery.ts';
 import { now } from '../server/util.ts';
 import { getLoopSpecsRepository } from '../server/repositories/loop-specs.ts';
@@ -98,7 +99,9 @@ describe('session_failed intake', () => {
     assert.equal(all[0].source, 'session_failed');
     assert.equal(all[0].kind, 'session');
     assert.equal(all[0].severity, 'medium');
-    assert.equal(all[0].status, 'new');
+    // A failed session never starts a fix session (pipeline.ts AUTOFIX_HUMAN_SOURCES); 'session' is not in the default classes.
+    await _drainPipelineForTest();
+    assert.equal((await findings())[0].status, 'suppressed');
     assert.ok(!all[0].evidence.includes('abcdef1234567890abcdef'));
   });
 

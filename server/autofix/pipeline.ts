@@ -38,8 +38,20 @@ import { scrubEvidence } from './scrub.ts';
 import { listBranchFiles, scrubSecrets } from '../pull-requests.ts';
 import type { Repository } from '../repos.ts';
 
-/** The built-in spec that fixes each kind of finding. Sources without one (added in Task 12) are left `new`. */
-export const AUTOFIX_SPEC_BY_SOURCE: Partial<Record<FindingSource, string>> = { ci_failed: 'builtin-autofix-ci' };
+/** The built-in spec that fixes each kind of finding. */
+export const AUTOFIX_SPEC_BY_SOURCE: Partial<Record<FindingSource, string>> = {
+  ci_failed: 'builtin-autofix-ci',
+  review_finding: 'builtin-autofix-review',
+};
+
+/**
+ * Sources no fix session can work on, with the reason a person is asked instead. A failed session has no repository or branch (its
+ * finding is `session:<project>` on 'sessions'), so a fix session would have nothing to check out, verify or deliver: once triage lets
+ * it through (mode on, not paused, its kind in policy.classes), it goes straight to needs_human with a 'blocked' Inbox item.
+ */
+export const AUTOFIX_HUMAN_SOURCES: Partial<Record<FindingSource, string>> = {
+  session_failed: 'failed session: needs a person',
+};
 
 const EVIDENCE_IN_GOAL = 4_000;
 /** The previous_attempt goal variable is at most this long; the stored account of the attempt leaves room for the branch note. */
@@ -165,10 +177,38 @@ export async function processFinding(findingId: string): Promise<void> {
   await processOne(findingId);
 }
 
+/** A finding of a source no session can fix: suppressed or waiting by the same policy rules, otherwise straight to a person. */
+async function toPerson(f: AutofixFinding, reason: string): Promise<Outcome> {
+  const policy = await getAutofixPolicy(f.project_id);
+  const repo = getAutofixFindingsRepository();
+  // The order of triage: mode, pause switches, classes.
+  if (policy.mode !== 'off' && await isPaused(f.project_id)) return 'none'; // waits as `new`, like a deferred finding
+  if (policy.mode === 'off' || !policy.classes.includes(f.kind)) {
+    await repo.transition(f.id, ['new'], { status: 'suppressed' });
+    return 'none';
+  }
+  await toNeedsHuman(f, ['new'], reason);
+  return 'none';
+}
+
+/** The checkout goal variable of a review fix: start from the reviewed commit, so the fix PR can be stacked on the reviewed branch. */
+function checkoutVar(f: AutofixFinding): string {
+  if (f.pr_branch) return 'This is a retry on the open fix pull request: start as the previous attempt below says (not from the reviewed commit).';
+  const branch = String(f.branch ?? '');
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(branch) || branch.includes('..')) return 'Work on the repository as it was cloned.';
+  const sha = /^[0-9a-f]{7,64}$/i.test(String(f.commit_sha ?? '')) ? String(f.commit_sha) : '';
+  const start = sha
+    ? `\`git checkout -B autofix-work ${sha}\` (if that commit is no longer there, \`git checkout -B autofix-work origin/${branch}\`)`
+    : `\`git checkout -B autofix-work origin/${branch}\``;
+  return `run \`git fetch origin ${branch}\`, then ${start}. Commit on top of it. Never push, and never commit to ${branch} itself: the fix is delivered as a separate pull request on top of ${branch}.`;
+}
+
 async function processOne(findingId: string): Promise<Outcome> {
   const repo = getAutofixFindingsRepository();
   const f = await repo.getById(findingId);
   if (!f || f.status !== 'new') return 'none';
+  const human = AUTOFIX_HUMAN_SOURCES[f.source];
+  if (human) return toPerson(f, human);
   const spec = await specFor(f.source);
   if (!spec) return 'none';
   const policy = await getAutofixPolicy(f.project_id);
@@ -201,6 +241,7 @@ async function processOne(findingId: string): Promise<Outcome> {
     verify_command: policy.verify.command,
     previous_attempt: previousAttemptVar(f),
   };
+  if (f.source === 'review_finding') vars.checkout = checkoutVar(f);
   let result: FireResult;
   try {
     result = await fire(spec, {
@@ -239,7 +280,7 @@ async function processOne(findingId: string): Promise<Outcome> {
 async function newWithFixer(projectId: string): Promise<AutofixFinding[]> {
   if ((await getAutofixPolicy(projectId)).mode === 'off') return [];
   return (await getAutofixFindingsRepository().list(projectId, { status: 'new', limit: 200 }))
-    .filter((f) => AUTOFIX_SPEC_BY_SOURCE[f.source]);
+    .filter((f) => AUTOFIX_SPEC_BY_SOURCE[f.source] || AUTOFIX_HUMAN_SOURCES[f.source]);
 }
 
 /** Oldest first, one at a time, at most PROCESS_NEW_BATCH; once a spec is busy (409/429), its other findings are not tried. */
@@ -249,7 +290,8 @@ async function processList(list: AutofixFinding[]): Promise<void> {
     .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
     .slice(0, PROCESS_NEW_BATCH);
   for (const f of ordered) {
-    const specId = AUTOFIX_SPEC_BY_SOURCE[f.source]!;
+    // Findings handed to a person start no session, so they are never held back by a busy spec.
+    const specId = AUTOFIX_SPEC_BY_SOURCE[f.source] ?? `person:${f.source}`;
     if (busy.has(specId)) continue;
     try {
       if (await processOne(f.id) === 'busy') busy.add(specId);
@@ -344,12 +386,16 @@ type PrClosed = Extract<GithubEventResult, { type: 'pr_closed' }>;
 
 type FilesLister = (f: AutofixFinding) => Promise<string[] | null>;
 
-/** The files the fix branch changes against the repository's default branch, from GitHub (null when they cannot be read). */
+/**
+ * The files the fix branch changes against its PR's base (the repository's default branch; for a review fix, the reviewed branch it
+ * is stacked on), from GitHub (null when they cannot be read).
+ */
 async function listFixFiles(f: AutofixFinding): Promise<string[] | null> {
   if (!f.fix_branch || !f.repo_id) return null;
   const rec = await getGitReposRepository().getById(f.repo_id);
   if (!rec) return null;
-  const r = await listBranchFiles(rec as unknown as Repository, rec.default_branch || 'main', f.fix_branch);
+  const base = f.source === 'review_finding' && f.branch ? f.branch : rec.default_branch || 'main';
+  const r = await listBranchFiles(rec as unknown as Repository, base, f.fix_branch);
   return r.ok ? r.files.map((x) => x.path) : null;
 }
 let previousFiles: FilesLister = listFixFiles;

@@ -433,7 +433,8 @@ describe('onFixSessionEnded', () => {
     await processNew(projectId);
     assert.equal((await repo().getById(a.id))!.status, 'fixing');
     assert.equal(calls.length, 1, 'only findings with a fixer spec start a session');
-    assert.equal((await repo().getById(b.id))!.status, 'new');
+    // A failed session never starts a fix session; 'session' is not in the default classes, so triage suppresses it.
+    assert.equal((await repo().getById(b.id))!.status, 'suppressed');
   });
 });
 

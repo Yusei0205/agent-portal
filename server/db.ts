@@ -2341,7 +2341,34 @@ const M54_AUTOFIX_SPECS = `
 `;
 
 /**
- * The auto-fix table and its seeded spec, checked on every start instead of taking migration positions. Migration ids are array
+ * The goal template of builtin-autofix-review: fix one code review finding on top of the reviewed pull request's head commit. The
+ * fix is delivered as a draft PR stacked on the reviewed branch (never pushed to it); `{{checkout}}` says how to start from that
+ * commit, `{{evidence}}` carries the file, line, severity, category, message and suggestion (secrets removed).
+ */
+export const AUTOFIX_REVIEW_GOAL = `Fix a code review finding ({{kind}}) on the pull request branch {{branch}}.
+
+The review finding (file and line, severity, category, message and suggestion; secrets removed):
+{{evidence}}
+
+Previous attempt (none if this is the first):
+{{previous_attempt}}
+
+How to work:
+1. Start from the reviewed commit: {{checkout}}
+2. First run the check: {{verify_command}}
+3. Read the code the finding names. If the finding does not apply to it (it is already fixed, or it is wrong), the finding cannot be reproduced here. Change nothing and stop. End your reply with this status line, with state blocked and a summary that starts with the words cannot reproduce:
+WORKFLOW_STATUS {"state":"blocked","summary":"cannot reproduce: <what you read and why the finding does not apply>","next":"","needs":"a person to look at the finding"}
+4. Otherwise fix what the finding describes, then run {{verify_command}} again until it passes. Change only what this finding needs. Never edit CI workflows (.github/workflows), infrastructure (infra/), or env or secret files (.env files, keys, certificates).
+5. When the check passes, end with a WORKFLOW_STATUS line with state done.`;
+
+/** Auto-fix: the built-in spec for review findings, shaped like builtin-autofix-ci (same limits, never run by hand). */
+const AUTOFIX_REVIEW_SPEC = `
+  INSERT OR IGNORE INTO p10_loop_specs (id, project_id, name, description, trigger_type, trigger_config, goal_template, stop_config, max_iterations, is_builtin) VALUES
+    ('builtin-autofix-review', NULL, 'Auto-fix a code review finding', 'Started by auto-fix for a code review finding: fix it on top of the reviewed pull request and hand the change to the PR step, which opens a draft PR against that pull request''s branch.', 'webhook', '{"finding_kind":"review_finding","maxPerHour":12}', ?, '{"maxIterations":4,"budgetUsd":2}', 4, 1);
+`;
+
+/**
+ * The auto-fix table and its seeded specs, checked on every start instead of taking migration positions. Migration ids are array
  * positions and the steps pushed after the list (automation_records, default_trust_tools, heartbeat_at) already hold ids 52-54 in
  * existing databases, so a new entry in the list would get an id those databases recorded as applied and never run. Both
  * statements are idempotent (CREATE ... IF NOT EXISTS, INSERT OR IGNORE).
@@ -2354,6 +2381,7 @@ function ensureAutofixSchema(database: DatabaseSync): void {
     if (!cols.has(c)) database.exec(`ALTER TABLE autofix_findings ADD COLUMN ${c} TEXT`);
   }
   database.prepare(M54_AUTOFIX_SPECS).run(AUTOFIX_CI_GOAL);
+  database.prepare(AUTOFIX_REVIEW_SPEC).run(AUTOFIX_REVIEW_GOAL);
   // A database seeded with the first template gets the current one, unless an admin edited the built-in goal since.
   database.prepare("UPDATE p10_loop_specs SET goal_template = ? WHERE id = 'builtin-autofix-ci' AND goal_template = ?").run(AUTOFIX_CI_GOAL, AUTOFIX_CI_GOAL_V1);
 }

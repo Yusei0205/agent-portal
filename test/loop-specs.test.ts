@@ -46,9 +46,9 @@ describe('Built-in loop specs seeded on DB init', () => {
 
   after(async () => { await cleanup(); });
 
-  it('seeds exactly 8 built-in specs (the 7 originals and builtin-autofix-ci)', () => {
+  it('seeds exactly 9 built-in specs (the 7 originals, builtin-autofix-ci and builtin-autofix-review)', () => {
     const specs = all('SELECT * FROM p10_loop_specs WHERE is_builtin = 1');
-    assert.equal(specs.length, 8, `expected 8 built-in specs, got ${specs.length}`);
+    assert.equal(specs.length, 9, `expected 9 built-in specs, got ${specs.length}`);
   });
 
   it('seeds investigate-and-fix spec', () => {

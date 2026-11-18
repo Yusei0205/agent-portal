@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { openDb, closeDb, isDbOpen, SCHEMA_VERSION, AUTOFIX_CI_GOAL } from '../server/db.ts';
+import { openDb, closeDb, isDbOpen, SCHEMA_VERSION, AUTOFIX_CI_GOAL, AUTOFIX_REVIEW_GOAL } from '../server/db.ts';
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'portal-afschema-'));
 const file = path.join(dir, 'pre-branch.db');
@@ -68,6 +68,31 @@ describe('auto-fix schema on an existing database', () => {
     closeDb();
     db = openDb(upgradeFile);
     assert.equal(goal(), 'Our own goal for {{kind}}.');
+    closeDb();
+  });
+
+  it('a database with only the CI fixer spec gets builtin-autofix-review; an edited review goal is kept on later opens', () => {
+    const f = path.join(dir, 'ci-only.db');
+    let db = openDb(f);
+    // The state after Task 8-11: the CI fixer seeded, no review fixer.
+    db.exec("DELETE FROM p10_loop_specs WHERE id = 'builtin-autofix-review'");
+    assert.equal(db.prepare("SELECT id FROM p10_loop_specs WHERE id LIKE 'builtin-autofix-%'").all().length, 1);
+    closeDb();
+
+    db = openDb(f);
+    const row = db.prepare("SELECT * FROM p10_loop_specs WHERE id = 'builtin-autofix-review'").get() as Record<string, unknown>;
+    assert.ok(row);
+    assert.equal(row.goal_template, AUTOFIX_REVIEW_GOAL);
+    assert.equal(row.is_builtin, 1);
+    assert.equal(row.project_id, null);
+    assert.deepEqual(JSON.parse(String(row.trigger_config)), { finding_kind: 'review_finding', maxPerHour: 12 });
+    assert.equal(db.prepare("SELECT id FROM p10_loop_specs WHERE id = 'builtin-autofix-session'").all().length, 0, 'no unused session spec');
+    db.prepare("UPDATE p10_loop_specs SET goal_template = 'ours' WHERE id = 'builtin-autofix-review'").run();
+    closeDb();
+
+    db = openDb(f);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM p10_loop_specs WHERE id = 'builtin-autofix-review'").get()!.n, 1);
+    assert.equal((db.prepare("SELECT goal_template FROM p10_loop_specs WHERE id = 'builtin-autofix-review'").get() as { goal_template: string }).goal_template, 'ours');
     closeDb();
   });
 });
