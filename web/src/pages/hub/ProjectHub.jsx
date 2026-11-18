@@ -1708,7 +1708,17 @@ export function ProjectHub({ projectId, user, initialTab }) {
           <PullRequestsTab projectId={projectId} canEdit={canEditPr} toast={toast} />
         )}
         {activeTab === 'checklists' && <ProjectChecklists projectId={projectId} canEdit={canEditPr} />}
-        {activeTab === 'autofix' && <AutoFix projectId={projectId} />}
+        {activeTab === 'autofix' && (
+          <AutoFix
+            projectId={projectId}
+            canManage={isAdmin || String(myAccess?.access ?? '') === 'owner'}
+            isAdmin={isAdmin}
+            currentUserId={currentUserId}
+            members={members}
+            requestConfirm={requestConfirm}
+            toast={toast}
+          />
+        )}
       </div>
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />

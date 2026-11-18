@@ -188,12 +188,16 @@ async function checkRunAs(projectId: string, current: AutofixPolicy, patch: Part
   const target = (patch as Record<string, unknown>).run_as;
   if (target === undefined || target === current.run_as) return;
   if (typeof target !== 'string' || !target) throw badRequest('run_as must be a user id');
-  if (actor.actorId && target === actor.actorId) return;
-  if (!actor.isAdmin) throw new HttpError(403, 'run_as can only be set to your own user');
-  const member = await getMemberRow(projectId, target);
-  if (!member || !['editor', 'owner'].includes(String(member.access))) {
-    throw badRequest('run_as must be an editor or owner of the project');
-  }
+  if (!(actor.actorId && target === actor.actorId) && !actor.isAdmin) throw new HttpError(403, 'run_as can only be set to your own user');
+  await requireRunAsMember(projectId, target);
+}
+
+async function requireRunAsMember(projectId: string, userId: string, auto = false): Promise<void> {
+  const member = await getMemberRow(projectId, userId);
+  if (member && ['editor', 'owner'].includes(String(member.access))) return;
+  throw badRequest(auto
+    ? 'You are not a member of this project, so fix sessions cannot run as you. Pick a project editor or owner in "Run fix sessions as" and save again.'
+    : 'run_as must be an editor or owner of the project');
 }
 
 export async function saveAutofixPolicy(
@@ -204,8 +208,15 @@ export async function saveAutofixPolicy(
   const current = await getAutofixPolicy(projectId);
   await checkRunAs(projectId, current, patch, actor);
   const next = applyPatch(current, patch);
-  // The first time an admin turns auto-fix on, fix sessions run as that admin.
-  if (next.mode !== 'off' && !next.run_as && actor.actorId) next.run_as = actor.actorId;
+  // Without a verify command the pipeline never starts a session, so enabling would look on and do nothing.
+  if (next.mode !== 'off' && !next.verify.command.trim()) {
+    throw badRequest('Set a verify command before turning auto-fix on; fix sessions are not started without one');
+  }
+  // The first time an admin turns auto-fix on, fix sessions run as that admin, who must be a project editor or owner.
+  if (next.mode !== 'off' && !next.run_as && actor.actorId) {
+    await requireRunAsMember(projectId, actor.actorId, true);
+    next.run_as = actor.actorId;
+  }
   await setSetting(getDb(), policyKey(projectId), JSON.stringify(next));
   await getAuditRepository().append({
     actorId: actor.actorId ?? null,
@@ -215,6 +226,30 @@ export async function saveAutofixPolicy(
     ip: actor.ip ?? null,
   });
   return next;
+}
+
+/**
+ * "Never fix this kind": drop `kind` from the classes auto-fix acts on. Goes around saveAutofixPolicy's mode checks on purpose, so a
+ * policy saved before those checks existed can still be narrowed; it changes nothing but the class list.
+ */
+export async function removeAutofixClass(projectId: string, kind: string, actor: AuditActor = {}): Promise<AutofixPolicy> {
+  const current = await getAutofixPolicy(projectId);
+  const next = { ...current, classes: current.classes.filter((c) => c !== kind) };
+  await setSetting(getDb(), policyKey(projectId), JSON.stringify(next));
+  await getAuditRepository().append({
+    actorId: actor.actorId ?? null,
+    action: 'autofix.policy.update',
+    target: projectId,
+    detail: { mode: next.mode, previous_mode: current.mode, fields: ['classes'], removed_class: kind },
+    ip: actor.ip ?? null,
+  });
+  return next;
+}
+
+/** The project's own pause flag and the portal-wide one, separately (isPaused is true for either). */
+export async function getPauseFlags(projectId: string): Promise<{ project: boolean; global: boolean }> {
+  const db = getDb();
+  return { project: getSetting(db, pausedKey(projectId)) === '1', global: getSetting(db, pausedKey('global')) === '1' };
 }
 
 export async function isPaused(projectId: string): Promise<boolean> {

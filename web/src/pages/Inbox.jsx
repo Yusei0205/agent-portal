@@ -58,6 +58,36 @@ function approvalContext(item) {
   };
 }
 
+const isAutofix = (item) => item.payload?.kind === 'autofix';
+
+/** The Auto-fix label of an Inbox item: what it is, which kind of finding, and why (all rendered as text). */
+function AutofixHeader({ item }) {
+  const p = item.payload || {};
+  const label = item.type === 'push' ? 'Auto-fix PR ready' : 'Auto-fix needs a human';
+  return (
+    <div className="inbox-autofix" data-testid="inbox-autofix">
+      <span className="badge badge-info">{label}</span>
+      {p.findingKind && <span className="badge">{String(p.findingKind)}</span>}
+      {p.reason && <span className="small">{String(p.reason).slice(0, 300)}</span>}
+    </div>
+  );
+}
+
+/** The changed file names an auto-fix push question carries (at most 50, and a flag when the list was cut). */
+function ChangedPaths({ payload }) {
+  const paths = Array.isArray(payload?.paths) ? payload.paths.filter((x) => typeof x === 'string') : [];
+  if (paths.length === 0) return null;
+  return (
+    <details className="inbox-paths">
+      <summary className="small">{paths.length}{payload.pathsTruncated ? '+' : ''} changed file{paths.length === 1 ? '' : 's'}</summary>
+      <ul className="small" style={{ margin: '4px 0 8px', paddingLeft: 18, overflowWrap: 'anywhere' }}>
+        {paths.map((x) => <li key={x}><code>{x}</code></li>)}
+        {payload.pathsTruncated && <li className="muted">and more not listed</li>}
+      </ul>
+    </details>
+  );
+}
+
 // ── Item renderers ─────────────────────────────────────────────────────────────
 
 function ApprovalItem({ item, onResolved }) {
@@ -106,10 +136,12 @@ function ApprovalItem({ item, onResolved }) {
           {formatRelative(item.created_at)}
         </span>
       </div>
+      {isPush && isAutofix(item) && <AutofixHeader item={item} />}
       <p className="inbox-item-body"><strong>{ctx.tool}</strong>{isPush ? '' : ' wants to run'}{ctx.detail ? ` — ${ctx.detail}` : ''}</p>
       {ctx.text && (
         <pre className="inbox-item-code" style={{ margin: '6px 0 10px', padding: '8px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.25)', fontSize: '0.78rem', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto' }}>{ctx.text}</pre>
       )}
+      {isPush && isAutofix(item) && <ChangedPaths payload={item.payload} />}
       {resolved ? (
         <div className="inbox-item-resolved-note">
           <Icon name="check" size={14} />
@@ -260,6 +292,7 @@ function GenericItem({ item, onResolved }) {
           {formatRelative(item.created_at)}
         </span>
       </div>
+      {isAutofix(item) && <AutofixHeader item={item} />}
       {summary && <p className="inbox-item-body">{summary}</p>}
       {resolved ? (
         <div className="inbox-item-resolved-note">

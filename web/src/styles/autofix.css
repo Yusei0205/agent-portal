@@ -32,3 +32,51 @@
 .af-pill.is-warn   { --tone: var(--warn); }
 .af-pill.is-danger { --tone: var(--danger); }
 .af-pill.is-info   { --tone: var(--info); }
+
+/* Policy form, pause, webhook, finding details. Tinted borders only, never a coloured edge. */
+.af-card { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); min-width: 0; }
+.af-card h3 { margin: 0; font-size: 1rem; }
+.af-fieldset { border: 0; padding: 0; margin: 0; display: grid; gap: 12px; min-width: 0; }
+.af-legend { margin: 6px 0 0; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); font-weight: 600; }
+.af-field { min-width: 0; }
+.af-modes { display: grid; gap: 8px; }
+.af-mode { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.af-mode input { width: auto; min-height: 0; margin-top: 3px; flex-shrink: 0; }
+.af-mode.is-on { border-color: color-mix(in srgb, var(--accent, var(--info)) 45%, var(--line)); background: color-mix(in srgb, var(--accent, var(--info)) 7%, transparent); }
+.af-mode-text { display: block; font-size: 0.82rem; color: var(--ink-3); }
+.af-warn {
+  padding: 10px 14px; border-radius: 10px; font-size: 0.86rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+.af-warn p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.af-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.af-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px 2px 10px; border: 1px solid var(--line); border-radius: 999px; font-size: 0.82rem; background: var(--panel-2, transparent); }
+.af-chip button { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; font-size: 1rem; line-height: 1; min-width: 28px; min-height: 28px; }
+.af-copy { display: flex; gap: 8px; align-items: center; min-width: 0; }
+.af-copy input { flex: 1; min-width: 0; }
+.af-check { display: flex; align-items: center; gap: 8px; font-size: 0.88rem; min-height: 32px; }
+.af-check input { width: auto; min-height: 0; }
+.af-paths { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.af-path { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; border: 1px solid var(--line-2); border-radius: 8px; min-width: 0; }
+.af-path code { overflow-wrap: anywhere; }
+.af-path.is-locked { opacity: 0.8; }
+.af-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr)); gap: 12px; }
+.af-secret { margin: 10px 0; padding: 10px 12px; border-radius: 10px; display: grid; gap: 8px; border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line)); background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.af-secret p { margin: 0; }
+.af-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.af-detail-row td { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.af-detail h4 { margin: 10px 0 4px; font-size: 0.8rem; }
+.af-dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; font-size: 0.84rem; }
+.af-dl dt { color: var(--ink-3); }
+.af-dl dd { margin: 0; overflow-wrap: anywhere; }
+.af-evidence { margin: 0; padding: 8px 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.78rem; border: 1px solid var(--line-2); border-radius: 8px; }
+@media (max-width: 520px) {
+  .af-count { min-width: 96px; }
+  .af-copy { flex-wrap: wrap; }
+  .af-dl { grid-template-columns: 1fr; }
+  .af-dl dd { margin-bottom: 6px; }
+}
+.inbox-autofix { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 6px 0; min-width: 0; }
+/* The detail sits in a wide scrolling table: keep it pinned to the visible left edge at phone width. */
+.af-detail { position: sticky; left: 0; width: min(100%, calc(100vw - 72px)); box-sizing: border-box; }

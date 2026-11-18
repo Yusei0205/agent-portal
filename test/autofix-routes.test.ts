@@ -2,6 +2,9 @@ import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { run as dbRun } from '../server/db.ts';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
+import { getAuditRepository } from '../server/repositories/audit.ts';
+import { getAutofixPolicy, saveAutofixPolicy } from '../server/autofix/policy.ts';
+import { _drainPipelineForTest } from '../server/autofix/pipeline.ts';
 import { getAutofixFindingsRepository } from '../server/repositories/autofix-findings.ts';
 import type { AutofixFinding } from '../server/repositories/autofix-findings.ts';
 
@@ -9,6 +12,8 @@ let baseUrl = '';
 let adminCookie = '';
 let memberCookie = '';
 let outsiderCookie = '';
+let ownerCookie = '';
+let editorCookie = '';
 let projectId = '';
 let otherProjectId = '';
 
@@ -23,7 +28,7 @@ before(async () => {
   baseUrl = (await createTestServer()).baseUrl;
   await fetchJson(baseUrl, '/api/auth/setup', { body: { email: 'admin@ar.test', password: 'adminpassword1', name: 'Admin' } });
   adminCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'admin@ar.test', password: 'adminpassword1' } })).cookie ?? '';
-  for (const e of ['mem@ar.test', 'out@ar.test']) {
+  for (const e of ['mem@ar.test', 'out@ar.test', 'own@ar.test', 'ed@ar.test']) {
     await fetchJson(baseUrl, '/api/users', { method: 'POST', body: { email: e, name: e, password: 'memberpass1234', isAdmin: false }, cookie: adminCookie });
   }
   memberCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'mem@ar.test', password: 'memberpass1234' } })).cookie ?? '';
@@ -36,10 +41,20 @@ before(async () => {
   const mem = ((users.body as { users: { id: string; email: string }[] }).users).find((u) => u.email === 'mem@ar.test');
   const add = await fetchJson(baseUrl, `/api/projects/${projectId}/members`, { method: 'POST', body: { userId: mem!.id, role: 'viewer' }, cookie: adminCookie });
   assert.ok(add.status < 300, `add member: ${add.status}`);
+  for (const [email, role] of [['own@ar.test', 'owner'], ['ed@ar.test', 'editor']] as const) {
+    const u = ((users.body as { users: { id: string; email: string }[] }).users).find((x) => x.email === email);
+    const r = await fetchJson(baseUrl, `/api/projects/${projectId}/members`, { method: 'POST', body: { userId: u!.id, role }, cookie: adminCookie });
+    assert.ok(r.status < 300, `add ${role}: ${r.status}`);
+  }
+  ownerCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'own@ar.test', password: 'memberpass1234' } })).cookie ?? '';
+  editorCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'ed@ar.test', password: 'memberpass1234' } })).cookie ?? '';
 });
 
 after(cleanup);
-beforeEach(() => { dbRun('DELETE FROM autofix_findings'); });
+beforeEach(async () => {
+  dbRun('DELETE FROM autofix_findings');
+  await saveAutofixPolicy(projectId, { classes: ['lint', 'tests', 'types', 'build'] });
+});
 
 type ListBody = { findings: (AutofixFinding)[]; counts: Record<string, number> };
 const list = (q: string, cookie = memberCookie, pid = projectId) => fetchJson(baseUrl, `/api/projects/${pid}/autofix/findings${q}`, { cookie });
@@ -93,5 +108,77 @@ describe('autofix findings routes', () => {
     assert.equal(cross.status, 404);
     const missing = await fetchJson(baseUrl, `/api/projects/${projectId}/autofix/findings/nope`, { cookie: memberCookie });
     assert.equal(missing.status, 404);
+  });
+});
+
+describe('autofix finding actions', () => {
+  const act = (fid: string, action: string, cookie: string, pid = projectId) =>
+    fetchJson(baseUrl, `/api/projects/${pid}/autofix/findings/${fid}/${action}`, { method: 'POST', body: {}, cookie });
+  const status = async (id: string) => (await getAutofixFindingsRepository().getById(id))!.status;
+  const audits = async (action: string) => (await getAuditRepository().query({ limit: 100, action })).entries;
+
+  it('owner and admin may act; editor and viewer get 403; non-member gets 404; unknown finding 404', async () => {
+    for (const action of ['dismiss', 'never-fix', 'retry']) {
+      const f = await seed(projectId, `perm-${action}`);
+      assert.equal((await act(f.id, action, memberCookie)).status, 403, action);
+      assert.equal((await act(f.id, action, editorCookie)).status, 403, action);
+      assert.equal((await act(f.id, action, outsiderCookie)).status, 404, action);
+      assert.equal((await act('nope', action, adminCookie)).status, 404, action);
+      assert.equal((await act(f.id, action, ownerCookie)).status, 200, action);
+      await _drainPipelineForTest();
+    }
+    const g = await seed(projectId, 'perm-admin');
+    assert.equal((await act(g.id, 'dismiss', adminCookie)).status, 200);
+    const other = await seed(otherProjectId, 'cross');
+    assert.equal((await act(other.id, 'dismiss', adminCookie)).status, 404);
+  });
+
+  it('dismiss moves a non-terminal finding to dismissed, audits, and 409s on dismissed or resolved', async () => {
+    const f = await seed(projectId, 'd1');
+    const r = await act(f.id, 'dismiss', adminCookie);
+    assert.equal(r.status, 200);
+    assert.equal(await status(f.id), 'dismissed');
+    assert.ok((await audits('autofix.finding.dismiss')).some((e) => e.target === f.id));
+    assert.equal((await act(f.id, 'dismiss', adminCookie)).status, 409);
+    const g = await seed(projectId, 'd2');
+    await getAutofixFindingsRepository().transition(g.id, ['new'], { status: 'resolved' });
+    assert.equal((await act(g.id, 'dismiss', adminCookie)).status, 409);
+    assert.equal((await act(g.id, 'never-fix', adminCookie)).status, 409);
+    const h = await seed(projectId, 'd3');
+    await getAutofixFindingsRepository().transition(h.id, ['new'], { status: 'needs_human' });
+    assert.equal((await act(h.id, 'dismiss', adminCookie)).status, 200);
+  });
+
+  it('never-fix dismisses and removes the kind from the policy classes, with audit entries', async () => {
+    assert.ok((await getAutofixPolicy(projectId)).classes.includes('lint'));
+    const f = await seed(projectId, 'n1');
+    const r = await act(f.id, 'never-fix', ownerCookie);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(await status(f.id), 'dismissed');
+    const pol = await getAutofixPolicy(projectId);
+    assert.equal(pol.classes.includes('lint'), false);
+    assert.ok(pol.classes.includes('tests'));
+    assert.ok((await audits('autofix.finding.never_fix')).some((e) => e.target === f.id));
+  });
+
+  it('retry sends needs_human, new and suppressed back to new with attempts and cooldown cleared; other states 409', async () => {
+    const repo = getAutofixFindingsRepository();
+    for (const from of ['needs_human', 'new', 'suppressed'] as const) {
+      const f = await seed(projectId, `r-${from}`);
+      await repo.transition(f.id, ['new'], { status: from, attempts: 2, cooldown_until: new Date(Date.now() + 3600_000).toISOString() });
+      const r = await act(f.id, 'retry', adminCookie);
+      assert.equal(r.status, 200, `${from}: ${JSON.stringify(r.body)}`);
+      await _drainPipelineForTest();
+      const after = (await repo.getById(f.id))!;
+      assert.equal(after.status, 'new', from);
+      assert.equal(after.attempts, 0);
+      assert.equal(after.cooldown_until, null);
+    }
+    assert.ok((await audits('autofix.finding.retry')).length >= 3);
+    for (const from of ['dismissed', 'resolved', 'pr_open', 'fixing', 'triaged'] as const) {
+      const f = await seed(projectId, `r409-${from}`);
+      await repo.transition(f.id, ['new'], { status: from });
+      assert.equal((await act(f.id, 'retry', adminCookie)).status, 409, from);
+    }
   });
 });

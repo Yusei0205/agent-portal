@@ -224,6 +224,14 @@ export async function handleRepoChanges(ctx: SessionPrContext, changes: RepoChan
   }
 }
 
+const MAX_PAYLOAD_PATHS = 50;
+/** The changed file names for an Inbox question (names only, at most 50); nothing when the runner did not report them. */
+function changedPathsPayload(change: RepoChange): { paths?: string[]; pathsTruncated?: boolean } {
+  if (!Array.isArray(change.paths)) return {};
+  const names = change.paths.map((p) => String(p.path).slice(0, 300));
+  return { paths: names.slice(0, MAX_PAYLOAD_PATHS), pathsTruncated: names.length > MAX_PAYLOAD_PATHS };
+}
+
 async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<void> {
   const w = await getSessionsRepository().getWorkflowById(ctx.workflowId);
   if (!w) return;
@@ -265,10 +273,11 @@ async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<voi
       const inboxId = await createInboxItem({
         type: 'push', projectId: ctx.projectId, workflowId: ctx.workflowId, runId: ctx.runId,
         payload: {
-          kind: 'autofix', findingId: finding?.id ?? null,
+          kind: 'autofix', findingId: finding?.id ?? null, findingKind: finding?.kind ?? null,
           title: `Open an auto-fix pull request for ${change.repo}?`,
           body: `The auto-fix session changed ${change.files} files in ${change.commits} commit(s) in ${change.repo} and its checks pass. ${why} Approve to push a new branch and open a draft pull request.`,
           repo: change.repo, repoId, base: change.base, commits: change.commits, files: change.files,
+          ...changedPathsPayload(change),
         },
       });
       await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, { ...base, state: 'asked', inboxId });

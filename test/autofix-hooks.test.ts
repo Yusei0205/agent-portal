@@ -45,7 +45,7 @@ before(async () => {
 after(() => cleanup());
 beforeEach(async () => {
   dbRun('DELETE FROM autofix_findings');
-  await saveAutofixPolicy(projectId, { mode: 'propose' });
+  await saveAutofixPolicy(projectId, { mode: 'propose', verify: { command: 'npm test', quick_commands: [] } });
 });
 
 describe('run lifecycle hooks', () => {

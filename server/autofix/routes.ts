@@ -6,12 +6,15 @@ import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { badRequest } from '../util.ts';
 import { getMemberRow, getProjectRow } from '../project-access.ts';
-import { getAutofixPolicy, saveAutofixPolicy, setPaused } from './policy.ts';
+import { getAutofixPolicy, saveAutofixPolicy, setPaused, removeAutofixClass, getPauseFlags } from './policy.ts';
+import { unattendedPushAllowed } from './delivery.ts';
+import { maybeProcess } from './pipeline.ts';
+import { getAuditRepository } from '../repositories/audit.ts';
 import type { AutofixPolicy } from './policy.ts';
 import { newWebhookSecret } from '../loop-triggers.ts';
 import { setSecret } from '../secrets.ts';
 import { getAutofixFindingsRepository, FINDING_STATUSES } from '../repositories/autofix-findings.ts';
-import type { FindingStatus } from '../repositories/autofix-findings.ts';
+import type { FindingStatus, AutofixFinding } from '../repositories/autofix-findings.ts';
 import { registerAutofixWebhook, webhookSecretName } from './webhook.ts';
 
 /** Any project member (or an admin) may read; non-members see 404. */
@@ -56,6 +59,22 @@ function parseLimit(raw: unknown): number {
   return Math.min(n, MAX_FINDINGS_LIMIT);
 }
 
+async function loadFinding(req: PortalRequest, res: PortalResponse): Promise<AutofixFinding | null> {
+  const finding = await getAutofixFindingsRepository().getById(req.params.fid);
+  if (!finding || finding.project_id !== req.params.id) { sendJson(res, 404, { error: 'Finding not found' }); return null; }
+  return finding;
+}
+
+async function auditFinding(req: PortalRequest, action: string, f: AutofixFinding, extra: Record<string, unknown> = {}): Promise<void> {
+  await getAuditRepository().append({
+    actorId: req.user!.id, action, target: f.id, detail: { project_id: f.project_id, kind: f.kind, previous_status: f.status, ...extra }, ip: req.ip,
+  });
+}
+
+/** Statuses a person may dismiss from: everything that is not already finished. */
+const DISMISSABLE: FindingStatus[] = ['new', 'triaged', 'fixing', 'pr_open', 'suppressed', 'needs_human'];
+const RETRYABLE: FindingStatus[] = ['needs_human', 'new', 'suppressed'];
+
 export function registerAutofixRoutes(): void {
   registerAutofixWebhook();
 
@@ -87,7 +106,8 @@ export function registerAutofixRoutes(): void {
 
   router.get('/api/projects/:id/autofix/policy', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!await requireProjectMember(req, res, req.params.id)) return;
-    sendJson(res, 200, { policy: await getAutofixPolicy(req.params.id) });
+    const paused = await getPauseFlags(req.params.id);
+    sendJson(res, 200, { policy: await getAutofixPolicy(req.params.id), unattended_push_enabled: unattendedPushAllowed(), paused: paused.project, paused_global: paused.global });
   });
 
   router.put('/api/projects/:id/autofix/policy', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
@@ -111,5 +131,42 @@ export function registerAutofixRoutes(): void {
     const paused = pausedFlag(req.body);
     await setPaused('global', paused, { actorId: req.user.id, ip: req.ip });
     sendJson(res, 200, { paused });
+  });
+
+  router.post('/api/projects/:id/autofix/findings/:fid/dismiss', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectOwnerOrAdmin(req, res, req.params.id)) return;
+    const f = await loadFinding(req, res);
+    if (!f) return;
+    if (!await getAutofixFindingsRepository().transition(f.id, DISMISSABLE, { status: 'dismissed' })) {
+      sendJson(res, 409, { error: `This finding is already ${f.status}` }); return;
+    }
+    await auditFinding(req, 'autofix.finding.dismiss', f);
+    sendJson(res, 200, { finding: await getAutofixFindingsRepository().getById(f.id) });
+  });
+
+  // Dismiss, and stop auto-fix acting on this kind of finding in this project.
+  router.post('/api/projects/:id/autofix/findings/:fid/never-fix', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectOwnerOrAdmin(req, res, req.params.id)) return;
+    const f = await loadFinding(req, res);
+    if (!f) return;
+    if (!await getAutofixFindingsRepository().transition(f.id, DISMISSABLE, { status: 'dismissed' })) {
+      sendJson(res, 409, { error: `This finding is already ${f.status}` }); return;
+    }
+    const policy = await removeAutofixClass(req.params.id, f.kind, { actorId: req.user!.id, ip: req.ip });
+    await auditFinding(req, 'autofix.finding.never_fix', f);
+    sendJson(res, 200, { finding: await getAutofixFindingsRepository().getById(f.id), classes: policy.classes });
+  });
+
+  // Back to `new` with the attempts and cooldown cleared; the pipeline picks it up again.
+  router.post('/api/projects/:id/autofix/findings/:fid/retry', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!await requireProjectOwnerOrAdmin(req, res, req.params.id)) return;
+    const f = await loadFinding(req, res);
+    if (!f) return;
+    if (!await getAutofixFindingsRepository().transition(f.id, RETRYABLE, { status: 'new', attempts: 0, cooldown_until: null })) {
+      sendJson(res, 409, { error: `A ${f.status} finding cannot be retried` }); return;
+    }
+    await auditFinding(req, 'autofix.finding.retry', f);
+    void maybeProcess(f.id);
+    sendJson(res, 200, { finding: await getAutofixFindingsRepository().getById(f.id) });
   });
 }

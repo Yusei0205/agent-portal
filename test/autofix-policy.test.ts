@@ -57,7 +57,7 @@ describe('policy store', () => {
   });
 
   it('saveAutofixPolicy merges a partial patch and persists', async () => {
-    const saved = await saveAutofixPolicy('p-merge', { mode: 'propose', limits: { max_files: 5 } as never });
+    const saved = await saveAutofixPolicy('p-merge', { mode: 'propose', verify: { command: 'npm test', quick_commands: [] }, limits: { max_files: 5 } as never });
     assert.equal(saved.mode, 'propose');
     assert.equal(saved.limits.max_files, 5);
     assert.equal(saved.limits.max_lines, 300);
@@ -115,13 +115,45 @@ describe('policy store', () => {
     assert.ok(saved.protected_paths.includes('secrets/**'));
   });
 
-  it('run_as is set to the acting admin when mode first leaves off, and kept afterwards', async () => {
-    const a = await saveAutofixPolicy('p-runas', { mode: 'propose' }, { actorId: 'admin-1' });
-    assert.equal(a.run_as, 'admin-1');
-    const b = await saveAutofixPolicy('p-runas', { mode: 'draft_pr' }, { actorId: 'admin-2' });
-    assert.equal(b.run_as, 'admin-1');
+  it('run_as is set to the acting member when mode first leaves off, and kept afterwards', async () => {
+    const v = { command: 'npm test', quick_commands: [] };
+    const pj = (await fetchJson(baseUrl, '/api/projects', { body: { name: 'Runas project' }, cookie: adminCookie })).body as { project: { id: string } };
+    for (const [uid, role] of [[ownerId, 'owner'], [memId, 'editor']] as const) {
+      await fetchJson(baseUrl, `/api/projects/${pj.project.id}/members`, { method: 'POST', body: { userId: uid, role }, cookie: adminCookie });
+    }
+    const a = await saveAutofixPolicy(pj.project.id, { mode: 'propose', verify: v }, { actorId: ownerId });
+    assert.equal(a.run_as, ownerId);
+    const b = await saveAutofixPolicy(pj.project.id, { mode: 'draft_pr' }, { actorId: memId });
+    assert.equal(b.run_as, ownerId);
     const c = await saveAutofixPolicy('p-runas2', { limits: { max_files: 4 } as never }, { actorId: 'admin-1' });
     assert.equal(c.run_as, '');
+  });
+
+  it('refuses mode other than off without a verify command (400), and allows it once one is set', async () => {
+    for (const mode of ['propose', 'draft_pr'] as const) {
+      await assert.rejects(saveAutofixPolicy('p-nov', { mode }), (e: any) => e.status === 400 && /verify command/i.test(e.message));
+    }
+    await assert.rejects(saveAutofixPolicy('p-nov', { mode: 'propose', verify: { command: '   ', quick_commands: [] } }), (e: any) => e.status === 400);
+    assert.equal((await saveAutofixPolicy('p-nov', { mode: 'off' })).mode, 'off');
+    assert.equal((await saveAutofixPolicy('p-nov', { mode: 'propose', verify: { command: 'npm test', quick_commands: [] } })).mode, 'propose');
+  });
+
+  it('an admin who is not a project member does not become run_as automatically (400), nor by explicit self run_as', async () => {
+    const p = (await fetchJson(baseUrl, '/api/projects', { body: { name: 'No admin member' }, cookie: adminCookie })).body as { project: { id: string } };
+    const { run } = await import('../server/db.ts');
+    run('DELETE FROM project_members WHERE project_id = ? AND user_id = ?', p.project.id, adminId);
+    await fetchJson(baseUrl, `/api/projects/${p.project.id}/members`, { method: 'POST', body: { userId: memId, role: 'editor' }, cookie: adminCookie });
+    const url2 = `/api/projects/${p.project.id}/autofix/policy`;
+    const v = { command: 'npm test', quick_commands: [] };
+    const r = await fetchJson(baseUrl, url2, { method: 'PUT', body: { mode: 'propose', verify: v }, cookie: adminCookie });
+    assert.equal(r.status, 400, JSON.stringify(r.body));
+    assert.match(String((r.body as { error: string }).error), /run fix sessions as|member/i);
+    const self = await fetchJson(baseUrl, url2, { method: 'PUT', body: { run_as: adminId }, cookie: adminCookie });
+    assert.equal(self.status, 400);
+    assert.equal((await getAutofixPolicy(p.project.id)).mode, 'off');
+    // an explicit member run_as works
+    const ok = await fetchJson(baseUrl, url2, { method: 'PUT', body: { mode: 'propose', verify: v, run_as: memId }, cookie: adminCookie });
+    assert.equal(ok.status, 200, JSON.stringify(ok.body));
   });
 });
 
@@ -162,6 +194,21 @@ describe('routes', () => {
     assert.equal((await fetchJson(baseUrl, url())).status, 401);
   });
 
+  it('GET policy exposes unattended_push_enabled from the env flag at request time (strict === 1)', async () => {
+    const saved = process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH;
+    try {
+      const flag = async () => ((await fetchJson(baseUrl, url(), { cookie: memberCookie })).body as { unattended_push_enabled: boolean }).unattended_push_enabled;
+      delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH;
+      assert.equal(await flag(), false);
+      process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = 'true';
+      assert.equal(await flag(), false);
+      process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = '1';
+      assert.equal(await flag(), true);
+    } finally {
+      if (saved === undefined) delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH; else process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = saved;
+    }
+  });
+
   it('an editor member gets 403 on PUT and on project pause; non-member gets 404', async () => {
     assert.equal((await fetchJson(baseUrl, url(), { method: 'PUT', body: { mode: 'propose' }, cookie: memberCookie })).status, 403);
     assert.equal((await fetchJson(baseUrl, `/api/projects/${projectId}/autofix/pause`, { body: { paused: true }, cookie: memberCookie })).status, 403);
@@ -170,7 +217,7 @@ describe('routes', () => {
   });
 
   it('admin PUT saves, sets run_as to the admin and audits; bad input is 400', async () => {
-    const r = await fetchJson(baseUrl, url(), { method: 'PUT', body: { mode: 'propose', engine: 'demo' }, cookie: adminCookie });
+    const r = await fetchJson(baseUrl, url(), { method: 'PUT', body: { mode: 'propose', engine: 'demo', verify: { command: 'npm test', quick_commands: [] } }, cookie: adminCookie });
     assert.equal(r.status, 200, JSON.stringify(r.body));
     const pol = (r.body as { policy: { mode: string; run_as: string; engine: string } }).policy;
     assert.equal(pol.mode, 'propose');
@@ -190,7 +237,7 @@ describe('routes', () => {
     await fetchJson(baseUrl, `/api/projects/${pj.project.id}/members`, { method: 'POST', body: { userId: ownerId, role: 'owner' }, cookie: adminCookie });
     await fetchJson(baseUrl, `/api/projects/${pj.project.id}/members`, { method: 'POST', body: { userId: viewerId, role: 'viewer' }, cookie: adminCookie });
     await fetchJson(baseUrl, `/api/projects/${pj.project.id}/members`, { method: 'POST', body: { userId: memId, role: 'editor' }, cookie: adminCookie });
-    const ok = await fetchJson(baseUrl, u, { method: 'PUT', body: { mode: 'propose' }, cookie: ownerCookie });
+    const ok = await fetchJson(baseUrl, u, { method: 'PUT', body: { mode: 'propose', verify: { command: 'npm test', quick_commands: [] } }, cookie: ownerCookie });
     assert.equal(ok.status, 200, JSON.stringify(ok.body));
     assert.equal((ok.body as { policy: { run_as: string } }).policy.run_as, ownerId);
     const own = await fetchJson(baseUrl, u, { method: 'PUT', body: { run_as: ownerId }, cookie: ownerCookie });

@@ -16,7 +16,7 @@ import { getSessionsRepository } from '../server/repositories/sessions.ts';
 import { getGitReposRepository } from '../server/repositories/git-repos.ts';
 import { getLoopSpecsRepository } from '../server/repositories/loop-specs.ts';
 import type { LoopSpecRecord } from '../server/repositories/loop-specs.ts';
-import { saveAutofixPolicy, setPaused } from '../server/autofix/policy.ts';
+import { saveAutofixPolicy, getAutofixPolicy, setPaused } from '../server/autofix/policy.ts';
 import type { FireOptions, FireResult } from '../server/loop-triggers.ts';
 import { fillGoal } from '../server/loop-triggers.ts';
 import { newLoopState, readLoopState, afterRun } from '../server/workflows/loop.ts';
@@ -233,7 +233,11 @@ describe('processFinding', () => {
   });
 
   it('a finding with no verify command configured stays new and starts nothing', async () => {
-    await saveAutofixPolicy(projectId, { verify: { command: '', quick_commands: [] } }, { actorId: adminId, isAdmin: true });
+    // Saving refuses mode != off without a command, so write the stored document directly (an older policy could hold this).
+    const { getDb } = await import('../server/db.ts');
+    const { setSetting } = await import('../server/settings.ts');
+    const stored = await getAutofixPolicy(projectId);
+    await setSetting(getDb(), `autofix.policy.${projectId}`, JSON.stringify({ ...stored, verify: { command: '', quick_commands: [] } }));
     const f = await newFinding();
     await processFinding(f.id);
     assert.equal((await repo().getById(f.id))!.status, 'new');

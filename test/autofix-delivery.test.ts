@@ -41,6 +41,7 @@ async function makeFix(opts: {
   const projectId = generateId();
   run('INSERT INTO projects (id, slug, name, description, notes, created_at) VALUES (?,?,?,?,?,?)',
     projectId, `afd-${projectId.slice(0, 8)}`, 'AFD', '', '', now());
+  run("INSERT INTO project_members (project_id, user_id, access, role) VALUES (?,?,'owner','')", projectId, userId);
   const repoId = generateId();
   run(`INSERT INTO repositories (id, project_id, name, url, provider, status, default_branch, created_at) VALUES (?,?,?,?,?,?,?,?)`,
     repoId, projectId, 'shop', 'https://github.com/acme/shop', 'github', 'ready', 'main', now());
@@ -428,6 +429,8 @@ describe('the gate in the session PR flow', () => {
     assert.equal(items[0].payload.kind, 'autofix');
     assert.equal(items[0].payload.findingId, s.findingId);
     assert.equal(items[0].payload.repoId, s.repoId);
+    assert.deepEqual(items[0].payload.paths, ['src/cart.ts', 'test/cart.test.ts']);
+    assert.equal(items[0].payload.pathsTruncated, false);
     assert.equal((await finding(s)).status, 'fixing');
 
     // Approving runs the ordinary createPullRequestForSession path, with the fix branch, a draft and the label.
@@ -465,6 +468,19 @@ describe('the gate in the session PR flow', () => {
     await handleRepoChanges(ctxOf(s), [{ ...clean, files: 11, paths }]);
     assert.equal(finalizeCalls.length, 0);
     assert.deepEqual(states(s), ['asked']);
+    const p = inbox(s)[0].payload as { paths: string[]; pathsTruncated: boolean };
+    assert.equal(p.paths.length, 11);
+    assert.equal(p.pathsTruncated, false);
+  });
+
+  it('the Inbox payload carries at most 50 file names and says when it cut the list', async () => {
+    const s = await makeFix();
+    const paths = Array.from({ length: 60 }, (_, i) => ({ path: `src/f${i}.ts`, added: 1, removed: 0 }));
+    await handleRepoChanges(ctxOf(s), [{ ...clean, files: 60, paths }]);
+    const p = inbox(s)[0].payload as { paths: string[]; pathsTruncated: boolean };
+    assert.equal(p.paths.length, 50);
+    assert.equal(p.pathsTruncated, true);
+    assert.ok(p.paths.every((x) => typeof x === 'string'));
   });
 
   it('more than 2000 files asks without calling checkDiff', async () => {
