@@ -242,6 +242,31 @@ describe('emitReviewFindings', () => {
     assert.equal((await findings()).length, 4);
   });
 
+  it('the same message and file on two branches of one family (feature/a, feature/b) are two findings', async () => {
+    const a = await makeReview({ head_ref: 'feature/a' });
+    await addFinding(a.id, { body: 'Missing input validation.' });
+    const b = await makeReview({ head_ref: 'feature/b' });
+    await addFinding(b.id, { body: 'Missing input validation.' });
+    await emit(a.id);
+    await emit(b.id);
+    const got = await findings();
+    assert.equal(got.length, 2);
+    assert.deepEqual(got.map((f) => f.branch).sort(), ['feature/a', 'feature/b']);
+  });
+
+  it('evidence full of credential patterns keeps its header and stays under the cap (scrubbed before it is cut)', async () => {
+    const r = await makeReview();
+    const noisy = 'clone http://a:b@example.com/x '.repeat(200) + '\nAuthorization: Bearer abcdefghijklmnop\n'.repeat(150);
+    await addFinding(r.id, { body: noisy + '\n\nSuggested fix:\n' + 'use http://u:p@h/ instead '.repeat(200) });
+    await emit(r.id);
+    const [f] = await findings();
+    assert.ok(f.evidence.length <= REVIEW_EVIDENCE_MAX, String(f.evidence.length));
+    assert.ok(f.evidence.startsWith(`Code review ${r.id} of pull request #17`), f.evidence.slice(0, 120));
+    assert.equal(f.evidence.slice(-4000), f.evidence);
+    assert.doesNotMatch(f.evidence, /a:b@|u:p@|abcdefghijklmnop/);
+    assert.match(f.evidence, /\nSuggestion:\n/);
+  });
+
   it('a ./-prefixed, Windows-style or differently cased form of the same path is the same finding', async () => {
     assert.equal(reviewFilePath('./src/Auth/Login.ts'), 'src/auth/login.ts');
     assert.equal(reviewFilePath('src\\auth\\login.ts'), 'src/auth/login.ts');

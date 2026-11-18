@@ -12,8 +12,8 @@
  * applies the policy as for CI findings: the kind must be in policy.classes and the head branch must be eligible (a person's PR branch
  * only through branches.extra), so review fixing is opt-in.
  *
- * Fingerprint: repository, branch family, kind, the normalised message and, kept out of the normalisation, the exact file path
- * (reviewFilePath), without the line number: the same finding on a rerun or a later commit is one finding, and the same message on two
+ * Fingerprint: repository, branch family, kind, the normalised message and, kept out of the normalisation, the exact branch and the
+ * exact file path (reviewFilePath) as a JSON pair, without the line number: the same finding on a rerun or a later commit is one finding, and the same message on two
  * files that share a basename (server/api/users.ts, server/admin/users.ts) is two. A rerun never re-opens a finding being fixed or with
  * a PR open (recordFinding), nor a resolved one whose fix PR is still open (the reviewed branch has not taken the fix yet).
  *
@@ -32,6 +32,7 @@ import { getAutofixPolicy } from './policy.ts';
 import { recordFinding } from './intake.ts';
 import { computeFingerprint } from './fingerprint.ts';
 import { AUTOFIX_BRANCH_PREFIX } from './github-events.ts';
+import { scrubEvidence } from './scrub.ts';
 import type { FindingCandidate } from './github-events.ts';
 
 /** Review severities that are fixed, and the finding severity each becomes. */
@@ -89,10 +90,13 @@ function evidenceFor(review: ReviewRecord, f: FindingRecord, kind: string, branc
     `Title: ${oneLine(f.title, 200)}`,
     'Message:',
   ].join('\n');
-  // What is left after the header and the labels goes to the message first; the suggestion gets at most a third of it.
+  // What is left after the header and the labels goes to the message first; the suggestion gets at most a third of it. Both are
+  // scrubbed BEFORE they are cut: redaction can make text longer (`http://a:b@` becomes `https://[REDACTED]@`), so scrubbing after the
+  // cut (recordFinding scrubs again) could push the evidence over the cap and the goal's window would drop the header.
   const room = Math.max(0, REVIEW_EVIDENCE_MAX - header.length - '\nSuggestion:\n'.length - '\n'.length - '(none)'.length);
-  const sugg = suggestion ? suggestion.slice(0, Math.min(SUGGESTION_MAX, Math.floor(room / 3))) : '';
-  const msg = message.slice(0, room - sugg.length);
+  const cleanSuggestion = scrubEvidence(suggestion, Number.MAX_SAFE_INTEGER);
+  const sugg = cleanSuggestion ? cleanSuggestion.slice(0, Math.min(SUGGESTION_MAX, Math.floor(room / 3))) : '';
+  const msg = scrubEvidence(message, Number.MAX_SAFE_INTEGER).slice(0, room - sugg.length);
   return `${header}\n${msg}\nSuggestion:\n${sugg || '(none)'}`;
 }
 
@@ -124,8 +128,9 @@ async function emit(reviewId: string): Promise<void> {
     const c: FindingCandidate = {
       repoFullName, branch, headSha: sha, source: 'review_finding', kind, severity: SEVERITY[f.severity],
       errorText: message,
-      // The exact path, outside normalizeError (which would cut it to its first segment and basename).
-      fingerprintSubject: reviewFilePath(f.file_path),
+      // The exact branch and path, outside normalizeError (which would cut the path to its first segment and basename) and the branch
+      // family (feature/a and feature/b are different pull requests). JSON, so no delimiter in a value can make two subjects collide.
+      fingerprintSubject: JSON.stringify([branch, reviewFilePath(f.file_path)]),
     };
     // A resolved finding whose fix PR is still open: the reviewed branch has not taken the fix yet, so a rerun would only repeat it.
     const fp = computeFingerprint({ repo: c.repoFullName, branch: c.branch, kind: c.kind, error: c.errorText, subject: c.fingerprintSubject });
