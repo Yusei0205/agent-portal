@@ -48,7 +48,7 @@ export const ENGINES = [
     hint: 'Kiro CLI engine',
     providerModes: ['kiro'],
   },
-  { id: 'cursor', label: 'Cursor', hint: 'Cursor CLI with your Cursor API key', providerModes: [] },
+  { id: 'cursor', label: 'Cursor', hint: 'Cursor CLI with your Cursor API key', providerModes: ['cursor'] },
 ];
 
 // ── Agent select ───────────────────────────────────────────────────────────────

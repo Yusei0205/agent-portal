@@ -136,6 +136,19 @@ describe('Cursor AgentCore runner HTTP contract', () => {
     assert.equal((await post({ mode: 'cursor-models' })).status, 400);
   });
 
+  it('answers one prompt in cursor-text mode: no repository, no saved chat, the key redacted', async () => {
+    const evs = await events(await post({ mode: 'cursor-text', apiKey: KEY, prompt: 'ECHO_KEY' }));
+    const result = evs.find(e => e.type === 'result');
+    assert.equal(result.exitCode, 0);
+    assert.ok(result.text.includes('key=***'), result.text);
+    assert.ok(!JSON.stringify(evs).includes(KEY));
+    assert.equal(saved, 0, 'no chat state is saved');
+    const bad = await events(await post({ mode: 'cursor-text', apiKey: KEY }));
+    assert.equal(bad.find(e => e.type === 'result').exitCode, 1);
+    assert.match(bad.find(e => e.type === 'error').message, /Invalid Cursor text request/);
+    assert.equal((await post({ mode: 'cursor-text', prompt: 'x' })).status, 400, 'a credential is required');
+  });
+
   it('says MCP integrations are unavailable instead of dropping them silently', async () => {
     const evs = await events(await post({ ...payload(), mcpServers: [{ name: 'jira', url: 'https://example.com/mcp', headers: {} }] }));
     assert.ok(evs.some(e => e.type === 'status' && /MCP integrations are not available/.test(e.text)));

@@ -49,7 +49,11 @@ export async function sessionSignIn(w: { engine?: unknown; credential_id?: unkno
   if (cred) return modes[String(cred.mode)] ?? { kind: 'api_key', label: String(cred.mode), detail: String(cred.mode) };
 
   // No sign-in of its own: the portal's provider.
-  if (engine === 'cursor') return { kind: 'missing', label: 'no Cursor key', detail: 'Add a Cursor API key under Credentials, or a local install uses its own `agent login`.' };
+  if (engine === 'cursor') {
+    return getSettings().cursorApiKeySet
+      ? { kind: 'portal', label: 'Portal Cursor key', detail: "The portal's own Cursor API key" }
+      : { kind: 'missing', label: 'no Cursor key', detail: 'Add a Cursor API key under Credentials, or ask an admin to set the portal Cursor key. A local install uses its own `agent login`.' };
+  }
   if (engine === 'kiro') return { kind: 'portal', label: 'Portal Kiro key', detail: "The portal's own Kiro provider" };
   const mode = getSettings().provider.mode;
   if (mode === 'bedrock') return { kind: 'bedrock', label: 'Portal default (Bedrock)', detail: "The portal's provider: Amazon Bedrock" };

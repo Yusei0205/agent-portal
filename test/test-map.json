@@ -1887,6 +1887,7 @@
         "server/agent/cursor-stream.ts",
         "server/agent/cursor-turn.ts",
         "server/agent/cursor-config.ts",
+        "server/agent/cursor-text.ts",
         "server/agent/cursor-agentcore.ts",
         "cursor-runner/src/service.ts",
         "cursor-runner/src/state.ts",
@@ -1897,7 +1898,8 @@
         "test/cursor-stream.test.ts",
         "test/cursor-runner.test.ts",
         "test/cursor-config.test.ts",
-        "test/cursor-login-token.test.ts"
+        "test/cursor-login-token.test.ts",
+        "test/cursor-provider.test.ts"
       ],
       "smokeIds": []
     }

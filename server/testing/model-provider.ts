@@ -102,7 +102,7 @@ export interface CallTextModelOptions {
 
 // ── Which engine's credential a call uses ────────────────────────────────────
 
-export type TextEngine = 'claude-code' | 'kiro' | 'codex';
+export type TextEngine = 'claude-code' | 'kiro' | 'codex' | 'cursor';
 
 /**
  * The engine a text call should use for this person: the engine of the credential they chose, otherwise their default
@@ -120,13 +120,14 @@ export async function pickTextEngine(userId: string | null, credentialId: string
   const repo = getCredentialsRepository();
   if (credentialId) {
     const row = await repo.getByIdAndUser(credentialId, userId);
-    if (row && (row.engine === 'claude-code' || row.engine === 'kiro')) return row.engine;
+    if (row && (row.engine === 'claude-code' || row.engine === 'kiro' || row.engine === 'cursor')) return row.engine;
     return null;
   }
   if (await repo.getDefaultByUserAndEngine(userId, 'claude-code')) return 'claude-code';
   const mine = await repo.listByUser(userId);
   if (mine.some((c) => c.engine === 'claude-code')) return 'claude-code';
   if (mine.some((c) => c.engine === 'kiro')) return 'kiro';
+  if (mine.some((c) => c.engine === 'cursor')) return 'cursor';
   return null;
 }
 
@@ -229,6 +230,11 @@ export async function callTextModel(
 
   const settings = getSettings();
   const personalEngine = await pickTextEngine(createdBy, credentialId);
+  if (personalEngine === 'cursor' || (!personalEngine && settings.provider.mode === 'cursor')) {
+    if (images.length) throw new Error('Cursor portal AI generation accepts text only. Remove image attachments or select an image-capable provider.');
+    const { callCursorText } = await import('../agent/cursor-text.ts');
+    return callCursorText(systemPrompt + '\n\n' + userMessage, createdBy ?? null, modelOverride || settings.defaultModel || null);
+  }
   if (personalEngine === 'codex' || (!personalEngine && settings.provider.mode === 'codex')) {
     if (!createdBy) throw new Error('Codex AI generation requires a signed-in portal user with a ChatGPT connection.');
     if (images.length) throw new Error('Codex portal AI generation currently accepts text only. Remove image attachments or select an image-capable provider.');

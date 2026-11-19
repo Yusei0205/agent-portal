@@ -24,7 +24,7 @@ type ServiceOptions = {
 };
 const MAX_BODY = 16 * 1024 * 1024;
 const ID = /^[a-zA-Z0-9_-]{1,256}$/;
-const MODES = ['cursor-run', 'cursor-models', 'prepare-repos', 'inspect', 'finalize', 'flush-workspace'];
+const MODES = ['cursor-run', 'cursor-models', 'cursor-text', 'prepare-repos', 'inspect', 'finalize', 'flush-workspace'];
 
 /**
  * The Cursor runner inside an AgentCore microVM. Same HTTP/SSE contract as the Codex runner (GET /ping, POST /invocations),
@@ -82,7 +82,7 @@ export function createCursorRunnerServer(options: ServiceOptions = {}): http.Ser
     if (!MODES.includes(body.mode)) { json(400, { error: 'Unsupported mode' }); return; }
     // Exactly one credential per call: an API key, or a login token (the CLI's CURSOR_AUTH_TOKEN).
     const goodKey = typeof body.apiKey === 'string' && body.apiKey.length > 0 && body.apiKey.length <= 4096 && !/[\r\n\0\s]/.test(body.apiKey);
-    if (['cursor-run', 'cursor-models'].includes(body.mode)
+    if (['cursor-run', 'cursor-models', 'cursor-text'].includes(body.mode)
       && ((body.apiKey != null && body.authToken != null) || !(goodKey && body.authToken == null) && !(looksLikeLoginToken(body.authToken) && body.apiKey == null))) {
       json(400, { error: 'A Cursor API key or login token is required' }); return;
     }
@@ -134,6 +134,18 @@ export function createCursorRunnerServer(options: ServiceOptions = {}): http.Ser
         const ready = await cloneRunnerRepos(parsed.repos, workDir, send);
         await flushWorkspace(snapshot, workDir);
         send({ type: 'result', success: true, persisted: true, repos: ready });
+      } else if (body.mode === 'cursor-text') {
+        // One prompt, one answer: no repository, no saved chat, and not trusted, so no shell command runs.
+        if (typeof body.prompt !== 'string' || !body.prompt || body.prompt.length > 250_000
+          || (body.model != null && (typeof body.model !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/.test(body.model)))) throw new Error('Invalid Cursor text request');
+        const textDir = await fs.mkdtemp(path.join(root, 'text-'));
+        try {
+          const answer = await driveCursorTurn({ args: cursorArgs({ trusted: false, model: body.model || null, resumeId: null }), prompt: body.prompt, cwd: textDir, env: environment(auth),
+            emit: () => {}, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(170_000)]) });
+          const failure = turnFailure(answer);
+          if (failure) throw new Error(failure);
+          send({ type: 'result', exitCode: 0, text: answer.state.resultText ?? answer.state.text, ...(answer.state.usage ? { usage: answer.state.usage } : {}) });
+        } finally { await fs.rm(textDir, { recursive: true, force: true }); }
       } else if (body.mode === 'cursor-models') {
         const listed = await listCursorModels(auth, 45_000, environment(auth));
         if (listed.error) throw new Error(listed.error);
