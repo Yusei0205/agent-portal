@@ -46,6 +46,7 @@ import { registerAutomationRoutes } from './automations/routes.ts';
 import { recoverLocalAutomations, stopLocalAutomationTimers } from './automations/engine.ts';
 import { registerInsightsRoutes } from './insights.ts';
 import { registerUsageRoutes } from './usage.ts';
+import { registerAgentCoreRoutes } from './agentcore-metrics.ts';
 import { registerGoogleWorkspaceRoutes } from './google-workspace.ts';
 import { registerGmailRoutes } from './gmail.ts';
 import { registerMailRoutes } from './mail.ts';
@@ -279,6 +280,7 @@ export async function startServer(
   registerAutomationRoutes();
   registerInsightsRoutes();
   registerUsageRoutes();
+  registerAgentCoreRoutes();
   registerGoogleWorkspaceRoutes();
   registerGmailRoutes();
   registerMailRoutes();

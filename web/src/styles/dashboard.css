@@ -812,3 +812,6 @@
 .us-cell-value { position: relative; }
 .us-none-mark { color: var(--ink-3); }
 .us-quiet td { color: var(--ink-3); }
+
+/* AgentCore page */
+.us-hints { margin: 0; padding-left: 18px; display: grid; gap: 6px; }

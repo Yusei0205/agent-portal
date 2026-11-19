@@ -484,6 +484,17 @@
         "dashboard"
       ]
     },
+    "agentcore": {
+      "description": "AgentCore page: runtime usage and estimated cost read from CloudWatch (admin only)",
+      "sources": [
+        "server/agentcore-metrics.ts",
+        "web/src/pages/AgentCore.jsx"
+      ],
+      "tests": [
+        "test/agentcore-metrics.test.ts"
+      ],
+      "smokeIds": []
+    },
     "usage": {
       "description": "Usage page: dollars (Claude), credits (Kiro) and tokens by person, project and day",
       "sources": [

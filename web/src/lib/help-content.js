@@ -718,6 +718,25 @@ export const HELP_TOPICS = [
     ],
   },
   {
+    id: 'agentcore',
+    group: 'portal',
+    title: 'AgentCore',
+    icon: 'chart',
+    page: { tab: 'agentcore' },
+    adminOnly: true,
+    summary: 'What the AgentCore runtimes used, live from CloudWatch, with an estimated cost.',
+    sections: [
+      {
+        heading: 'Reading the page',
+        rows: [
+          ['Estimated cost', 'vCPU-hours and GB-hours multiplied by the published AgentCore rates. An estimate, not the invoice: Cost Explorer has the real figure.'],
+          ['Memory share', 'How much of a runtime\'s estimated cost is memory. A high share means sessions sit idle holding memory: shorten the idle timeout and stop sessions when a run ends.'],
+          ['Active sessions', 'Sessions running right now. The page refreshes every 30 seconds.'],
+        ],
+      },
+    ],
+  },
+  {
     id: 'api-access',
     group: 'portal',
     title: 'API access and MCP',
