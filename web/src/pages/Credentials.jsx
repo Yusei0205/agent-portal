@@ -26,7 +26,7 @@ import { safeUrl } from '../lib/safeUrl.js';
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function modeLabel(engine, mode) {
-  if (engine === 'cursor') return mode === 'login_token' ? 'Login token (advanced)' : 'API key';
+  if (engine === 'cursor') return mode === 'login_token' ? 'Cursor login' : 'API key';
   if (engine === 'kiro') {
     return mode === 'api_key' ? 'API key' : 'IAM Identity Center';
   }
@@ -75,6 +75,7 @@ function getStatusInfo(cred) {
       const ms = new Date(cred.config.tokenExpiry).getTime() - Date.now();
       if (ms > 0) {
         const hrs = Math.floor(ms / 3600000);
+        if (hrs >= 48) return { text: `Expires in ${Math.floor(hrs / 24)} days`, color: 'var(--ok)' };
         if (hrs >= 1) return { text: `Expires in ${hrs}h`, color: 'var(--ok)' };
         const mins = Math.floor(ms / 60000);
         return { text: `Expires in ${mins}m`, color: 'var(--ok)' };
@@ -268,7 +269,7 @@ function ClaudePlanNativeSignIn({ onToken }) {
 // ── Add Credential dialog ──────────────────────────────────────────────────────
 
 function AddCredentialDialog({ engine, onClose, onCreated }) {
-  const [mode, setMode] = useState(() => engine === 'kiro' ? 'api_key' : 'api_key');
+  const [mode, setMode] = useState(() => engine === 'cursor' ? 'sign_in' : 'api_key');
   const [name, setName] = useState('');
   const [secret, setSecret] = useState('');
   const [showSecret, setShowSecret] = useState(false);
@@ -299,8 +300,9 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
     { id: 'bedrock_role',      label: 'Amazon Bedrock (IAM role)', desc: 'Your company runs Claude on AWS Bedrock and gave you a role ARN. No secret is stored.' },
   ];
   const CURSOR_MODES = [
+    { id: 'sign_in', label: 'Sign in with Cursor', desc: 'Sign in with your own Cursor account in your browser. It lasts about 60 days, then one click signs you in again. Experimental: check your Cursor terms before using a personal login on a shared server.' },
     { id: 'api_key', label: 'Cursor API key', desc: 'Create one at cursor.com/dashboard/api. Usage is billed to your Cursor plan.' },
-    { id: 'login_token', label: 'Cursor login token (advanced)', desc: 'Your own Cursor login, from `agent login`. Paste the contents of auth.json (or just its accessToken). It lasts about 60 days, then you sign in again and paste a new one. Check your Cursor terms before using a personal login on a shared server.' },
+    { id: 'login_token', label: 'Paste a login token (advanced)', desc: 'Paste the contents of auth.json (or just its accessToken) from your own `agent login`, if you cannot sign in here.' },
   ];
   const modes = engine === 'kiro' ? KIRO_MODES : engine === 'cursor' ? CURSOR_MODES : CLAUDE_MODES;
 
@@ -354,6 +356,9 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
       } else if (mode === 'bedrock_role') {
         body.config = { roleArn: roleArn.trim(), region: bedrockRegion.trim() };
         if (externalId.trim()) body.config.externalId = externalId.trim();
+      } else if (mode === 'sign_in') {
+        body.mode = 'login_token';
+        body.signIn = true;
       } else {
         body.secret = secret;
       }
@@ -557,7 +562,7 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
             <div className="device-code-box" role="region" aria-label="Device authorization">
               <h4>Authorize in your browser</h4>
               <p style={{ fontSize: '0.84rem', marginBottom: 8 }}>
-                Open the link below and enter the code to sign in:
+                {deviceChallenge.userCode ? 'Open the link below and enter the code to sign in:' : 'Open the link below, sign in to Cursor and approve. This page finishes by itself:'}
               </p>
               <div className="device-code-url">
                 <a
@@ -568,15 +573,17 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
                   {deviceChallenge.verificationUri}
                 </a>
               </div>
-              <div
-                className="device-user-code"
-                aria-label={`User code: ${deviceChallenge.userCode}`}
-              >
-                {deviceChallenge.userCode}
-              </div>
+              {deviceChallenge.userCode && (
+                <div
+                  className="device-user-code"
+                  aria-label={`User code: ${deviceChallenge.userCode}`}
+                >
+                  {deviceChallenge.userCode}
+                </div>
+              )}
               <div className="device-status" aria-live="polite">
                 {pollStatus === 'expired' ? (
-                  <><Icon name="warning" size={15} /> Code expired. Close and try again.</>
+                  <><Icon name="warning" size={15} /> {deviceChallenge.userCode ? 'Code expired.' : 'The sign-in link expired.'} Close and try again.</>
                 ) : pollStatus === 'slow_down' ? (
                   <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" />
                   Waiting for authorization (slowing down)…</>
@@ -616,9 +623,9 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
               onClick={submit}
             >
               {busy ? (
-                <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> {mode === 'identity_center' ? 'Requesting sign-in code…' : 'Saving…'}</>
+                <><span className="spinner" style={{ width: 14, height: 14 }} aria-hidden="true" /> {mode === 'identity_center' ? 'Requesting sign-in code…' : mode === 'sign_in' ? 'Starting sign-in…' : 'Saving…'}</>
               ) : (
-                'Add credential'
+                mode === 'sign_in' ? 'Sign in with Cursor' : 'Add credential'
               )}
             </button>
           )}
@@ -763,10 +770,14 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
 
   const statusInfo = getStatusInfo(cred);
   const isKiroIdC = cred.engine === 'kiro' && cred.mode === 'identity_center';
+  // A Cursor login lasts about 60 days and cannot be renewed silently: one click signs in again.
+  const isCursorLogin = cred.engine === 'cursor' && cred.mode === 'login_token';
+  const canSignInAgain = isKiroIdC || isCursorLogin;
   // Determine if "Sign in again" should be shown with primary (accent) styling
   const isExpiredOrNeedsSignIn =
     cred.status === 'expired' ||
     cred.status === 'needs_sign_in' ||
+    (isCursorLogin && cred.status === 'expiring') ||
     (cred.status == null && cred.config?.tokenExpiry && new Date(cred.config.tokenExpiry) < new Date());
 
   // Map useDevicePoll statuses to what DeviceCodeBox accepts
@@ -847,14 +858,14 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
             challenge={reauthChallenge}
             pollStatus={boxPollStatus}
             onCancel={handleCancelReauth}
-            heading="Sign in to Kiro again"
+            heading={isCursorLogin ? 'Sign in to Cursor again' : 'Sign in to Kiro again'}
           />
         )}
       </div>
 
       <div className="cred-card-actions">
         {/* Kiro IAM Identity Center: Refresh + Sign in again */}
-        {isKiroIdC && !reauthChallenge && (
+        {canSignInAgain && !reauthChallenge && (
           <>
             {cred.canRefresh && (
               <button
