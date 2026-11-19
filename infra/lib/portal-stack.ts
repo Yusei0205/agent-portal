@@ -379,6 +379,8 @@ export class AgentPortalCloudStack extends cdk.Stack {
       actions: ['appsync:EventPublish'],
       resources: [`arn:aws:appsync:${this.region}:${this.account}:apis/${eventsApi.attrApiId}/channelNamespace/*`],
     }));
+    // Session quality scores (AgentCore Evaluations, on demand): the built-in evaluators are AWS-owned, so no resource ARN fits.
+    fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock-agentcore:Evaluate'], resources: ['*'] }));
     // The AgentCore page (admin) reads runtime usage from CloudWatch. Read-only; these calls take no resource-level permissions.
     fn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],

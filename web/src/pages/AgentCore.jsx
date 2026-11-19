@@ -70,6 +70,92 @@ function Card({ title, value, sub, tone }) {
   );
 }
 
+const scoreText = (s) => (s.value === null || s.value === undefined ? '–' : `${Math.round(s.value * 100)}%`);
+
+/** Quality scores from AgentCore Evaluations: score the latest sessions on demand, or a share of finished ones automatically. */
+function QualityPanel() {
+  const [cfg, setCfg] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [pct, setPct] = useState('0');
+  const [msg, setMsg] = useState(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await api.get('/api/agentcore/evals');
+      setCfg(r);
+      setPct(String(r.samplePercent));
+      setError(null);
+    } catch (e) { setError(e.message); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const scoreLatest = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await api.post('/api/agentcore/evals', { recent: 5 });
+      setMsg(`Scored ${r.evaluations.length} session${r.evaluations.length === 1 ? '' : 's'}`);
+      await load();
+    } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const savePct = async () => {
+    setBusy(true); setMsg(null);
+    try { await api.put('/api/agentcore/evals', { samplePercent: Number(pct) }); setMsg('Saved'); await load(); } catch (e) { setMsg(e.message); } finally { setBusy(false); }
+  };
+  const pctValid = /^\d+$/.test(pct.trim()) && Number(pct) <= 100;
+
+  return (
+    <section className="us-panel" aria-label="Session quality">
+      <div className="us-panel-head"><strong>Session quality</strong><span className="muted">scored by AgentCore Evaluations</span></div>
+      <p className="muted us-lead">
+        Each session is scored on goal success, tool choice, tool parameters and helpfulness, from its saved transcript. Scoring costs a few cents
+        per session, so automatic scoring is off until you set a share of finished sessions.
+      </p>
+      {error && <p className="error-note" role="alert">{error}</p>}
+      <div className="us-controls" role="group" aria-label="Scoring controls">
+        <button type="button" className="btn btn-sm" disabled={busy} onClick={scoreLatest}>Score latest 5 sessions</button>
+        <label className="muted" htmlFor="eval-sample">Automatically score</label>
+        <input id="eval-sample" type="text" inputMode="numeric" value={pct} aria-invalid={!pctValid} style={{ width: 60, textAlign: 'right' }} onChange={(e) => { setPct(e.target.value); setMsg(null); }} />
+        <span className="muted">% of finished sessions</span>
+        <button type="button" className="btn btn-sm" disabled={busy || !pctValid || (cfg && String(cfg.samplePercent) === pct.trim())} onClick={savePct}>Save</button>
+        {msg && <span className="muted" role="status">{msg}</span>}
+      </div>
+      {cfg && cfg.evaluations.length === 0 && <p className="muted us-empty">No session has been scored yet.</p>}
+      {cfg && cfg.evaluations.length > 0 && (
+        <div className="table-wrap">
+          <table className="data-table us-table" aria-label="Scored sessions">
+            <thead>
+              <tr>
+                <th scope="col">Session</th>
+                <th scope="col">Runner</th>
+                {cfg.evaluators.map((e) => <th key={e} scope="col" className="us-num">{e.replace(/([a-z])([A-Z])/g, '$1 $2')}</th>)}
+                <th scope="col" className="us-num">Turns</th>
+                <th scope="col" className="us-num">Tool calls</th>
+                <th scope="col">Scored</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cfg.evaluations.map((r) => (
+                <tr key={r.workflowId}>
+                  <td className="us-name" title={r.title}>{r.title || r.workflowId}</td>
+                  <td>{r.engine}</td>
+                  {cfg.evaluators.map((name) => {
+                    const s = r.scores.find((x) => x.evaluator === name);
+                    return <td key={name} className="us-num" title={s?.explanation || s?.error || undefined}>{s ? `${scoreText(s)}${s.label ? ` ${s.label}` : ''}` : '–'}</td>;
+                  })}
+                  <td className="us-num">{r.turns}</td>
+                  <td className="us-num">{r.toolCalls}</td>
+                  <td className="muted">{new Date(r.at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** One runner: blank means the platform timeout; a number stops its idle sessions after that many minutes. */
 function IdleRow({ row, platformMinutes, maxMinutes, onSaved }) {
   const [value, setValue] = useState(row.minutes === null ? '' : String(row.minutes));
@@ -263,6 +349,8 @@ export function AgentCore() {
           <p className="muted us-lead">Updated {new Date(data.generatedAt).toLocaleTimeString()}. Refreshes every 30 seconds.</p>
         </>
       )}
+
+      <QualityPanel />
 
       <IdleSettings />
     </div>

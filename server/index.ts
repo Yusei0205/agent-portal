@@ -48,6 +48,7 @@ import { registerInsightsRoutes } from './insights.ts';
 import { registerUsageRoutes } from './usage.ts';
 import { registerAgentCoreRoutes } from './agentcore-metrics.ts';
 import { registerAgentCoreIdleRoutes } from './agentcore-idle.ts';
+import { registerAgentCoreEvalRoutes } from './agentcore-eval.ts';
 import { registerGoogleWorkspaceRoutes } from './google-workspace.ts';
 import { registerGmailRoutes } from './gmail.ts';
 import { registerMailRoutes } from './mail.ts';
@@ -283,6 +284,7 @@ export async function startServer(
   registerUsageRoutes();
   registerAgentCoreRoutes();
   registerAgentCoreIdleRoutes();
+  registerAgentCoreEvalRoutes();
   registerGoogleWorkspaceRoutes();
   registerGmailRoutes();
   registerMailRoutes();
