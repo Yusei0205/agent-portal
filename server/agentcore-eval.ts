@@ -128,12 +128,12 @@ export interface EvalRecord {
 }
 
 type EvalClient = { send(cmd: unknown): Promise<any> };
-let clientOverride: { client: EvalClient; Cmd: new (input: unknown) => unknown } | null = null;
+let clientOverride: { client: EvalClient; Cmd: new (input: any) => unknown } | null = null; // eslint-disable-line @typescript-eslint/no-explicit-any
 /** Tests supply a fake Evaluate client. */
 export function _setEvalClient(c: typeof clientOverride): void { clientOverride = c; }
 
 async function evaluate(spans: Span[]): Promise<{ scores: Score[]; inputTokens: number; outputTokens: number }> {
-  let client: EvalClient; let Cmd: new (input: unknown) => unknown;
+  let client: EvalClient; let Cmd: new (input: any) => unknown; // eslint-disable-line @typescript-eslint/no-explicit-any
   if (clientOverride) ({ client, Cmd } = clientOverride);
   else {
     const sdk = await import('@aws-sdk/client-bedrock-agentcore');
