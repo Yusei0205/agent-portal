@@ -32,12 +32,14 @@
  */
 
 import fs from 'node:fs';
-import { parseCodexFiles, validateCodexFile, CODEX_CONFIG_PATH, codexAgents, type CodexConfigFile } from './agent/codex-config.ts';
+import { parseCodexFiles, validateCodexFile, CODEX_CONFIG_PATH, type CodexConfigFile } from './agent/codex-config.ts';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
+import { parse as parseToml } from 'smol-toml';
+import { parse as parseYaml } from 'yaml';
 import { persistFile, persistTree, forgetFile, forgetTree, syncTreeDown } from './durable-files.ts';
 import { router, sendJson, requireAuth } from './http.ts';
 import type { PortalRequest, PortalResponse } from './http.ts';
@@ -991,6 +993,9 @@ function requireWriteScope(req: PortalRequest, res: PortalResponse): boolean {
 interface AgentEntry {
   name: string;
   description?: string;
+  definitionPath?: string;
+  model?: string;
+  skills?: string[];
 }
 
 export async function getCodexConfigFiles(userId: string): Promise<CodexConfigFile[]> {
@@ -1045,7 +1050,13 @@ export async function readOwnerConfigFiles(
 }
 
 export async function listAgentsForEngine(userId: string, engine: string): Promise<AgentEntry[]> {
-  if (engine === 'codex') return codexAgents(await getCodexConfigFiles(userId));
+  if (engine === 'codex') {
+    const files = await getCodexConfigFiles(userId);
+    return files.filter((file) => file.path.startsWith('agents/')).map((file) => {
+      const role = parseToml(file.content);
+      return { name: String(role.name), description: String(role.description), definitionPath: file.path, ...(typeof role.model === 'string' ? { model: role.model } : {}) };
+    });
+  }
   const agents: AgentEntry[] = [];
 
   if (engine === 'kiro') {
@@ -1081,7 +1092,11 @@ export async function listAgentsForEngine(userId: string, engine: string): Promi
         const parsed = JSON.parse(content) as Record<string, unknown>;
         const name = String(parsed.name ?? path.basename(fp, '.json'));
         const description = parsed.description ? String(parsed.description) : undefined;
-        agents.push({ name, description });
+        const skills = Array.isArray(parsed.resources) ? parsed.resources
+          .filter((value): value is string => typeof value === 'string' && value.startsWith('skill://'))
+          .map((value) => value.replace(/^skill:\/\//, '').replace(/\/SKILL\.md$/, '').split('/').pop() || '')
+          .filter((value) => value && !value.includes('*')) : [];
+        agents.push({ name, description, definitionPath: fp, ...(typeof parsed.model === 'string' ? { model: parsed.model } : {}), skills: [...new Set(skills)] });
       } catch { /* skip invalid JSON */ }
     }
   } else if (engine === 'claude-code') {
@@ -1126,7 +1141,10 @@ export async function listAgentsForEngine(userId: string, engine: string): Promi
       const descMatch = content.match(/^(?:>|Description:)\s*(.+)/m);
       const name = fmField('name') ?? (headingMatch ? headingMatch[1].trim() : path.basename(fp, '.md'));
       const description = fmField('description') ?? (descMatch ? descMatch[1].trim() : undefined);
-      agents.push({ name, description });
+      let metadata: Record<string, unknown> = {};
+      try { const parsed = fm ? parseYaml(fm[1]) : {}; if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) metadata = parsed; } catch { /* retain legacy discovery for malformed front matter */ }
+      const skills = Array.isArray(metadata.skills) ? metadata.skills.filter((value): value is string => typeof value === 'string') : [];
+      agents.push({ name, description, definitionPath: fp, ...(typeof metadata.model === 'string' ? { model: metadata.model } : {}), skills: [...new Set(skills)] });
     }
   }
 

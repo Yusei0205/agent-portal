@@ -33,11 +33,25 @@ describe('execution stages', () => {
     assert.equal(r.current, 0);
   });
 
-  it('moves to checking when a test or build runs after an edit, not before', () => {
+  it('moves to checking only when verification follows the most recent edit', () => {
     const before = deriveStages({ calls: [call('Bash', 'npm test', '', 1), call('Edit', '', 'a.ts', 2)], files: [{}] }, { status: 'running' });
     assert.equal(before.current, 1);
     const after = deriveStages({ calls: [call('Edit', '', 'a.ts', 2), call('Bash', 'npx tsc --noEmit', '', 3)], files: [{}] }, { status: 'running' });
     assert.equal(states(after), 'done,done,active,pending');
+    assert.equal(deriveStages({calls:[call('Edit','','a.ts',1),call('Bash','npm test','',2),call('Edit','','a.ts',3)],files:[{}]},{status:'running'}).current,1);
+  });
+
+  it('counts browser and connected-service research as work even with no changed files', () => {
+    const c = {calls:[call('Running: @browser/screenshot'),call('Running: @google/search')],files:[]};
+    assert.equal(deriveStages(c,{status:'running'}).current,1);
+    assert.match(deriveStages(c,{status:'paused'}).reason,/Session paused.*does not require a file change/);
+    assert.equal(deriveStages(c,{status:'running',planMode:true}).current,0);
+    assert.match(deriveStages(c,{status:'running',planMode:true}).reason,/Plan mode is on/);
+  });
+
+  it('recognises read-only verification without demanding an edit', () => {
+    assert.equal(deriveStages({calls:[call('functions.exec_command','npm test')],files:[]},{status:'running'}).current,2);
+    assert.equal(deriveStages({calls:[call('Bash','which git')],files:[]},{status:'running'}).current,0);
   });
 
   it('is all done when the session is done, failed on the current stage when it failed, stopped when stopped', () => {

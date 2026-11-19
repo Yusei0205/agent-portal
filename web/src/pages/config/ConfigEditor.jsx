@@ -27,7 +27,7 @@ function extOf(path) {
  *   onRequestNewFile?: () => void,
  * }} props
  */
-export function ConfigEditor({ folder, filePath, following, onFileSaved, onRequestNewFile }) {
+export function ConfigEditor({ folder, filePath, following, onFileSaved, onRequestNewFile, onDirtyChange }) {
   const [content, setContent] = useState('');
   const [savedContent, setSavedContent] = useState('');
   const [loading, setLoading] = useState(false);
@@ -90,6 +90,7 @@ export function ConfigEditor({ folder, filePath, following, onFileSaved, onReque
   };
 
   const isDirty = content !== savedContent;
+  useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
 
   if (!filePath) {
     return (

@@ -598,7 +598,7 @@ describe('User Config agents endpoint', () => {
       method: 'POST',
       body: {
         path: 'agents/my-agent.json',
-        content: '{"name":"My Agent","description":"Does things"}',
+        content: '{"name":"My Agent","description":"Does things","model":"configured-model","resources":["skill://~/.kiro/skills/api-design/SKILL.md","skill://.kiro/skills/*/SKILL.md"]}',
       },
       cookie: adminCookie,
     });
@@ -612,6 +612,9 @@ describe('User Config agents endpoint', () => {
     const found = agents.find((a) => a.name === 'My Agent');
     assert.ok(found, 'agent My Agent should be in the list');
     assert.equal(found?.description, 'Does things');
+    assert.equal(found?.definitionPath, 'agents/my-agent.json');
+    assert.equal(found?.model, 'configured-model');
+    assert.deepEqual(found?.skills, ['api-design']);
   });
 
   it('GET /api/user-config/agents?engine=claude-code lists agents in claude/agents/', async () => {
@@ -624,7 +627,7 @@ describe('User Config agents endpoint', () => {
       method: 'POST',
       body: {
         path: 'agents/reviewer.md',
-        content: '# Code Reviewer\nDescription: Reviews code quality\n',
+        content: '---\nname: Code Reviewer\ndescription: Reviews code quality\nmodel: inherit\nskills:\n  - security-review\n  - api-design\n---\n# Code Reviewer\n',
       },
       cookie: adminCookie,
     });
@@ -634,6 +637,21 @@ describe('User Config agents endpoint', () => {
     const agents = (r.body as Record<string, unknown>).agents as Array<Record<string, unknown>>;
     const found = agents.find((a) => a.name === 'Code Reviewer');
     assert.ok(found, 'agent Code Reviewer should be in the list');
+    assert.equal(found.definitionPath, 'agents/reviewer.md');
+    assert.equal(found.model, 'inherit');
+    assert.deepEqual(found.skills, ['security-review', 'api-design']);
+  });
+
+  it('discovers a native Codex definition with its configured model and editor path', async () => {
+    const content = 'name = "code-engineer"\ndescription = "Build reliable services"\ndeveloper_instructions = "Read requirements and verify the result."\nmodel = "configured-model"\n';
+    const created = await fetchJson(baseUrl, '/api/user-config/codex/file', { method: 'POST', body: { path: 'agents/code-engineer.toml', content }, cookie: adminCookie });
+    assert.equal(created.status, 201);
+    const result = await fetchJson(baseUrl, '/api/user-config/agents?engine=codex', { cookie: adminCookie });
+    assert.equal(result.status, 200);
+    const agents = (result.body as Record<string, unknown>).agents as Array<Record<string, unknown>>;
+    const agent = agents.find((entry) => entry.name === 'code-engineer');
+    assert.equal(agent?.definitionPath, 'agents/code-engineer.toml');
+    assert.equal(agent?.model, 'configured-model');
   });
 
   it('returns 400 for unknown engine', async () => {

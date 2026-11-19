@@ -43,6 +43,10 @@ createRoot(document.getElementById('root')).render(<main style={{padding:24,maxW
     });
     await page.goto('http://portal.test/');
     await page.getByRole('button',{name:'Inspect API engineer',exact:true}).waitFor();
+    await page.getByRole('region',{name:'Agent execution timeline'}).waitFor();
+    assert.equal(await page.locator('.execution-span').count(),1,'only the agent with a recorded start gets a duration bar');
+    await page.getByText('Timing not recorded',{exact:true}).waitFor();
+    if (process.env.PORTAL_MISSION_SCREENSHOT) await page.screenshot({path:process.env.PORTAL_MISSION_SCREENSHOT+'-timeline.png',animations:'disabled'});
     // Theme chevrons must remain a single right-aligned icon, with room for the label.
     for (const theme of [{template:'kiro-ide',mode:'dark'},{template:'kiro-ide',mode:'light'},{template:'cyber-hud',mode:'dark'}]) {
       await page.evaluate((detail) => window.dispatchEvent(new CustomEvent('test:picker-theme',{detail})), theme);

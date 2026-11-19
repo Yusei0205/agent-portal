@@ -19,6 +19,7 @@ import { ConfigFileTree } from './config/ConfigFileTree.jsx';
 import { ConfigEditor } from './config/ConfigEditor.jsx';
 import { HubContext, PageHeader, SectionHead } from '../components/PageHeader.jsx';
 import { Credentials } from './Credentials.jsx';
+import { AgentWorkforce } from './config/AgentWorkforce.jsx';
 import { navigate } from '../lib/router.js';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 
@@ -29,6 +30,7 @@ const SIGN_INS = {
 };
 
 const TABS = [
+  { id: 'agents', label: 'Agents' },
   SIGN_INS,
   { id: 'codex', label: 'Codex (~/.codex)', description: 'AGENTS.md, reasoning settings, custom agents and skills used by local and cloud Codex sessions. Sign-ins and MCP connections are managed in Connect.' },
   {
@@ -244,8 +246,9 @@ function ConfigTab({ folder, user, treeRefreshBump }) {
 }
 
 export function Configuration({ user, tab: wantedTab }) {
-  const tab = TABS.some((t) => t.id === wantedTab) ? wantedTab : SIGN_INS.id;
+  const tab = TABS.some((t) => t.id === wantedTab) ? wantedTab : 'agents';
   const isSignIns = tab === SIGN_INS.id;
+  const isAgents = tab === 'agents';
   const [treeRefreshBump, setTreeRefreshBump] = useState(0);
 
   const handleImported = useCallback(() => {
@@ -257,9 +260,9 @@ export function Configuration({ user, tab: wantedTab }) {
       {/* Page header: title + subtitle on left, zip buttons on right */}
       <PageHeader
         title="Agent setup"
-        description="Everything that sets up your agents: your sign-ins for Codex, Kiro and Claude Code, and the .codex, .kiro and .claude files each engine loads in every session you start. New here? Start with Sign-ins. File changes apply to sessions started or resumed afterwards."
+        description="Your agents, engine sign-ins and configuration in one place. Changes apply to sessions started or resumed afterwards."
       >
-        {!isSignIns && <button
+        {!isSignIns && !isAgents && <button
           type="button"
           className="btn"
           onClick={handleImported}
@@ -269,8 +272,8 @@ export function Configuration({ user, tab: wantedTab }) {
           <Icon name="refresh" size={14} />
           Refresh
         </button>}
-        {!isSignIns && <ImportZipButton folder={tab} onImported={handleImported} />}
-        {!isSignIns && <ExportZipButton folder={tab} />}
+        {!isSignIns && !isAgents && <ImportZipButton folder={tab} onImported={handleImported} />}
+        {!isSignIns && !isAgents && <ExportZipButton folder={tab} />}
       </PageHeader>
 
       {/* Keep guidance in the selected panel, rather than repeating it beside the tabs. */}
@@ -299,7 +302,7 @@ export function Configuration({ user, tab: wantedTab }) {
         aria-labelledby={`cfg-tab-${tab}`}
         className="tab-panel"
       >
-        {isSignIns ? (
+        {isAgents ? <AgentWorkforce /> : isSignIns ? (
           <HubContext.Provider value><Credentials user={user} /></HubContext.Provider>
         ) : (
           <ConfigTab

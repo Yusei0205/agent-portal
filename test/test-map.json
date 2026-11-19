@@ -290,6 +290,7 @@
         "web/src/pages/sessions/SessionWorkspace.jsx",
         "web/src/pages/sessions/SessionCommandBar.jsx",
         "web/src/pages/sessions/SessionExecution.jsx",
+        "web/src/lib/execution-stages.js",
         "web/src/styles/session-studio.css",
         "web/src/pages/sessions/SessionChanges.jsx",
         "web/src/pages/sessions/NewSessionDialog.jsx",
@@ -463,6 +464,8 @@
         "web/src/components/DashboardInsights.jsx",
         "web/src/components/DashboardDetails.jsx",
         "web/src/components/MissionControl.jsx",
+        "web/src/components/ExecutionTimeline.jsx",
+        "web/src/styles/execution-timeline.css",
         "web/src/lib/useMissionSnapshot.js",
         "web/src/styles/mission-control.css",
         "web/src/components/CostPanel.jsx",
@@ -886,13 +889,16 @@
       "sources": [
         "server/config.ts",
         "web/src/pages/Configuration.jsx",
+        "web/src/pages/config/AgentWorkforce.jsx",
+        "web/src/styles/workforce.css",
         "web/src/pages/config/ConfigEditor.jsx",
         "web/src/pages/config/ConfigFileTree.jsx",
         "web/src/pages/config/ConfigStatus.jsx",
         "web/src/styles/config.css"
       ],
       "tests": [
-        "test/cloud-config.test.ts"
+        "test/cloud-config.test.ts",
+        "test/web-agent-workforce.test.ts"
       ],
       "smokeIds": [
         "config"

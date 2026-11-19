@@ -1121,6 +1121,14 @@ export function Dashboard({ user, projects }) {
         projectFilter={projectFilter}
         refreshKey={data?.generatedAt}
       />
+      {/* Live work leads the overview; metrics remain available immediately below. */}
+      <div className="db-main-grid">
+        {loading && !data ? <><div className="panel db-active"><div className="skeleton" style={{ height: 280 }} /></div><div className="panel db-network"><div className="skeleton" style={{ height: 280 }} /></div></> : <>
+          <MissionControl activeSession={activeSession} recentSessions={recentSessions} projectId={projectFilter} animated={animated} />
+          {data && <RunsTrendPanel daily={data.daily} period={period} onPeriodChange={setPeriod} />}
+        </>}
+      </div>
+
       <div className="db-kpis" aria-label="Summary statistics">
         {loading && !data ? (
           <>
@@ -1196,26 +1204,6 @@ export function Dashboard({ user, projects }) {
               trendLabel="Success rate per day"
               animated={animated}
             />
-          </>
-        )}
-      </div>
-
-      {/* Active work and outcomes share the primary monitoring area. */}
-      <div className="db-main-grid">
-        {loading && !data ? (
-          <>
-            <div className="panel db-network">
-              <div className="skeleton" style={{ height: 280 }} />
-            </div>
-            <div className="panel db-active">
-              <div className="skeleton skeleton-text db-skeleton-title" />
-              <div className="skeleton" style={{ height: 200, marginTop: 12 }} />
-            </div>
-          </>
-        ) : (
-          <>
-            <MissionControl activeSession={activeSession} recentSessions={recentSessions} projectId={projectFilter} animated={animated} />
-            {data && <RunsTrendPanel daily={data.daily} period={period} onPeriodChange={setPeriod} />}
           </>
         )}
       </div>

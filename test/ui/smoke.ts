@@ -1810,11 +1810,11 @@ async function main() {
     console.log('\n30. Configuration page (F5)');
     currentSectionId = '30';
 
-    await test('Agent setup page renders with Sign-ins/Codex/Kiro/Claude tabs', async (p) => {
+    await test('Agent setup page renders with Agents/Sign-ins/Codex/Kiro/Claude tabs', async (p) => {
       await goto(p, '/config/kiro', 1200);
       await assertHeading(p, 'Agent setup');
       await p.waitForSelector('.tabs, [role="tablist"]', { timeout: 8000 });
-      await assertTabsExist(p, ['Sign-ins', '~/.codex', '~/.kiro', '~/.claude']);
+      await assertTabsExist(p, ['Agents', 'Sign-ins', '~/.codex', '~/.kiro', '~/.claude']);
       // AWS access is set per project (Workspaces), so there is no ~/.aws tab here any more.
       if (await p.locator('#cfg-tab-aws').count()) throw new Error('Agent setup should not have an AWS tab');
     }, page);

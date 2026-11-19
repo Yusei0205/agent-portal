@@ -2,6 +2,10 @@
 
 Status: first delivery implemented; broader phases below remain planned. Deployment status is tracked in GitHub Actions.
 
+Second delivery implemented: Agent Setup now defaults to an Agents directory with engine filters, skill/model metadata, native-definition creation and a configuration inspector using the existing editor. Sign-ins and engine configuration retain their direct routes. Dashboard Mission Control displays an agent execution timeline with recorded start/end spans, current-time markers, explicit missing timing and inspector selection; live work precedes KPI cards. These are personal configured agents and selected-session runtime records, respectively. Cross-session workforce activity, attributed cost, navigation changes and contextual assistant remain planned.
+
+Session stage correction: browser and connected-service activity counts as Working without requiring a file edit; read-only verification can reach Checking; a later edit invalidates an earlier verification stage. Explicit plan mode retains Planning. The execution view explains its inferred stage and paused/blocked state. This is an event-derived summary, not a scheduler phase or proof of verification success.
+
 First delivery: Dashboard Mission Control selects recent/active sessions and opens a collaboration, activity and deliverables inspector. It uses existing permission-filtered APIs, bounded recent events, project subscriptions and a 10-second refresh fallback. Includes agent selection, output previews, workspace/review links, stale-resource warnings and mobile/reduced-motion behavior.
 
 Reference: [AI Agent Portal Design](https://chatgpt.com/share/6afd9718-b1bc-83ec-a120-c7cc5660c572), read in Opera on 2026-11-19. The reference proposes a mission-control workspace for developers and non-technical users, live agent collaboration, workflow orchestration, and Simple/Developer experiences. Its interactive NEXUS prototype explicitly uses simulated, in-memory data. Adopt its interaction concepts with the portal's real records and permissions; the proposed names are navigation labels, not a rebranding decision.
@@ -10,7 +14,7 @@ Reference: [AI Agent Portal Design](https://chatgpt.com/share/6afd9718-b1bc-83ec
 
 ### Additional visual references: operations overview and agent workforce
 
-The two screenshots supplied on 2026-11-19 refine the direction below. These are proposed improvements, not shipped UI. Combine the overview's execution timeline and actionable panels with the workforce's consistent agent cards and grouped navigation. Keep the portal's existing theme choices and real project records.
+The two screenshots supplied on 2026-11-19 refine the direction below. The second-delivery note above identifies the implemented subset; the table also includes future improvements. Combine the overview's execution timeline and actionable panels with the workforce's consistent agent cards and grouped navigation. Keep the portal's existing theme choices and real project records.
 
 | Priority | Area | Proposed behavior | Existing foundation / dependency |
 | --- | --- | --- | --- |
@@ -24,7 +28,7 @@ The two screenshots supplied on 2026-11-19 refine the direction below. These are
 
 Visual rules: use calm surfaces, generous spacing, one primary accent and semantic status colors. Keep pointer glow subtle on selectable cards, animate recorded state changes and reveal artifacts once. Share card dimensions and footer alignment across themes. Avoid continuous decorative motion in timelines, editors and logs. Honor reduced motion and keyboard focus.
 
-User decision: reuse the existing Agent Setup page. Add an Agents subtab for the searchable card grid alongside the existing Sign-ins, Codex, Kiro and Claude configuration subtabs. Keep Sign-ins as the default for first-time setup. Edit configuration opens the appropriate existing engine file editor; a guided Create agent action must write a supported engine agent definition rather than introduce duplicate agent storage. Card selection opens runtime inspection where records can be reliably matched, with explicit links to the owning session. Preserve the existing routes, access checks and configuration behavior. Agent Setup currently owns personal engine configuration, so the directory must retain that scope; a project runtime filter must not imply project-owned configuration. Do not add a separate Workforce navigation item. Keep the Agent Setup navigation label.
+User decision: reuse the existing Agent Setup page. Add an Agents subtab for the searchable card grid alongside the existing Sign-ins, Codex, Kiro and Claude configuration subtabs. The Agents directory is the default entry; Sign-ins remains directly accessible for first-time setup. Edit configuration opens the appropriate existing engine file editor; a guided Create agent action must write a supported engine agent definition rather than introduce duplicate agent storage. Card selection opens runtime inspection where records can be reliably matched, with explicit links to the owning session. Preserve the existing routes, access checks and configuration behavior. Agent Setup currently owns personal engine configuration, so the directory must retain that scope; a project runtime filter must not imply project-owned configuration. Do not add a separate Workforce navigation item. Keep the Agent Setup navigation label.
 
 Delivery order: first Workforce cards and their inspector; next the selected-session execution timeline and next-action layout; then navigation/experience controls and attributed usage. Review desktop/mobile, empty/long-content states and real running/paused/failed data at each step. These additions do not replace the current release's validation and deployment work.
 

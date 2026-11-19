@@ -8,20 +8,13 @@ import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 import { href } from '../lib/router.js';
 import { formatRelative } from '../lib/util.js';
+import { ExecutionTimeline } from './ExecutionTimeline.jsx';
 
 const AgentGraph = lazy(() => import('../pages/sessions/AgentGraph.jsx').then((module) => ({ default: module.AgentGraph })));
 const OutputFilePreview = lazy(() => import('../pages/sessions/OutputFilePreview.jsx').then((module) => ({ default: module.OutputFilePreview })));
 const statusText = { pending: 'Starting', running: 'Running', blocked: 'Needs a decision', paused: 'Paused', done: 'Completed', failed: 'Needs attention', stopped: 'Stopped' };
 const isRunning = (status) => ['running', 'pending'].includes(status);
 const sessionProject = (session) => session.projectId || session.project_id;
-
-function AgentButton({ agent, onSelect }) {
-  return <button type="button" className={`mc-agent${isRunning(agent.status) ? ' is-running' : ''}`} onClick={(event) => onSelect(agent.id, event.currentTarget)} aria-label={`Inspect ${agent.name}`}>
-    <span className="mc-agent-icon"><Icon name="agents" size={17} aria-hidden="true" /></span>
-    <span><strong>{agent.name}</strong><small>{statusText[agent.status] || agent.status || 'Status unavailable'}</small></span>
-    <Icon name="chevronRight" size={13} aria-hidden="true" />
-  </button>;
-}
 
 function MissionInspector({ snapshot, session, selectedId, onSelect, onClose, onPreview, initialView = 'collaboration', animated }) {
   const ref = useFocusTrap();
@@ -81,8 +74,8 @@ function SelectedMission({ session, animated }) {
   return <div className={`mc-selected${animated ? ' mc-animated' : ''}`}>
     <div className="mc-mission-heading"><div><span className="db-eyebrow">{session.projectName || 'Selected session'}</span><h3>{workflow.title || 'Untitled session'}</h3><p>{statusText[workflow.status] || workflow.status || 'Status unavailable'}{snapshot.agents ? ` · ${active} delegated agents running` : ''}</p></div><a className="btn btn-sm" href={href(sessionProject(session), 'sessions', session.id)} aria-label="View session details"><Icon name="external" size={13} />Open</a></div>
     <SnapshotStatus snapshot={snapshot} />
-    <div className="mc-agent-path" aria-label="Session agents"><AgentButton agent={root} onSelect={open} />{agents.slice(0, 3).map((agent) => <AgentButton key={agent.id} agent={agent} onSelect={open} />)}</div>
-    {agents.length > 3 && <p className="mc-note">+{agents.length - 3} more agents in the inspector</p>}
+    <div className="mc-overview-stats"><span><strong>{snapshot.agents ? agents.length + 1 : '—'}</strong> agents in this session</span><span><strong>{snapshot.agents ? active + (isRunning(workflow.status) ? 1 : 0) : '—'}</strong> running</span><span><strong>{snapshot.files?.length ?? '—'}</strong> deliverables</span></div>
+    <ExecutionTimeline root={root} agents={agents} onSelect={open} />
     {!snapshot.loading && !snapshot.errors.agents && !agents.length && <p className="mc-note">No delegated agents reported. This session may use only its lead agent.</p>}
     <div className="mc-actions"><button type="button" className="btn btn-sm btn-primary" onClick={(event) => open(rootId, event.currentTarget)}><Icon name="workflow" size={14} />Inspect collaboration</button><button type="button" className="btn btn-sm" onClick={(event) => { open(rootId, event.currentTarget); setInspectorView('outputs'); }}><Icon name="file" size={14} />Deliverables{snapshot.files ? ` (${snapshot.files.length})` : ''}</button></div>
     {selectedId && !preview && <MissionInspector snapshot={snapshot} session={session} selectedId={selectedId} onSelect={setSelectedId} onClose={close} onPreview={(file) => { setInspectorView('outputs'); setPreview(file); }} initialView={inspectorView} animated={animated} />}

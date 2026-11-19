@@ -100,12 +100,13 @@ export function SessionExecution({ events, running = false, status = '', planMod
   const [filter, setFilter] = useState('all'); // all | failed | running
   const { counts, todos, byTool, files, calls } = sum;
 
-  const top = (
+  const top = <>
     <div className="exe-top">
       <AiCore state={coreState(status || (running ? 'running' : ''))} size={96} />
       <StageStrip stages={stage.stages} progress={stage.progress} />
     </div>
-  );
+    {stage.reason && <p className="exe-stage-reason muted small" role="status">{stage.reason}</p>}
+  </>;
 
   if (!counts.total && !todos) {
     return (
