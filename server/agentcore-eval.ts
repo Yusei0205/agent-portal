@@ -159,7 +159,7 @@ async function evaluate(spans: Span[]): Promise<{ scores: Score[]; inputTokens: 
   return { scores, inputTokens, outputTokens };
 }
 
-async function loadRows(workflowId: string): Promise<TranscriptRow[]> {
+export async function loadTranscriptRows(workflowId: string): Promise<TranscriptRow[]> {
   const repo = getSessionsRepository();
   const all: TranscriptRow[] = [];
   let cursor = null as Awaited<ReturnType<typeof repo.listTranscript>>['nextCursor'];
@@ -189,7 +189,7 @@ export function listEvaluations(limit = 50): EvalRecord[] {
 export async function evaluateWorkflow(workflowId: string): Promise<EvalRecord> {
   const w = await getSessionsRepository().getWorkflowById(workflowId);
   if (!w) throw Object.assign(new Error('Session not found'), { status: 404 });
-  const built = buildSessionSpans(await loadRows(workflowId), workflowId);
+  const built = buildSessionSpans(await loadTranscriptRows(workflowId), workflowId);
   if (built.spans.length === 0) throw Object.assign(new Error('This session has no turns to score yet'), { status: 400 });
   const { scores, inputTokens, outputTokens } = await evaluate(built.spans);
   const rec: EvalRecord = {

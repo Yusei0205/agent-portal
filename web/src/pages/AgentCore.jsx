@@ -72,6 +72,83 @@ function Card({ title, value, sub, tone }) {
 
 const scoreText = (s) => (s.value === null || s.value === undefined ? '–' : `${Math.round(s.value * 100)}%`);
 
+/** Project memory: what the agents learned about a project. Only notes a project owner approved ever reach an agent's prompt. */
+function MemoryPanel({ projects }) {
+  const [projectId, setProjectId] = useState('');
+  const [mem, setMem] = useState(null);
+  const [error, setError] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => { if (!projectId && projects?.length) setProjectId(projects[0].id); }, [projects, projectId]);
+
+  const load = useCallback(async () => {
+    if (!projectId) return;
+    try { setMem(await api.get(`/api/projects/${encodeURIComponent(projectId)}/memory`)); setError(null); } catch (e) { setError(e.message); }
+  }, [projectId]);
+  useEffect(() => { setMem(null); load(); }, [load]);
+
+  const act = async (fn) => {
+    setBusy(true);
+    try { await fn(); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+  const base = `/api/projects/${encodeURIComponent(projectId)}/memory`;
+  const toggle = (enabled) => act(() => api.put(base, { enabled }));
+  const setStatus = (id, status) => act(() => api.put(`${base}/records/${encodeURIComponent(id)}`, { status }));
+  const remove = (id) => act(() => api.delete(`${base}/records/${encodeURIComponent(id)}`));
+
+  return (
+    <section className="us-panel" aria-label="Project memory">
+      <div className="us-panel-head"><strong>Project memory</strong><span className="muted">reviewed before an agent sees it</span></div>
+      <p className="muted us-lead">
+        When a project turns this on, the agents' last exchange in each finished session is sent to AgentCore Memory (secrets masked), which
+        extracts notes about the project. Notes start as pending. Only approved notes are shown to an agent at the start of a session.
+      </p>
+      <div className="us-controls" role="group" aria-label="Project memory controls">
+        <select value={projectId} onChange={(e) => setProjectId(e.target.value)} aria-label="Project" style={{ width: 'auto' }}>
+          {(projects || []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+        {mem && mem.available && (
+          <label className="muted" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <input type="checkbox" checked={mem.enabled} disabled={busy || !mem.canManage} onChange={(e) => toggle(e.target.checked)} />
+            Learn from this project's sessions
+          </label>
+        )}
+      </div>
+      {error && <p className="error-note" role="alert">{error}</p>}
+      {mem && !mem.available && <p className="muted us-empty">Project memory is not available here (it needs the cloud portal).</p>}
+      {mem && mem.available && mem.error && <p className="error-note" role="alert">{mem.error}</p>}
+      {mem && mem.available && !mem.error && mem.records.length === 0 && (
+        <p className="muted us-empty">{mem.enabled ? 'No notes yet. They appear a few minutes after a session finishes.' : 'Memory is off for this project.'}</p>
+      )}
+      {mem && mem.records.length > 0 && (
+        <div className="table-wrap">
+          <table className="data-table us-table" aria-label="Project notes">
+            <thead><tr><th scope="col">Note</th><th scope="col">Kind</th><th scope="col">Status</th><th scope="col" /></tr></thead>
+            <tbody>
+              {mem.records.map((r) => (
+                <tr key={r.id}>
+                  <td style={{ whiteSpace: 'normal', maxWidth: 520 }}>{r.text}</td>
+                  <td>{r.kind}</td>
+                  <td><span className={`pill ${r.status === 'approved' ? 'pill-running' : 'pill-stopped'}`}>{r.status}</span></td>
+                  <td className="us-num">
+                    {mem.canManage && (
+                      <>
+                        {r.status !== 'approved' && <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setStatus(r.id, 'approved')} aria-label={`Approve note: ${r.text.slice(0, 40)}`}>Approve</button>}
+                        {r.status !== 'rejected' && <button type="button" className="btn btn-sm" disabled={busy} style={{ marginLeft: 6 }} onClick={() => setStatus(r.id, 'rejected')} aria-label={`Reject note: ${r.text.slice(0, 40)}`}>Reject</button>}
+                        <button type="button" className="btn btn-sm" disabled={busy} style={{ marginLeft: 6 }} onClick={() => remove(r.id)} aria-label={`Delete note: ${r.text.slice(0, 40)}`}>Delete</button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 /** Quality scores from AgentCore Evaluations: score the latest sessions on demand, or a share of finished ones automatically. */
 function QualityPanel() {
   const [cfg, setCfg] = useState(null);
@@ -229,7 +306,7 @@ function IdleSettings() {
   );
 }
 
-export function AgentCore() {
+export function AgentCore({ projects }) {
   const [period, setPeriod] = useState('7d');
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
@@ -349,6 +426,8 @@ export function AgentCore() {
           <p className="muted us-lead">Updated {new Date(data.generatedAt).toLocaleTimeString()}. Refreshes every 30 seconds.</p>
         </>
       )}
+
+      <MemoryPanel projects={projects} />
 
       <QualityPanel />
 

@@ -379,6 +379,23 @@ export class AgentPortalCloudStack extends cdk.Stack {
       actions: ['appsync:EventPublish'],
       resources: [`arn:aws:appsync:${this.region}:${this.account}:apis/${eventsApi.attrApiId}/channelNamespace/*`],
     }));
+    // Project memory (AgentCore Memory): what the agents learn about a project, reviewed by its owners before it reaches a prompt.
+    // The resource costs nothing while unused and each project opts in, so it is always created: a deploy without it would
+    // delete the memory and every note in it. Facts and a per-session summary are kept per project (actor = project id).
+    const memory = new agentcore.CfnMemory(this, 'ProjectMemory', {
+      name: 'agentPortalMemory',
+      description: 'Project notes learned by the agents, reviewed before use',
+      eventExpiryDuration: 30,
+      memoryStrategies: [
+        { semanticMemoryStrategy: { name: 'ProjectFacts', namespaceTemplates: ['/project/{actorId}/facts'] } },
+        { summaryMemoryStrategy: { name: 'SessionSummaries', namespaceTemplates: ['/project/{actorId}/summaries/{sessionId}'] } },
+      ],
+    });
+    fn.addEnvironment('PORTAL_MEMORY_ID', memory.attrMemoryId);
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:ListMemoryRecords', 'bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:GetMemoryRecord', 'bedrock-agentcore:DeleteMemoryRecord', 'bedrock-agentcore:BatchDeleteMemoryRecords'],
+      resources: [memory.attrMemoryArn],
+    }));
     // Session quality scores (AgentCore Evaluations, on demand): the built-in evaluators are AWS-owned, so no resource ARN fits.
     fn.addToRolePolicy(new iam.PolicyStatement({ actions: ['bedrock-agentcore:Evaluate'], resources: ['*'] }));
     // The AgentCore page (admin) reads runtime usage from CloudWatch. Read-only; these calls take no resource-level permissions.

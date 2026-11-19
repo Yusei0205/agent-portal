@@ -571,7 +571,7 @@ function Shell({ user, onSignOut }) {
           ) : isUsageRoute ? (
             <Usage projects={projects} />
           ) : isAgentCoreRoute ? (
-            <AgentCore />
+            <AgentCore projects={projects} />
           ) : isSetupRoute ? (
             <ProjectHub projectId={route.projectId} user={user} initialTab={route.rest?.[0]} />
           ) : isSettingsRoute ? (

@@ -490,12 +490,14 @@
         "server/agentcore-metrics.ts",
         "server/agentcore-idle.ts",
         "server/agentcore-eval.ts",
+        "server/agentcore-memory.ts",
         "web/src/pages/AgentCore.jsx"
       ],
       "tests": [
         "test/agentcore-metrics.test.ts",
         "test/agentcore-idle.test.ts",
-        "test/agentcore-eval.test.ts"
+        "test/agentcore-eval.test.ts",
+        "test/agentcore-memory.test.ts"
       ],
       "smokeIds": []
     },

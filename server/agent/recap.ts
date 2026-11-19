@@ -6,6 +6,7 @@
  */
 
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import { buildProjectMemoryBlock } from '../agentcore-memory.ts';
 
 /**
  * Build a compact recap of the conversation so far for injection into a fresh
@@ -33,7 +34,7 @@ import { getSessionsRepository } from '../repositories/sessions.ts';
  *                          Pass null to include all prior human messages.
  * @param maxChars         Soft character cap (default 8 000).
  */
-export async function buildConversationRecap(
+async function buildRecapOnly(
   workflowId: string,
   runId: string,
   minExcludeEventId: number | null = null,
@@ -150,4 +151,21 @@ async function failedRunTurns(
     out.push({ text, ts: String(f.created_at) });
   }
   return out.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+}
+
+/**
+ * The recap of earlier turns, with the project's approved notes (AgentCore Memory) in front when the project has memory on.
+ * A brand-new session has no earlier turns but still gets the notes.
+ */
+export async function buildConversationRecap(
+  workflowId: string,
+  runId: string,
+  minExcludeEventId: number | null = null,
+  maxChars = 8_000,
+): Promise<string> {
+  const [notes, recap] = await Promise.all([
+    buildProjectMemoryBlock(workflowId),
+    buildRecapOnly(workflowId, runId, minExcludeEventId, maxChars),
+  ]);
+  return notes + recap;
 }
