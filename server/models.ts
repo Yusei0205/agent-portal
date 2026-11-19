@@ -37,6 +37,7 @@ import type { KiroTokenPayload } from './agent/kiro-agentcore.ts';
 import type { KiroModelRaw } from './kiro-list-models.ts';
 import { checkKiroIdcHookSupport } from './kiro-idc-check.ts';
 import { findUserCredential } from './credential-default.ts';
+import { resolveCredentialEnv } from './credentials.ts';
 import { listCursorModels } from './cursor-models.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 
@@ -441,11 +442,13 @@ export async function getEngineModels(
       ? await getCredentialsRepository().getByIdAndUser(requestedCredentialId, userId)
       : await findUserCredential(userId, 'cursor');
     if (requestedCredentialId && (!cred || cred.engine !== 'cursor')) return { models: [], source: 'none', runsAs: { kind: 'credential', label: 'unknown' }, error: 'Cursor sign-in not found.' };
-    const runsAs = { kind: 'credential' as const, label: cred ? `Cursor API key "${String(cred.name)}"` : 'The Cursor CLI sign-in on this machine' };
-    let key: string | null = null;
+    const runsAs = { kind: 'credential' as const, label: cred ? `Cursor ${cred.mode === 'login_token' ? 'login' : 'API key'} "${String(cred.name)}"` : 'The Cursor CLI sign-in on this machine' };
+    let auth: { apiKey?: string; authToken?: string } | null = null;
     if (cred) {
-      try { key = decrypt(String(cred.secret_enc), config.secretKey); }
-      catch { return { models: [], source: 'none', runsAs, error: 'Could not decrypt the Cursor API key.' }; }
+      try {
+        const env = await resolveCredentialEnv('cursor', userId, String(cred.id));
+        auth = { apiKey: env.CURSOR_API_KEY, authToken: env.CURSOR_AUTH_TOKEN };
+      } catch (e) { return { models: [], source: 'none', runsAs, error: (e as Error).message }; }
     }
     if (process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN) {
       try {
@@ -453,7 +456,7 @@ export async function getEngineModels(
         return { models: await listCursorModelsViaAgentCore(userId, cred ? String(cred.id) : null), source: 'cursor', runsAs };
       } catch (e) { return { models: [], source: 'cursor', runsAs, error: (e as Error).message }; }
     }
-    const r = await listCursorModels(key);
+    const r = await listCursorModels(auth);
     return { models: r.models, source: 'cursor', runsAs, ...(r.error ? { error: r.error } : {}) };
   }
 

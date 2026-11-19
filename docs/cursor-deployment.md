@@ -1,7 +1,18 @@
 # Cursor deployment
 
-Cursor runs the Cursor CLI (`agent -p --output-format stream-json`). The person signs in with a **Cursor API key**
-(Credentials > Cursor, created at https://cursor.com/dashboard/api). It is stored encrypted like a Kiro key.
+Cursor runs the Cursor CLI (`agent -p --output-format stream-json`). A person signs in under Credentials > Cursor with either:
+
+- a **Cursor API key** (created at https://cursor.com/dashboard/api; the supported route for automation), or
+- an **advanced login token**: their own `agent login`, pasted as the contents of `auth.json` (or just its `accessToken`). Only the
+  access token is stored (encrypted), as `CURSOR_AUTH_TOKEN`; the refresh token stays on their machine. It is a 60-day session token:
+  the credential card shows the days left, a run says plainly when it has expired, and the person pastes a new one. `auth.json` is
+  `%APPDATA%Cursorauth.json` (Windows), `~/.cursor/auth.json` (macOS) or `~/.config/cursor/auth.json` (Linux). Experimental: check
+  your Cursor terms before using a personal login on a shared server.
+
+Both are stored encrypted like a Kiro key.
+
+`agent login` cannot finish inside the runner (it needs an OS keyring to store its token, and ignores a restored `auth.json` on
+Linux), so a login token is injected per turn as an environment variable, never restored as a file.
 
 | Deployment | How it runs | Persistence |
 | --- | --- | --- |
