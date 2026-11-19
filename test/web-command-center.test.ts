@@ -47,7 +47,7 @@ createRoot(document.getElementById('root')).render(view === 'workspace'
       return route.fulfill({ contentType: 'text/html', body: '<!doctype html><html><head><link rel="stylesheet" href="/ui.css"></head><body><div id="root"></div><script type="module" src="/ui.js"></script></body></html>' });
     });
     await page.goto('http://portal.test/');
-    assert.equal(await page.getByRole('link', { name: 'Needs attention (4 unread)' }).getAttribute('href'), '#/inbox');
+    assert.equal(await page.getByRole('link', { name: 'Inbox (4 unread)' }).getAttribute('href'), '#/inbox');
     const tools = page.getByRole('button', { name: 'Project tools' });
     assert.equal(await tools.getAttribute('aria-expanded'), 'false');
     assert.equal(await page.getByRole('link', { name: 'Tickets', exact: true }).isVisible(), false);
