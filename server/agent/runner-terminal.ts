@@ -16,7 +16,7 @@ interface PtyProcess {
 interface Pty { spawn(file: string, args: string[], options: { cwd: string; env: Record<string, string>; name: string; cols: number; rows: number }): PtyProcess }
 type Ticket = { expires: number; origin: string; snapshot: WorkspaceSnapshot; workflowId: string; gitEnv: Record<string, string> };
 export interface RunnerTerminalOptions {
-  engine: 'codex' | 'kiro' | 'claude-code';
+  engine: 'codex' | 'kiro' | 'claude-code' | 'cursor';
   prepare(snapshot: WorkspaceSnapshot, status: (text: string) => void): Promise<string>;
   save(snapshot: WorkspaceSnapshot): Promise<void>;
   loadPty?: () => Promise<Pty | null>;

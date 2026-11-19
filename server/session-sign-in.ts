@@ -21,6 +21,9 @@ const CLAUDE_MODES: Record<string, SessionSignIn> = {
   aws_keys: { kind: 'bedrock', label: 'Bedrock (AWS keys)', detail: 'Amazon Bedrock with your AWS access keys' },
   bedrock_role: { kind: 'bedrock', label: 'Bedrock (IAM role)', detail: 'Amazon Bedrock through an IAM role' },
 };
+const CURSOR_MODES: Record<string, SessionSignIn> = {
+  api_key: { kind: 'api_key', label: 'Cursor API key', detail: 'A Cursor API key (billed to your Cursor plan)' },
+};
 const KIRO_MODES: Record<string, SessionSignIn> = {
   api_key: { kind: 'api_key', label: 'Kiro API key', detail: 'A Kiro API key' },
   identity_center: { kind: 'sso', label: 'Company sign-in (AWS SSO)', detail: 'Kiro through your company AWS sign-in' },
@@ -29,7 +32,7 @@ const KIRO_MODES: Record<string, SessionSignIn> = {
 export async function sessionSignIn(w: { engine?: unknown; credential_id?: unknown; created_by?: unknown }): Promise<SessionSignIn | null> {
   const engine = String(w.engine ?? '');
   if (engine === 'codex') return { kind: 'chatgpt', label: 'ChatGPT plan', detail: 'Your ChatGPT plan, signed in under Connect > Agent sign-ins' };
-  if (engine !== 'claude-code' && engine !== 'kiro') return null;
+  if (engine !== 'claude-code' && engine !== 'kiro' && engine !== 'cursor') return null;
 
   const owner = w.created_by ? String(w.created_by) : null;
   const credentialId = w.credential_id ? String(w.credential_id) : null;
@@ -37,7 +40,7 @@ export async function sessionSignIn(w: { engine?: unknown; credential_id?: unkno
     return { kind: 'bedrock', label: 'Bedrock (portal AWS)', detail: "Amazon Bedrock in the portal's own AWS account" };
   }
 
-  const modes = engine === 'kiro' ? KIRO_MODES : CLAUDE_MODES;
+  const modes = engine === 'kiro' ? KIRO_MODES : engine === 'cursor' ? CURSOR_MODES : CLAUDE_MODES;
   const cred = credentialId
     ? (owner ? await getCredentialsRepository().getByIdAndUser(credentialId, owner) : null)
     : await findUserCredential(owner, engine);
@@ -45,6 +48,7 @@ export async function sessionSignIn(w: { engine?: unknown; credential_id?: unkno
   if (cred) return modes[String(cred.mode)] ?? { kind: 'api_key', label: String(cred.mode), detail: String(cred.mode) };
 
   // No sign-in of its own: the portal's provider.
+  if (engine === 'cursor') return { kind: 'missing', label: 'no Cursor key', detail: 'Add a Cursor API key under Credentials, or a local install uses its own `agent login`.' };
   if (engine === 'kiro') return { kind: 'portal', label: 'Portal Kiro key', detail: "The portal's own Kiro provider" };
   const mode = getSettings().provider.mode;
   if (mode === 'bedrock') return { kind: 'bedrock', label: 'Portal default (Bedrock)', detail: "The portal's provider: Amazon Bedrock" };

@@ -33,6 +33,7 @@
 
 import fs from 'node:fs';
 import { parseCodexFiles, validateCodexFile, CODEX_CONFIG_PATH, type CodexConfigFile } from './agent/codex-config.ts';
+import { parseCursorFiles, validateCursorFile, CURSOR_CONFIG_PATH, type CursorConfigFile } from './agent/cursor-config.ts';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -55,7 +56,7 @@ import { getUserConfigRepository } from './repositories/user-config.ts';
 import { getWorkflowRow } from './project-access.ts';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const VALID_FOLDERS = ['kiro', 'claude', 'codex', 'aws'] as const;
+const VALID_FOLDERS = ['kiro', 'claude', 'codex', 'cursor', 'aws'] as const;
 export type ConfigFolder = (typeof VALID_FOLDERS)[number];
 
 /** Max file content size when reading/writing via API. */
@@ -491,7 +492,7 @@ const LOCAL_EXCLUDED_RES: RegExp[] = [
  * @param sizeBytes File size in bytes
  */
 export function shouldIncludeLocalFile(
-  folder: 'kiro' | 'claude' | 'codex',
+  folder: 'kiro' | 'claude' | 'codex' | 'cursor',
   relPath: string,
   sizeBytes: number,
 ): { include: boolean; reason?: string } {
@@ -507,6 +508,8 @@ export function shouldIncludeLocalFile(
   // 1. Per-folder top-level include guard
   if (folder === 'codex') {
     if (!CODEX_CONFIG_PATH.test(p) || p.includes('..')) return { include: false, reason: 'not a Codex setup file' };
+  } else if (folder === 'cursor') {
+    if (!CURSOR_CONFIG_PATH.test(p) || p.includes('..')) return { include: false, reason: 'not a Cursor rule file (only rules/*.mdc and rules/*.md are used)' };
   } else if (folder === 'kiro') {
     if (!KIRO_INCLUDE_DIRS.has(topDir)) {
       return { include: false, reason: `not in an included kiro directory (${topDir})` };
@@ -706,7 +709,7 @@ export async function backupUserConfigFolder(
  */
 export async function importLocalConfig(
   userId: string,
-  folder: 'kiro' | 'claude' | 'codex',
+  folder: 'kiro' | 'claude' | 'codex' | 'cursor',
   homeDir?: string,
 ): Promise<LocalImportSummary> {
   const home = homeDir ?? os.homedir();
@@ -769,6 +772,10 @@ export async function importLocalConfig(
       if (folder === 'codex') {
         try { validateCodexFile({ path: relPath, content }); }
         catch { skipped.push({ path: relPath, reason: 'unsupported or invalid Codex setup' }); continue; }
+      }
+      if (folder === 'cursor') {
+        try { validateCursorFile({ path: relPath, content }); }
+        catch { skipped.push({ path: relPath, reason: 'unsupported or invalid Cursor rule' }); continue; }
       }
       // Redact obvious secrets in JSON
       const { content: clean, redacted } = redactJsonSecrets(relPath, content);
@@ -1005,13 +1012,20 @@ export async function getCodexConfigFiles(userId: string): Promise<CodexConfigFi
   return parseCodexFiles(files);
 }
 
+export async function getCursorConfigFiles(userId: string): Promise<CursorConfigFile[]> {
+  const zip = await JSZip.loadAsync(await buildExportZip(userId, 'cursor'));
+  const files: CursorConfigFile[] = [];
+  for (const entry of Object.values(zip.files)) if (!entry.dir) files.push({ path: entry.name, content: await entry.async('string') });
+  return parseCursorFiles(files);
+}
+
 /**
  * The files under `topDirs` of one setup folder that a run of this person gets in its home: their own, or the
  * team's when they follow the team setup. Paths are relative to the folder, with forward slashes.
  */
 export async function readOwnerConfigFiles(
   userId: string,
-  folder: 'claude' | 'kiro' | 'codex',
+  folder: 'claude' | 'kiro' | 'codex' | 'cursor',
   topDirs: string[],
   include: (relPath: string) => boolean,
   maxFiles = 300,
@@ -1160,8 +1174,8 @@ export function registerUserConfigRoutes(): void {
   // GET /api/user-config/agents?engine=kiro|claude-code
   router.get('/api/user-config/agents', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     const engine = req.query.get('engine') ?? '';
-    if (!['kiro', 'claude-code', 'codex'].includes(engine)) {
-      sendJson(res, 400, { error: 'engine must be kiro, claude-code or codex' });
+    if (!['kiro', 'claude-code', 'codex', 'cursor'].includes(engine)) {
+      sendJson(res, 400, { error: 'engine must be kiro, claude-code, codex or cursor' });
       return;
     }
     const agents = await listAgentsForEngine(req.user!.id, engine);
@@ -1297,6 +1311,10 @@ export function registerUserConfigRoutes(): void {
       try { validateCodexFile({ path: relPath, content }); }
       catch (e) { sendJson(res, 400, { error: String((e as Error).message) }); return; }
     }
+    if (folder === 'cursor') {
+      try { validateCursorFile({ path: relPath, content }); }
+      catch (e) { sendJson(res, 400, { error: String((e as Error).message) }); return; }
+    }
     const jsonError = validateJson(relPath, content);
     if (jsonError && !force) {
       sendJson(res, 400, { error: `Invalid JSON: ${jsonError}`, invalidJson: true }); return;
@@ -1346,6 +1364,10 @@ export function registerUserConfigRoutes(): void {
 
     if (folder === 'codex') {
       try { validateCodexFile({ path: relPath, content }); }
+      catch (e) { sendJson(res, 400, { error: String((e as Error).message) }); return; }
+    }
+    if (folder === 'cursor') {
+      try { validateCursorFile({ path: relPath, content }); }
       catch (e) { sendJson(res, 400, { error: String((e as Error).message) }); return; }
     }
     const jsonError = validateJson(relPath, content);
@@ -1589,6 +1611,7 @@ export function registerUserConfigRoutes(): void {
     try {
       entries = await parseImportZip(req.rawBody, folder);
       if (folder === 'codex') parseCodexFiles(entries);
+      if (folder === 'cursor') parseCursorFiles(entries);
     } catch (e: unknown) {
       sendJson(res, 400, { error: String((e as Error)?.message ?? e) }); return;
     }
@@ -1647,6 +1670,7 @@ export function registerUserConfigRoutes(): void {
       if (zipBuf.length <= 22) { sendJson(res, 400, { error: `Your ${folder} folder has no files to publish yet` }); return; }
       entries = await parseImportZip(zipBuf, folder);
       if (folder === 'codex') parseCodexFiles(entries);
+      if (folder === 'cursor') parseCursorFiles(entries);
     } catch (e: unknown) {
       sendJson(res, 400, { error: String((e as Error)?.message ?? e) }); return;
     }
@@ -1714,7 +1738,7 @@ export function registerUserConfigRoutes(): void {
     const userId = req.user!.id;
     let summary: LocalImportSummary;
     try {
-      summary = await importLocalConfig(userId, folder as 'kiro' | 'claude' | 'codex');
+      summary = await importLocalConfig(userId, folder as 'kiro' | 'claude' | 'codex' | 'cursor');
       await persistTree(userConfigRoot(userId, folder));
     } catch (e: unknown) {
       sendJson(res, 500, { error: String((e as Error)?.message ?? e) }); return;

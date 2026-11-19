@@ -54,7 +54,10 @@ export function protectedConfigReason(file: string): string | null {
     )) ||
     // mcp.json directly under .kiro or .claude
     (parent === '.kiro' && name === 'mcp.json') ||
-    (parent === '.claude' && name === 'mcp.json');
+    (parent === '.claude' && name === 'mcp.json') ||
+    // Cursor: the MCP server list, the CLI permission file and hooks run commands or widen what the agent may do.
+    (parent === '.cursor' && (name === 'mcp.json' || name === 'cli.json' || name === 'cli-config.json' || name === 'hooks.json')) ||
+    parts.some((x, i) => x === '.cursor' && parts[i + 1] === 'hooks');
   return hit
     ? `${file} configures tools that run commands or skip approvals, so agents may not change it. Ask a person to make the change.`
     : null;
@@ -68,7 +71,7 @@ export function protectedConfigReason(file: string): string | null {
  * .kiro/settings|agents|hooks, .husky/.
  */
 const PROTECTED_IN_COMMAND =
-  /(?:\.claude[\\/]+(?:settings(?:\.local)?\.json|hooks)|\.mcp\.json|\.git[\\/]+(?:hooks|config|modules|info[\\/]+attributes)\b|\.kiro[\\/]+(?:settings|agents|hooks)|\.husky[\\/])/i;
+  /(?:\.claude[\\/]+(?:settings(?:\.local)?\.json|hooks)|\.mcp\.json|\.git[\\/]+(?:hooks|config|modules|info[\\/]+attributes)\b|\.kiro[\\/]+(?:settings|agents|hooks)|\.cursor[\\/]+(?:mcp\.json|cli(?:-config)?\.json|hooks(?:\.json|[\\/]))|\.husky[\\/])/i;
 
 /**
  * Matches shell write/modify patterns: >, tee, cp, mv, ln, sed -i, perl -i,

@@ -148,11 +148,12 @@ describe('the runners keep their stream awake', () => {
     assert.ok(KEEPALIVE_MS <= 30_000 && KEEPALIVE_MS * 10 < 350_000, 'well inside the 350 s a NAT gateway waits before it forgets a quiet connection');
   });
 
-  it('the three runners carry the same helper (they cannot share source files), and each one starts it on its run stream', () => {
-    const copies = ['agent-runner', 'kiro-runner', 'codex-runner'].map((d) => fs.readFileSync(`${d}/src/sse-keepalive.ts`, 'utf8').replace(/\r\n/g, '\n'));
+  it('the four runners carry the same helper (they cannot share source files), and each one starts it on its run stream', () => {
+    const copies = ['agent-runner', 'kiro-runner', 'codex-runner', 'cursor-runner'].map((d) => fs.readFileSync(`${d}/src/sse-keepalive.ts`, 'utf8').replace(/\r\n/g, '\n'));
     assert.equal(copies[1], copies[0]);
     assert.equal(copies[2], copies[0]);
-    for (const f of ['agent-runner/src/index.ts', 'kiro-runner/src/index.ts', 'codex-runner/src/service.ts']) {
+    assert.equal(copies[3], copies[0]);
+    for (const f of ['agent-runner/src/index.ts', 'kiro-runner/src/index.ts', 'codex-runner/src/service.ts', 'cursor-runner/src/service.ts']) {
       const src = fs.readFileSync(f, 'utf8');
       assert.match(src, /import \{ startKeepalive \} from '\.\/sse-keepalive\.(js|ts)'/, f);
       assert.match(src, /startKeepalive\(res\)/, f);

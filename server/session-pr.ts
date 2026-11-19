@@ -37,7 +37,7 @@ export interface RepoChange { repo: string; base: string; commits: number; files
 
 export interface SessionPrContext {
   workflowId: string; runId: string; projectId: string; userId: string | null;
-  engine: 'claude-code' | 'kiro' | 'codex';
+  engine: 'claude-code' | 'kiro' | 'codex' | 'cursor';
 }
 
 type PrState =
@@ -333,7 +333,7 @@ async function runPullRequest(
   const title = prTitle(w);
   const settings = getPullRequestSettings(projectId);
   const baseBranch = start.base || repo.default_branch || 'main';
-  const engine = (String(w.engine) === 'kiro' ? 'kiro' : String(w.engine) === 'codex' ? 'codex' : 'claude-code') as 'kiro' | 'claude-code' | 'codex';
+  const engine = (String(w.engine) === 'kiro' ? 'kiro' : String(w.engine) === 'codex' ? 'codex' : String(w.engine) === 'cursor' ? 'cursor' : 'claude-code') as 'kiro' | 'claude-code' | 'codex' | 'cursor';
 
   // An older Inbox approval must not push while a newer turn is changing the same files.
   const latest = await getSessionsRepository().getLatestRun(workflowId);
@@ -437,7 +437,7 @@ async function runPullRequest(
     if (reviewEngine) {
       const { credentialIdForEngine } = await import('./create-ai.ts');
       credentialId = await credentialIdForEngine(reviewer, reviewEngine);
-      if (!credentialId) throw new Error(`This project reviews pull requests with ${reviewEngine === 'claude-code' ? 'Claude' : reviewEngine === 'kiro' ? 'Kiro' : 'Codex'}, but you have no such sign-in (Agent setup › Sign-ins).`);
+      if (!credentialId) throw new Error(`This project reviews pull requests with ${reviewEngine === 'claude-code' ? 'Claude' : reviewEngine === 'kiro' ? 'Kiro' : reviewEngine === 'cursor' ? 'Cursor' : 'Codex'}, but you have no such sign-in (Agent setup › Sign-ins).`);
     }
     const review = await createReview({
       projectId, userId: reviewer, repoId: String(repo.id), baseRef: baseBranch, headRef: branch,

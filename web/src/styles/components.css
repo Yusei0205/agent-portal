@@ -321,6 +321,19 @@ input:disabled, textarea:disabled, select:disabled {
   :root:not([data-theme="light"]) .badge-engine-claude { background: #2a1f3d; color: #b39ddb; }
 }
 
+.badge-engine-cursor {
+  background: #e8eaed;
+  color: #1f2933;
+}
+[data-theme="dark"] .badge-engine-cursor,
+[data-mode="dark"] .badge-engine-cursor {
+  background: #2b2f36;
+  color: #d5d9df;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .badge-engine-cursor { background: #2b2f36; color: #d5d9df; }
+}
+
 /* ── Status dots ──────────────────────────────────────── */
 .dot {
   display: inline-block;

@@ -35,10 +35,10 @@ export function WorkspaceHeader({ title, status, engine, project, onEdit, meta }
       {engine && (
         <span
           className={
-            engine === 'kiro' ? 'badge badge-engine-kiro' : 'badge badge-engine-claude'
+            engine === 'kiro' ? 'badge badge-engine-kiro' : engine === 'cursor' ? 'badge badge-engine-cursor' : 'badge badge-engine-claude'
           }
         >
-          {engine === 'kiro' ? 'Kiro' : engine === 'claude' ? 'Claude' : engine}
+          {engine === 'kiro' ? 'Kiro' : engine === 'claude' ? 'Claude' : engine === 'cursor' ? 'Cursor' : engine}
         </span>
       )}
       {project && (

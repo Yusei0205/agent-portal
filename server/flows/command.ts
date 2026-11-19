@@ -66,7 +66,7 @@ export async function resolveFlowCommand(w: WorkflowRecord, message: string, use
   if (!parsed || parsed.name !== 'flow') return null;
   const engine = String(w.engine);
   const answer = (text: string): FlowCommandResult => ({ type: 'answer', text });
-  if (engine !== 'kiro' && engine !== 'claude-code' && engine !== 'codex') return answer('Flows run in Kiro, Claude Code and Codex sessions.');
+  if (engine !== 'kiro' && engine !== 'claude-code' && engine !== 'codex' && engine !== 'cursor') return answer('Flows run in Kiro, Claude Code, Codex and Cursor sessions.');
 
   const words = parsed.args.split(/\s+/).filter(Boolean);
   const head = (words[0] ?? '').toLowerCase();

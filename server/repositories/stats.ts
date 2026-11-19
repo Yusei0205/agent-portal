@@ -90,14 +90,15 @@ export interface AgentRollup {
 }
 
 /** The engines the Usage page keeps apart: each is priced in its own unit, so they are never added together. */
-export type UsageEngine = 'claude' | 'kiro' | 'codex' | 'other';
-export const USAGE_ENGINES: readonly UsageEngine[] = ['claude', 'kiro', 'codex', 'other'];
+export type UsageEngine = 'claude' | 'kiro' | 'codex' | 'cursor' | 'other';
+export const USAGE_ENGINES: readonly UsageEngine[] = ['claude', 'kiro', 'codex', 'cursor', 'other'];
 
 /** Which engine a usage record belongs to, from the provider name the run recorded. */
 export function engineOfProvider(provider: string | null | undefined): UsageEngine {
   const p = String(provider ?? '').toLowerCase();
   if (p.startsWith('codex')) return 'codex';
   if (p === 'kiro') return 'kiro';
+  if (p === 'cursor') return 'cursor';
   // Claude Code, however it is paid for: its own subscription, the Anthropic API, or Bedrock.
   if (p === 'claude' || p === 'anthropic' || p === 'subscription' || p === 'bedrock') return 'claude';
   return 'other';
@@ -125,7 +126,7 @@ export interface UsageRow extends UsageTotals {
 export const emptyTotals = (): UsageTotals => ({ runs: 0, costUsd: 0, credits: 0, tokens: 0 });
 
 export function newUsageRow(id: string, name: string): UsageRow {
-  return { id, name, ...emptyTotals(), engines: { claude: emptyTotals(), kiro: emptyTotals(), codex: emptyTotals(), other: emptyTotals() } };
+  return { id, name, ...emptyTotals(), engines: { claude: emptyTotals(), kiro: emptyTotals(), codex: emptyTotals(), cursor: emptyTotals(), other: emptyTotals() } };
 }
 
 /** Add one usage record (or the sums of several) to a row, in the total and under its engine. */

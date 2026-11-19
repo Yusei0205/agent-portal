@@ -44,6 +44,7 @@ export const ENGINE_CHOICES = [
   { id: 'claude-code', label: 'Claude Code', href: '#/config/sign-ins?engine=claude-code' },
   { id: 'kiro', label: 'Kiro', href: '#/config/sign-ins?engine=kiro' },
   { id: 'codex', label: 'Codex', href: '#/config/sign-ins?engine=codex' },
+  { id: 'cursor', label: 'Cursor', href: '#/config/sign-ins?engine=cursor' },
 ];
 
 export function setupSteps(project) {

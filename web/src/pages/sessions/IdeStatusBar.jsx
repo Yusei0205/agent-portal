@@ -25,7 +25,7 @@ function formatTokens(n) {
   return String(n);
 }
 
-const SWITCHABLE = new Set(['kiro', 'claude-code', 'codex']);
+const SWITCHABLE = new Set(['kiro', 'claude-code', 'codex', 'cursor']);
 
 const meterClass = (pct) => (pct >= 85 ? ' is-high' : pct >= 65 ? ' is-mid' : '');
 

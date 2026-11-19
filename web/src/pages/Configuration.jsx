@@ -26,13 +26,14 @@ import { useToast, ToastShelf } from '../components/Toast.jsx';
 const SIGN_INS = {
   id: 'sign-ins',
   label: 'Sign-ins',
-  description: 'Your own Codex, Kiro and Claude Code accounts. Your sessions use these first; without one they fall back to the portal AI provider.',
+  description: 'Your own Codex, Kiro, Claude Code and Cursor accounts. Your sessions use these first; without one they fall back to the portal AI provider.',
 };
 
 const TABS = [
   { id: 'agents', label: 'Agents' },
   SIGN_INS,
   { id: 'codex', label: 'Codex (~/.codex)', description: 'AGENTS.md, reasoning settings, custom agents and skills used by local and cloud Codex sessions. Sign-ins and MCP connections are managed in Connect.' },
+  { id: 'cursor', label: 'Cursor (~/.cursor)', description: 'Rule files (rules/*.mdc) applied to your Cursor sessions. MCP servers, permissions and hooks cannot be set here; API keys are managed under Sign-ins.' },
   {
     id: 'kiro',
     label: 'Kiro (~/.kiro)',

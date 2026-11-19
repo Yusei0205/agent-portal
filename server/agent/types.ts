@@ -13,7 +13,7 @@ export interface AgentRun {
   goal: string;
   /** Explicit workflow kind — 'review' for code-review runs; null for generic runs. */
   kind: string | null;
-  engine: 'claude-code' | 'kiro' | 'codex' | 'demo';
+  engine: 'claude-code' | 'kiro' | 'codex' | 'cursor' | 'demo';
   trusted: boolean;
   /** Plan mode is on for the session: the agent only reads and plans (plan-guidance.ts). */
   planMode?: boolean;

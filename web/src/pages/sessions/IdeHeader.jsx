@@ -282,8 +282,8 @@ export function IdeHeader({
   const elapsedMs   = runElapsedMs(latestRun, now);
   const title        = sessionTitle(workflow);
   const ownTitle     = hasOwnTitle(workflow);
-  const engineLabel  = workflow?.engine === 'codex' ? 'Codex' : workflow?.engine === 'kiro' ? 'kiro' : workflow?.engine === 'claude-code' ? 'claude' : workflow?.engine ?? 'demo';
-  const engineClass  = workflow?.engine === 'kiro' ? 'badge badge-engine-kiro' : workflow?.engine === 'claude-code' ? 'badge badge-engine-claude' : 'badge';
+  const engineLabel  = workflow?.engine === 'codex' ? 'Codex' : workflow?.engine === 'cursor' ? 'Cursor' : workflow?.engine === 'kiro' ? 'kiro' : workflow?.engine === 'claude-code' ? 'claude' : workflow?.engine ?? 'demo';
+  const engineClass  = workflow?.engine === 'kiro' ? 'badge badge-engine-kiro' : workflow?.engine === 'claude-code' ? 'badge badge-engine-claude' : workflow?.engine === 'cursor' ? 'badge badge-engine-cursor' : 'badge';
 
   return (
     <>

@@ -15,7 +15,7 @@ type T = { runs: number; costUsd: number; credits: number; tokens: number };
 const z = (): T => ({ runs: 0, costUsd: 0, credits: 0, tokens: 0 });
 /** A row from what each engine used: claude [runs, dollars, tokens], kiro [runs, credits], codex [runs, tokens], other [runs, tokens]. */
 const row = (id: string, name: string, u: { claude?: [number, number, number]; kiro?: [number, number]; codex?: [number, number]; other?: [number, number] }) => {
-  const engines = { claude: z(), kiro: z(), codex: z(), other: z() };
+  const engines = { claude: z(), kiro: z(), codex: z(), cursor: z(), other: z() };
   if (u.claude) engines.claude = { runs: u.claude[0], costUsd: u.claude[1], credits: 0, tokens: u.claude[2] };
   if (u.kiro) engines.kiro = { runs: u.kiro[0], costUsd: 0, credits: u.kiro[1], tokens: 0 };
   if (u.codex) engines.codex = { runs: u.codex[0], costUsd: 0, credits: 0, tokens: u.codex[1] };
@@ -86,9 +86,9 @@ createRoot(document.getElementById('root')).render(<Usage projects={[{ id: 'p1',
     assert.equal(await tabs.getByRole('tab', { name: 'People' }).getAttribute('aria-selected'), 'true');
     const table = page.getByRole('table', { name: 'Usage by person' });
     assert.deepEqual((await table.getByRole('columnheader').allInnerTexts()).map((h) => norm(h).toLowerCase()),
-      ['person', 'runs', 'claude dollars', 'kiro credits', 'codex tokens']);
+      ['person', 'runs', 'claude dollars', 'kiro credits', 'codex tokens', 'cursor tokens']);
     const people = async () => (await table.locator('tbody tr').allInnerTexts()).map(norm);
-    assert.deepEqual(await people(), ['ann@x.com 3 $2.00 – –', 'bob@x.com 3 – 14.25 40.15M'], 'a dash, not 0.00, where an engine has nothing');
+    assert.deepEqual(await people(), ['ann@x.com 3 $2.00 – – –', 'bob@x.com 3 – 14.25 40.15M –'], 'a dash, not 0.00, where an engine has nothing');
     // Rank by Kiro: bob first; back to Claude: ann first.
     await page.getByRole('button', { name: /^Kiro credits$/ }).click();
     assert.equal(await page.getByRole('button', { name: /^Kiro credits$/ }).getAttribute('aria-pressed'), 'true');
@@ -100,12 +100,12 @@ createRoot(document.getElementById('root')).render(<Usage projects={[{ id: 'p1',
     // ── Projects, and Days (newest first, a quiet day included, no ranking).
     await tabs.getByRole('tab', { name: 'Projects' }).click();
     const projectRows = (await page.getByRole('table', { name: 'Usage by project' }).locator('tbody tr').allInnerTexts()).map(norm);
-    assert.deepEqual(projectRows, ['Alpha 4 $2.00 10.25 –', 'Beta 2 – 4.00 40.15M']);
+    assert.deepEqual(projectRows, ['Alpha 4 $2.00 10.25 – –', 'Beta 2 – 4.00 40.15M –']);
     await tabs.getByRole('tab', { name: 'Days' }).click();
     assert.equal(await page.getByRole('group', { name: 'Rank by' }).count(), 0, 'days are in date order: nothing to rank');
     const dayRows = (await page.getByRole('table', { name: /Usage by day/ }).locator('tbody tr').allInnerTexts()).map(norm);
     assert.deepEqual(dayRows.map((r) => r.split(' ')[0]), [day(0), day(1), day(2), day(3)]);
-    assert.equal(dayRows[3], `${day(3)} 0 – – –`, 'a quiet day is listed, with dashes');
+    assert.equal(dayRows[3], `${day(3)} 0 – – – –`, 'a quiet day is listed, with dashes');
 
     // ── Every amount sits under its own header, in every tab; one font in every cell (quiet days too).
     for (const name of ['People', 'Projects', 'Days']) {
