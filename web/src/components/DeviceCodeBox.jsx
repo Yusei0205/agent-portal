@@ -85,7 +85,9 @@ export function DeviceCodeBox({
       {!isTerminal && (
         <>
           <p style={{ fontSize: '0.84rem', marginBottom: 8 }}>
-            Open the link below in your browser and enter the code to sign in:
+            {challenge?.userCode
+              ? 'Open the link below in your browser and enter the code to sign in:'
+              : 'Open the link below in your browser, sign in and approve. This finishes by itself:'}
           </p>
 
           <div className="device-code-url">
@@ -94,23 +96,25 @@ export function DeviceCodeBox({
             </a>
           </div>
 
-          <div className="device-user-code-row">
-            <div
-              className="device-user-code"
-              aria-label={`User code: ${challenge?.userCode}`}
-            >
-              {challenge?.userCode}
+          {challenge?.userCode && (
+            <div className="device-user-code-row">
+              <div
+                className="device-user-code"
+                aria-label={`User code: ${challenge?.userCode}`}
+              >
+                {challenge?.userCode}
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={handleCopy}
+                aria-label="Copy user code to clipboard"
+              >
+                <Icon name="copy" size={13} />
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
             </div>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={handleCopy}
-              aria-label="Copy user code to clipboard"
-            >
-              <Icon name="copy" size={13} />
-              {copied ? 'Copied!' : 'Copy'}
-            </button>
-          </div>
+          )}
 
           {remaining !== null && remaining > 0 && (
             <p style={{ fontSize: '0.79rem', color: 'var(--ink-3)', marginTop: 4 }}>
