@@ -50,6 +50,12 @@ const PROVIDERS = [
     icon: 'terminal',
     description: 'Run agents via the Kiro CLI engine.',
   },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    icon: 'terminal',
+    description: 'Run agents and AI generation through the Cursor CLI with a Cursor API key.',
+  },
 ];
 
 const BEDROCK_AUTH_OPTIONS = [
@@ -123,6 +129,10 @@ export default function Providers({ settings, isAdmin, onSaved }) {
   // ── Kiro ───────────────────────────────────────────────────────────────────
   const [kiroApiKey,  setKiroApiKey]  = useState('');
   const [showKiroKey, setShowKiroKey] = useState(false);
+
+  // ── Cursor ─────────────────────────────────────────────────────────────
+  const [cursorApiKey,  setCursorApiKey]  = useState('');
+  const [showCursorKey, setShowCursorKey] = useState(false);
 
   // ── Kiro CLI sign-in state ─────────────────────────────────────────────────
   const [kiroStatus,         setKiroStatus]         = useState(null);
@@ -589,6 +599,7 @@ export default function Providers({ settings, isAdmin, onSaved }) {
         models: { sonnet: effectiveDefault },
       };
       if (kiroApiKey) body.kiroApiKey = kiroApiKey;
+      if (cursorApiKey) body.cursorApiKey = cursorApiKey;
 
       const updated = await api.put('/api/settings', body);
       onSaved?.(updated);
@@ -870,6 +881,29 @@ export default function Providers({ settings, isAdmin, onSaved }) {
 
             {/* ── Kiro CLI ─────────────────────────────────────────────── */}
             {mode === 'codex' && <div><CodexCredentials isAdmin={isAdmin} /><p className="field-hint">Each user connects their own ChatGPT account. The portal never shares the administrator's sign-in. Test connection checks sign-in and the model catalog; a run verifies inference access.</p></div>}
+            {mode === 'cursor' && (
+              <div className="field">
+                <label htmlFor={`${uid}-cursor-key`}>Cursor API key</label>
+                <div className="input-with-action">
+                  <input
+                    id={`${uid}-cursor-key`}
+                    type={showCursorKey ? 'text' : 'password'}
+                    value={cursorApiKey}
+                    onChange={(e) => setCursorApiKey(e.target.value)}
+                    placeholder={settings?.cursorApiKeySet ? '••••••••••••••••••• (set — enter to replace)' : 'crsr_…'}
+                    autoComplete="off"
+                  />
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setShowCursorKey((v) => !v)} aria-label={showCursorKey ? 'Hide key' : 'Show key'}>
+                    {showCursorKey ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+                <p className="field-hint">
+                  Create one at cursor.com/dashboard/api. It runs Cursor sessions that have no sign-in of their own, and portal AI generation when Cursor is the provider.
+                  People can still add their own key or login under Credentials; theirs is used first. Leave blank on a local install that is already signed in with <code>agent login</code>.
+                </p>
+              </div>
+            )}
+
             {mode === 'kiro' && (
               <KiroCliSection
                 uid={uid}

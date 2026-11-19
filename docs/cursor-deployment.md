@@ -27,6 +27,14 @@ Linux), so a login token is injected per turn as an environment variable, never 
    `-c cursorRuntimeArn=...`; leaving it out removes `PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN` from the Lambda.
 3. Cloud Cursor needs the S3 storage bucket (workspace and chat snapshots) and the person's API key.
 
+## Portal provider (Settings > Model provider > Cursor)
+
+An admin can choose Cursor as the portal provider and set one portal Cursor API key (stored encrypted, never returned). It is used by
+Cursor sessions whose owner has no key or login of their own (a personal key or login always wins), and by portal AI generation
+(documents, test cases, reviews) when Cursor is the provider or a person's only sign-in. Generation sends one prompt and gets one
+answer: nothing is trusted, so no shell command runs, and image attachments are not accepted. In the cloud it runs in the Cursor
+runner's `cursor-text` mode.
+
 ## How approvals work
 
 Print mode has no per-call approval. A **trusted** session runs with `--force`. An untrusted one runs with `--trust` only:

@@ -33,7 +33,7 @@ import { usesDynamoDb } from './repositories/backend.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type ProviderMode = 'demo' | 'anthropic' | 'bedrock' | 'kiro' | 'codex' | 'litellm';
+export type ProviderMode = 'demo' | 'anthropic' | 'bedrock' | 'kiro' | 'codex' | 'cursor' | 'litellm';
 export type AwsAuth = 'ambient' | 'profile' | 'keys' | 'bedrock-key' | 'sso';
 
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -78,6 +78,9 @@ export interface Settings {
   headroomProxyUrl: string;
   kiroApiKeySet: boolean;
   kiroApiKeyEnc: string;
+  /** The portal-wide Cursor API key (Settings > Model provider > Cursor), used by Cursor sessions that have no sign-in of their own. */
+  cursorApiKeySet: boolean;
+  cursorApiKeyEnc: string;
   lastChangedAt: string | null;
   lastChangedBy: string | null;
   githubOauthClientId: string;
@@ -121,6 +124,8 @@ const DEFAULTS: Settings = {
   headroomProxyUrl: '',
   kiroApiKeySet: false,
   kiroApiKeyEnc: '',
+  cursorApiKeySet: false,
+  cursorApiKeyEnc: '',
   lastChangedAt: null,
   lastChangedBy: null,
   githubOauthClientId: '',
@@ -334,6 +339,12 @@ export function getSettings(_db?: DatabaseSync): Settings {
     out.kiroApiKeyEnc = kiroKeyEnc;
   }
 
+  const cursorKeyEnc = get('cursor.key.enc');
+  if (cursorKeyEnc) {
+    out.cursorApiKeySet = true;
+    out.cursorApiKeyEnc = cursorKeyEnc;
+  }
+
   const lastChangedAt = get('settings.last_changed_at');
   if (lastChangedAt) out.lastChangedAt = lastChangedAt;
 
@@ -401,6 +412,7 @@ function publicSettings(_db?: DatabaseSync): object {
     defaultModel: s.defaultModel,
     headroomProxyUrl: s.headroomProxyUrl,
     kiroApiKeySet: s.kiroApiKeySet,
+    cursorApiKeySet: s.cursorApiKeySet,
     lastChangedAt: s.lastChangedAt,
     lastChangedBy: s.lastChangedBy,
     github: {
@@ -503,6 +515,15 @@ export async function getAgentEnv(db?: DatabaseSync, _projectId?: string): Promi
     }
   }
 
+  if (s.cursorApiKeySet && s.cursorApiKeyEnc) {
+    try {
+      const cursorKey = decrypt(s.cursorApiKeyEnc, config.secretKey);
+      if (cursorKey) env.CURSOR_API_KEY = cursorKey;
+    } catch {
+      // decrypt failure
+    }
+  }
+
   if (s.headroomProxyUrl) {
     env.ANTHROPIC_BASE_URL = s.headroomProxyUrl;
   }
@@ -575,6 +596,25 @@ async function testConnection(
     const { getEngineModels } = await import('./models.ts');
     const response = await getEngineModels('codex', userId, null, true);
     return { ok: !response.error && response.models.length > 0, models: response.models.map(m => m.id), ...(response.error ? { error: response.error } : {}) };
+  }
+
+  if (mode === 'cursor') {
+    let portalKey: string | null = null;
+    if (s.cursorApiKeySet && s.cursorApiKeyEnc) {
+      try { portalKey = decrypt(s.cursorApiKeyEnc, config.secretKey); } catch { return { ok: false, error: 'Could not decrypt the portal Cursor API key.' }; }
+    }
+    if (process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN) {
+      if (!portalKey) return { ok: false, error: 'No Cursor API key set. The cloud portal needs one: add it here.' };
+      try {
+        const { listCursorModelsViaAgentCore } = await import('./agent/cursor-agentcore.ts');
+        const models = await listCursorModelsViaAgentCore(userId ?? '', null);
+        return { ok: models.length > 0, models: models.map((m) => m.id), ...(models.length ? {} : { error: 'The key answered, but no models are available to it.' }) };
+      } catch (e) { return { ok: false, error: (e as Error).message }; }
+    }
+    const { listCursorModels } = await import('./cursor-models.ts');
+    const listed = await listCursorModels(portalKey ? { apiKey: portalKey } : null);
+    if (listed.error) return { ok: false, error: listed.error + (portalKey ? '' : ' Add a Cursor API key here, or sign the Cursor CLI in on the portal host (agent login).') };
+    return { ok: true, models: listed.models.map((m) => m.id) };
   }
 
   if (mode === 'demo') {
@@ -1040,6 +1080,20 @@ export async function listModelsForProvider(
     const response = await getEngineModels('codex', userId, null, refresh);
     return { provider, source: 'live', error: response.error ?? null, groups: [{ label: 'Your Codex account', models: response.models.map(m => ({ id: m.id, label: m.label })) }] };
   }
+  if (provider === 'cursor') {
+    const { listCursorModels } = await import('./cursor-models.ts');
+    let portalKey: string | null = null;
+    if (s.cursorApiKeySet && s.cursorApiKeyEnc) { try { portalKey = decrypt(s.cursorApiKeyEnc, config.secretKey); } catch { /* reported below */ } }
+    if (process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN) {
+      try {
+        const { listCursorModelsViaAgentCore } = await import('./agent/cursor-agentcore.ts');
+        const models = await listCursorModelsViaAgentCore(userId ?? '', null);
+        return { provider, source: 'live', error: null, groups: [{ label: 'Cursor', models: models.map((m) => ({ id: m.id, label: m.label })) }] };
+      } catch (e) { return { provider, source: 'fallback', error: (e as Error).message, groups: [] }; }
+    }
+    const listed = await listCursorModels(portalKey ? { apiKey: portalKey } : null);
+    return { provider, source: listed.error ? 'fallback' : 'live', error: listed.error ?? null, groups: listed.models.length ? [{ label: 'Cursor', models: listed.models.map((m) => ({ id: m.id, label: m.label })) }] : [] };
+  }
   const cacheKey = provider;
   if (!refresh) {
     const entry = modelListCache.get(cacheKey);
@@ -1323,7 +1377,7 @@ export function registerSettingsRoutes(): void {
       const p = body.provider as Record<string, unknown>;
       if (p.mode !== undefined) {
         const mode = String(p.mode);
-        if (!['demo', 'anthropic', 'bedrock', 'kiro', 'codex', 'litellm'].includes(mode)) {
+        if (!['demo', 'anthropic', 'bedrock', 'kiro', 'codex', 'cursor', 'litellm'].includes(mode)) {
           throw badRequest('Unknown provider mode');
         }
         set('provider.mode', mode);
@@ -1437,6 +1491,10 @@ export function registerSettingsRoutes(): void {
       }
     }
 
+    if (body.cursorApiKey !== undefined && typeof body.cursorApiKey === 'string' && body.cursorApiKey !== '***') {
+      if (body.cursorApiKey.trim()) set('cursor.key.enc', encrypt(body.cursorApiKey.trim(), config.secretKey));
+    }
+
     // LiteLLM gateway settings
     if (body.litellm !== undefined && typeof body.litellm === 'object' && body.litellm !== null) {
       const ll = body.litellm as Record<string, unknown>;
@@ -1514,7 +1572,7 @@ export function registerSettingsRoutes(): void {
     const providerParam = qs.get('provider') ?? '';
     const refresh = qs.get('refresh') === '1';
 
-    const validProviders = ['demo', 'anthropic', 'bedrock', 'kiro', 'codex', 'litellm'];
+    const validProviders = ['demo', 'anthropic', 'bedrock', 'kiro', 'codex', 'cursor', 'litellm'];
     if (!validProviders.includes(providerParam)) {
       sendJson(res, 400, { error: `provider must be one of: ${validProviders.join(', ')}` });
       return;
