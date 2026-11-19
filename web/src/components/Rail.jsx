@@ -104,6 +104,7 @@ const NAV_SECTIONS = [
     items: [
       { tab: 'settings', label: 'Settings',   icon: 'settings' },
       { tab: 'users',    label: 'Users',      icon: 'shield-user', adminOnly: true },
+      { tab: 'agentcore', label: 'AgentCore', icon: 'chart', adminOnly: true },
       { tab: 'api',      label: 'API access', icon: 'code-2' },
       { tab: 'feedback', label: 'Feedback',   icon: 'inbox' },
       { tab: 'help',     label: 'Help',       icon: 'help' },

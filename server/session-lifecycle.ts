@@ -30,6 +30,7 @@ import type { WorkflowRecord } from './repositories/sessions.ts';
 import { sweepLostRuns } from './workflows/driver.ts';
 import { sessionSignIn } from './session-sign-in.ts';
 import { getSessionLimits } from './engine-limits.ts';
+import { sweepAgentCoreIdle } from './agentcore-idle.ts';
 import { presignLiveViewUrl, setAutomationStream } from './browser-live-view.ts';
 import { liveBrowserSession, closeSessionBrowser } from './browser-session.ts';
 
@@ -90,6 +91,8 @@ export async function listIdleClosingSoon(withinMinutes: number): Promise<Array<
 export async function checkIdleSessions(): Promise<void> {
   // Every minute, from here on both the local timer and the cloud schedule: turns whose process was lost are closed first.
   await sweepLostRuns();
+  // A runner's AgentCore sessions can be stopped sooner than the portal's own idle time (Portal > AgentCore).
+  await sweepAgentCoreIdle().catch((e) => console.error('[idle-stop] AgentCore idle pass failed:', e));
   try {
     const timeoutMinutes = getIdleTimeoutMinutes();
     const cutoff = new Date(Date.now() - timeoutMinutes * 60_000).toISOString();

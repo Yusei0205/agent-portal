@@ -379,6 +379,11 @@ export class AgentPortalCloudStack extends cdk.Stack {
       actions: ['appsync:EventPublish'],
       resources: [`arn:aws:appsync:${this.region}:${this.account}:apis/${eventsApi.attrApiId}/channelNamespace/*`],
     }));
+    // The AgentCore page (admin) reads runtime usage from CloudWatch. Read-only; these calls take no resource-level permissions.
+    fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['cloudwatch:GetMetricData', 'cloudwatch:ListMetrics'],
+      resources: ['*'],
+    }));
     // Live View of the agent's cloud browser: the portal signs the stream address, the page connects to AWS.
     fn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock-agentcore:ConnectBrowserLiveViewStream', 'bedrock-agentcore:UpdateBrowserStream', 'bedrock-agentcore:GetBrowserSession', 'bedrock-agentcore:StopBrowserSession'],
