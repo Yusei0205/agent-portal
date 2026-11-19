@@ -122,7 +122,7 @@ describe('/api/agentcore/idle', () => {
     assert.equal((await put({ engine: 'kiro', minutes: 7 })).status, 200);
     assert.equal(getIdleMinutes('kiro'), 7);
     const list = await fetchJson(baseUrl, '/api/agentcore/idle', { cookie: adminCookie });
-    assert.equal(list.body.engines.find((e: any) => e.engine === 'kiro').minutes, 7);
+    assert.equal((list.body as { engines: Array<{ engine: string; minutes: number | null }> }).engines.find((e) => e.engine === 'kiro')?.minutes, 7);
     assert.equal((await put({ engine: 'kiro', minutes: null })).status, 200);
     assert.equal(getIdleMinutes('kiro'), null);
     assert.equal((await put({ engine: 'nope', minutes: 5 })).status, 400);
