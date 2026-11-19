@@ -1882,6 +1882,7 @@
       "sources": [
         "server/cursor-cmd.ts",
         "server/cursor-models.ts",
+        "server/cursor-login-token.ts",
         "server/agent/cursor.ts",
         "server/agent/cursor-stream.ts",
         "server/agent/cursor-turn.ts",
@@ -1895,7 +1896,8 @@
         "test/cursor.test.ts",
         "test/cursor-stream.test.ts",
         "test/cursor-runner.test.ts",
-        "test/cursor-config.test.ts"
+        "test/cursor-config.test.ts",
+        "test/cursor-login-token.test.ts"
       ],
       "smokeIds": []
     }

@@ -33,6 +33,7 @@ const DENYLIST_EXACT = new Set([
   'GITHUB_TOKEN',           // scrubbed unless a push step explicitly re-injects it
   'KIRO_API_KEY',
   'CURSOR_API_KEY',
+  'CURSOR_AUTH_TOKEN',
   'LITELLM_API_KEY',
   'OPENAI_API_KEY',
   'GOOGLE_API_KEY',

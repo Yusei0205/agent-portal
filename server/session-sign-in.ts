@@ -23,6 +23,7 @@ const CLAUDE_MODES: Record<string, SessionSignIn> = {
 };
 const CURSOR_MODES: Record<string, SessionSignIn> = {
   api_key: { kind: 'api_key', label: 'Cursor API key', detail: 'A Cursor API key (billed to your Cursor plan)' },
+  login_token: { kind: 'plan', label: 'Cursor login', detail: 'Your Cursor login token (lasts about 60 days; paste a new one under Credentials when it expires)' },
 };
 const KIRO_MODES: Record<string, SessionSignIn> = {
   api_key: { kind: 'api_key', label: 'Kiro API key', detail: 'A Kiro API key' },

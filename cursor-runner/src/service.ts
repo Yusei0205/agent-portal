@@ -14,6 +14,7 @@ import { applyCursorRules, parseCursorFiles } from '../../server/agent/cursor-co
 import { CursorArgError, cursorArgs, driveCursorTurn, turnFailure } from '../../server/agent/cursor-turn.ts';
 import { listCursorModels } from '../../server/cursor-models.ts';
 import { restoreCursorState, saveCursorState, sessionExists } from './state.ts';
+import { cursorAuthEnv, looksLikeLoginToken, type CursorAuth } from '../../server/cursor-login-token.ts';
 
 type Event = Record<string, any>;
 type ServiceOptions = {
@@ -38,10 +39,10 @@ export function createCursorRunnerServer(options: ServiceOptions = {}): http.Ser
   const restore = options.restoreState ?? restoreCursorState;
   const save = options.saveState ?? saveCursorState;
   // Nothing from the runner's own environment reaches the CLI (or the agent's shell) except what it needs.
-  const environment = (apiKey: string): NodeJS.ProcessEnv => ({ PATH: process.env.PATH, HOME: home, USERPROFILE: home,
+  const environment = (auth: CursorAuth): NodeJS.ProcessEnv => ({ PATH: process.env.PATH, HOME: home, USERPROFILE: home,
     SYSTEMROOT: process.env.SYSTEMROOT, LOCALAPPDATA: process.env.LOCALAPPDATA, APPDATA: process.env.APPDATA,
     TMP: os.tmpdir(), TEMP: os.tmpdir(), LANG: 'C.UTF-8', SSL_CERT_FILE: process.env.SSL_CERT_FILE,
-    CURSOR_API_KEY: apiKey });
+    ...cursorAuthEnv(auth) });
   const terminal = createRunnerTerminal({
     engine: 'cursor',
     prepare: async (snapshot, status) => {
@@ -79,9 +80,11 @@ export function createCursorRunnerServer(options: ServiceOptions = {}): http.Ser
     }
     if (active || terminal.preparing()) { json(409, { error: 'The session is busy preparing or running work' }); return; }
     if (!MODES.includes(body.mode)) { json(400, { error: 'Unsupported mode' }); return; }
+    // Exactly one credential per call: an API key, or a login token (the CLI's CURSOR_AUTH_TOKEN).
+    const goodKey = typeof body.apiKey === 'string' && body.apiKey.length > 0 && body.apiKey.length <= 4096 && !/[\r\n\0\s]/.test(body.apiKey);
     if (['cursor-run', 'cursor-models'].includes(body.mode)
-      && (typeof body.apiKey !== 'string' || !body.apiKey || body.apiKey.length > 4096 || /[\r\n\0\s]/.test(body.apiKey))) {
-      json(400, { error: 'A Cursor API key is required' }); return;
+      && ((body.apiKey != null && body.authToken != null) || !(goodKey && body.authToken == null) && !(looksLikeLoginToken(body.authToken) && body.apiKey == null))) {
+      json(400, { error: 'A Cursor API key or login token is required' }); return;
     }
     if (body.mode === 'cursor-run' && (typeof body.prompt !== 'string' || body.prompt.length > 250_000
       || typeof body.workflowId !== 'string' || !ID.test(body.workflowId)
@@ -97,7 +100,8 @@ export function createCursorRunnerServer(options: ServiceOptions = {}): http.Ser
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', 'x-accel-buffering': 'no' });
     // A line every 20 s, so a quiet stretch is not mistaken for a dropped connection (see sse-keepalive.ts).
     startKeepalive(res);
-    const secrets = [body.apiKey].filter((s): s is string => typeof s === 'string' && s.length > 0);
+    const auth: CursorAuth = { ...(typeof body.apiKey === 'string' ? { apiKey: body.apiKey } : {}), ...(typeof body.authToken === 'string' ? { authToken: body.authToken } : {}) };
+    const secrets = [auth.apiKey, auth.authToken].filter((s): s is string => typeof s === 'string' && s.length > 0);
     const send = (event: Event) => {
       let text = JSON.stringify(event);
       for (const secret of secrets) text = text.split(secret).join('***');
@@ -131,7 +135,7 @@ export function createCursorRunnerServer(options: ServiceOptions = {}): http.Ser
         await flushWorkspace(snapshot, workDir);
         send({ type: 'result', success: true, persisted: true, repos: ready });
       } else if (body.mode === 'cursor-models') {
-        const listed = await listCursorModels(body.apiKey, 45_000, environment(body.apiKey));
+        const listed = await listCursorModels(auth, 45_000, environment(auth));
         if (listed.error) throw new Error(listed.error);
         send({ type: 'models', models: listed.models, text: listed.models.map(m => `${m.id} - ${m.label}${m.default ? ' (default)' : ''}`).join('\n') });
       } else {
@@ -151,7 +155,7 @@ export function createCursorRunnerServer(options: ServiceOptions = {}): http.Ser
         if (Array.isArray(body.mcpServers) && body.mcpServers.length) send({ type: 'status', text: 'MCP integrations are not available to Cursor sessions yet; continuing without them.' });
         const result = await driveCursorTurn({
           args: cursorArgs({ trusted: body.trusted === true, model: body.model || null, resumeId: body.sessionId || null }),
-          prompt: body.prompt, cwd: workDir, env: environment(body.apiKey),
+          prompt: body.prompt, cwd: workDir, env: environment(auth),
           emit: (eventType, payload) => send({ type: 'portal-event', eventType, payload }),
           signal: controller.signal, heartbeatLabel: 'Cursor',
           onSession: (id) => { if (resumeInfo) resumeInfo.sessionId = id; },
