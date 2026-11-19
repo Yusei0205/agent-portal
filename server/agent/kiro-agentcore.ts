@@ -324,6 +324,29 @@ let _endpointOverride: string | null = null;
 export function _setAgentCoreEndpointOverride(url: string | null): void { _endpointOverride = url; }
 
 /**
+ * Ends one runtime session now (StopRuntimeSession), so it stops holding memory. A session that is already gone (404) counts as
+ * stopped. The next InvokeAgentRuntime with the same session id starts a fresh machine.
+ */
+export async function stopAgentCoreSession(runtimeArn: string, sessionId: string): Promise<void> {
+  const { region } = parseRuntimeArn(runtimeArn);
+  const profile = process.env.PORTAL_AGENTCORE_AWS_PROFILE || process.env.PORTAL_KIRO_AGENTCORE_AWS_PROFILE;
+  const effectiveRegion = process.env.PORTAL_AGENTCORE_REGION || process.env.PORTAL_KIRO_AGENTCORE_REGION || region;
+  const credentials = await resolveAwsCredentials(profile);
+  const baseUrl = _endpointOverride ?? `https://bedrock-agentcore.${effectiveRegion}.amazonaws.com`;
+  const url = new URL(`${baseUrl}/runtimes/${encodeURIComponent(runtimeArn)}/stopruntimesession?qualifier=DEFAULT`);
+  const body = JSON.stringify({ clientToken: `${sessionId}-${Date.now()}`.padEnd(33, '0') });
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Amzn-Bedrock-AgentCore-Runtime-Session-Id': sessionId,
+    'Content-Length': Buffer.byteLength(body).toString(),
+  };
+  const signed = await signRequest({ method: 'POST', url, headers, body, service: 'bedrock-agentcore', region: effectiveRegion, credentials });
+  const res = await fetch(url, { method: 'POST', headers: signed, body, signal: AbortSignal.timeout(15_000) });
+  if (res.ok || res.status === 404) return;
+  throw new Error(`StopRuntimeSession returned ${res.status}`);
+}
+
+/**
  * Invoke the AgentCore runtime and stream back SSE events.
  * Resolves the endpoint from the ARN, signs the request, and parses SSE lines.
  */

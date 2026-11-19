@@ -732,6 +732,7 @@ export const HELP_TOPICS = [
           ['Estimated cost', 'vCPU-hours and GB-hours multiplied by the published AgentCore rates. An estimate, not the invoice: Cost Explorer has the real figure.'],
           ['Memory share', 'How much of a runtime\'s estimated cost is memory. A high share means sessions sit idle holding memory: shorten the idle timeout and stop sessions when a run ends.'],
           ['Active sessions', 'Sessions running right now. The page refreshes every 30 seconds.'],
+          ['Idle time per runner', 'Stops a runner\'s idle AgentCore sessions sooner than the platform timeout: minutes after a turn ends, or 0 to stop as soon as it ends. The next message starts it again from the saved workspace.'],
         ],
       },
     ],

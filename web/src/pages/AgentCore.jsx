@@ -70,6 +70,79 @@ function Card({ title, value, sub, tone }) {
   );
 }
 
+/** One runner: blank means the platform timeout; a number stops its idle sessions after that many minutes. */
+function IdleRow({ row, platformMinutes, maxMinutes, onSaved }) {
+  const [value, setValue] = useState(row.minutes === null ? '' : String(row.minutes));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const saved = row.minutes === null ? '' : String(row.minutes);
+  const trimmed = value.trim();
+  const valid = trimmed === '' || (/^\d+$/.test(trimmed) && Number(trimmed) <= maxMinutes);
+
+  const save = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await api.put('/api/agentcore/idle', { engine: row.engine, minutes: trimmed === '' ? null : Number(trimmed) });
+      setMsg('Saved');
+      onSaved();
+    } catch (e) {
+      setMsg(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <tr>
+      <td className="us-name">{row.label}</td>
+      <td className="us-num">
+        <input
+          type="text" inputMode="numeric" value={value} placeholder="Default" style={{ width: 90, textAlign: 'right' }}
+          aria-label={`${row.label} idle minutes`} aria-invalid={!valid} onChange={(e) => { setValue(e.target.value); setMsg(null); }}
+        />
+      </td>
+      <td className="muted">{trimmed === '' ? `Platform timeout (${platformMinutes} min)` : Number(trimmed) === 0 ? 'Stopped as soon as a turn ends' : `Stopped after ${trimmed} min idle`}</td>
+      <td className="us-num">
+        <button type="button" className="btn btn-sm" disabled={busy || !valid || value === saved} onClick={save} aria-label={`Save ${row.label} idle time`}>Save</button>
+        {msg && <span className="muted" role="status" style={{ marginLeft: 8 }}>{msg}</span>}
+      </td>
+    </tr>
+  );
+}
+
+/** Idle time for each runner's sessions. A session that is stopped starts again on the next message, from its saved workspace. */
+function IdleSettings() {
+  const [cfg, setCfg] = useState(null);
+  const [error, setError] = useState(null);
+  const load = useCallback(async () => {
+    try { setCfg(await api.get('/api/agentcore/idle')); setError(null); } catch (e) { setError(e.message); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  return (
+    <section className="us-panel" aria-label="Idle time per runner">
+      <div className="us-panel-head"><strong>Idle time per runner</strong><span className="muted">stops sessions sooner, never later</span></div>
+      <p className="muted us-lead">
+        An idle session holds memory until AgentCore times it out. Set how many minutes after a turn ends the portal should stop it.
+        Blank keeps the platform timeout, 0 stops it as soon as the turn ends. The next message starts it again from the saved workspace;
+        a running terminal or installed tools in that session are lost.
+      </p>
+      {error && <p className="error-note" role="alert">{error}</p>}
+      {cfg && (
+        <div className="table-wrap">
+          <table className="data-table us-table" aria-label="Idle minutes by runner">
+            <thead><tr><th scope="col">Runner</th><th scope="col" className="us-num">Idle minutes</th><th scope="col">Effect</th><th scope="col" /></tr></thead>
+            <tbody>
+              {cfg.engines.map((r) => <IdleRow key={`${r.engine}:${r.minutes}`} row={r} platformMinutes={cfg.platformMinutes} maxMinutes={cfg.maxMinutes} onSaved={load} />)}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function AgentCore() {
   const [period, setPeriod] = useState('7d');
   const [data, setData] = useState(null);
@@ -190,6 +263,8 @@ export function AgentCore() {
           <p className="muted us-lead">Updated {new Date(data.generatedAt).toLocaleTimeString()}. Refreshes every 30 seconds.</p>
         </>
       )}
+
+      <IdleSettings />
     </div>
   );
 }
