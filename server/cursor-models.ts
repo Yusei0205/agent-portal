@@ -6,6 +6,7 @@
  */
 
 import { spawnCursor } from './cursor-cmd.ts';
+import { cursorAuthEnv, type CursorAuth } from './cursor-login-token.ts';
 
 export interface CursorModel { id: string; label: string; default?: true }
 
@@ -28,8 +29,8 @@ export function parseCursorModels(output: string): CursorModel[] {
 }
 
 /** Runs the CLI with the given key (or its own login when none). Never throws: returns an error string instead. */
-export async function listCursorModels(apiKey: string | null, timeoutMs = 30_000, childEnv?: NodeJS.ProcessEnv): Promise<{ models: CursorModel[]; error?: string }> {
-  const env: NodeJS.ProcessEnv = childEnv ?? { ...process.env, ...(apiKey ? { CURSOR_API_KEY: apiKey } : {}) };
+export async function listCursorModels(auth: CursorAuth | null, timeoutMs = 30_000, childEnv?: NodeJS.ProcessEnv): Promise<{ models: CursorModel[]; error?: string }> {
+  const env: NodeJS.ProcessEnv = childEnv ?? { ...process.env, ...cursorAuthEnv(auth ?? {}) };
   return await new Promise((resolve) => {
     let out = '';
     let err = '';

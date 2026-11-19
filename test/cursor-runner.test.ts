@@ -113,6 +113,42 @@ describe('Cursor AgentCore runner HTTP contract', () => {
     assert.ok(!evs.some(e => e.type === 'status' && /not applied/.test(e.text)));
   });
 
+  it('accepts a login token instead of an API key, gives it to the CLI as CURSOR_AUTH_TOKEN, and redacts it', async () => {
+    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const token = b64({ alg: 'none' }) + '.' + b64({ sub: 'u', exp: Math.floor(Date.now() / 1000) + 86400 }) + '.' + 's'.repeat(24);
+    const { apiKey: _drop, ...rest } = payload('ECHO_KEY');
+    const evs = await events(await post({ ...rest, authToken: token }));
+    assert.ok(!JSON.stringify(evs).includes(token), 'the token never leaves the runner');
+    assert.ok(text(evs).includes('key=none;token=***'), text(evs));
+    assert.equal(evs.find(e => e.type === 'result').exitCode, 0);
+    const models = await events(await post({ mode: 'cursor-models', authToken: token }));
+    assert.equal(models.find(e => e.type === 'models').models.length, 3);
+    assert.ok(!JSON.stringify(models).includes(token));
+  });
+
+  it('needs exactly one credential, and checks the token is shaped like one', async () => {
+    const token = 'aaaaaaaa.bbbbbbbb.cccccccc';
+    const { apiKey: _drop, ...rest } = payload();
+    assert.equal((await post({ ...payload(), authToken: token })).status, 400, 'both');
+    assert.equal((await post({ ...rest })).status, 400, 'neither');
+    assert.equal((await post({ ...rest, authToken: 'not a token' })).status, 400, 'bad shape');
+    assert.equal((await post({ ...rest, authToken: 'a'.repeat(9000) })).status, 400, 'too long');
+    assert.equal((await post({ mode: 'cursor-models' })).status, 400);
+  });
+
+  it('answers one prompt in cursor-text mode: no repository, no saved chat, the key redacted', async () => {
+    const evs = await events(await post({ mode: 'cursor-text', apiKey: KEY, prompt: 'ECHO_KEY' }));
+    const result = evs.find(e => e.type === 'result');
+    assert.equal(result.exitCode, 0);
+    assert.ok(result.text.includes('key=***'), result.text);
+    assert.ok(!JSON.stringify(evs).includes(KEY));
+    assert.equal(saved, 0, 'no chat state is saved');
+    const bad = await events(await post({ mode: 'cursor-text', apiKey: KEY }));
+    assert.equal(bad.find(e => e.type === 'result').exitCode, 1);
+    assert.match(bad.find(e => e.type === 'error').message, /Invalid Cursor text request/);
+    assert.equal((await post({ mode: 'cursor-text', prompt: 'x' })).status, 400, 'a credential is required');
+  });
+
   it('says MCP integrations are unavailable instead of dropping them silently', async () => {
     const evs = await events(await post({ ...payload(), mcpServers: [{ name: 'jira', url: 'https://example.com/mcp', headers: {} }] }));
     assert.ok(evs.some(e => e.type === 'status' && /MCP integrations are not available/.test(e.text)));

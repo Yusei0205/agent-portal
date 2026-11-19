@@ -21,13 +21,13 @@ let prompt = '';
 for await (const c of process.stdin) prompt += c;
 const flag = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
 const sid = flag('--resume') || 'fake-session-0001';
-out({ type: 'system', subtype: 'init', apiKeySource: process.env.CURSOR_API_KEY ? 'env' : 'login', cwd: process.cwd(), session_id: sid, model: flag('--model') || 'Auto', permissionMode: 'default' });
+out({ type: 'system', subtype: 'init', apiKeySource: process.env.CURSOR_API_KEY || process.env.CURSOR_AUTH_TOKEN ? 'env' : 'login', cwd: process.cwd(), session_id: sid, model: flag('--model') || 'Auto', permissionMode: 'default' });
 out({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: prompt }] }, session_id: sid });
 if (prompt.includes('FAIL')) { process.stderr.write('Error: model unavailable\n'); process.exit(1); }
 if (prompt.includes('HANG')) { out({ type: 'thinking', subtype: 'delta', text: 'hmm', session_id: sid, timestamp_ms: 1 }); setInterval(() => {}, 1000); await new Promise(() => {}); }
 const say = (text, final = false) => out({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text }] }, session_id: sid, timestamp_ms: 1, ...(final ? { model_call_id: 'm1' } : {}) });
 let answer = 'Done.';
-if (prompt.includes('ECHO_KEY')) answer = `key=${process.env.CURSOR_API_KEY ?? 'none'}`;
+if (prompt.includes('ECHO_KEY')) answer = `key=${process.env.CURSOR_API_KEY ?? 'none'};token=${process.env.CURSOR_AUTH_TOKEN ?? 'none'}`;
 else if (prompt.includes('ECHO_ARGS')) answer = JSON.stringify(args);
 out({ type: 'thinking', subtype: 'delta', text: 'Planning.', session_id: sid, timestamp_ms: 1 });
 out({ type: 'thinking', subtype: 'completed', session_id: sid, timestamp_ms: 2 });

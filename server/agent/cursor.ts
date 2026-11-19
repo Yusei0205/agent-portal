@@ -14,6 +14,7 @@ import type { RunContext } from './types.ts';
 import { HttpError, now } from '../util.ts';
 import { resolveCredentialEnv } from '../credentials.ts';
 import { cursorAvailable } from '../cursor-cmd.ts';
+import { cursorAuthEnv } from '../cursor-login-token.ts';
 import { CursorArgError, cursorArgs as buildArgs, driveCursorTurn, turnFailure, type CursorArgOptions } from './cursor-turn.ts';
 import { buildConversationRecap } from './recap.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
@@ -64,9 +65,9 @@ export async function runCursor(ctx: RunContext): Promise<string> {
   if (!(await cursorAvailable())) {
     throw new HttpError(502, 'The Cursor CLI was not found. Install it (https://cursor.com/cli) and set PORTAL_CURSOR_BIN to the agent binary if it is not on PATH.');
   }
-  // The person's Cursor API key; with none stored the CLI falls back to its own `agent login` (a local install only).
+  // The person's Cursor API key or login token; with none stored the CLI falls back to its own `agent login` (a local install only).
   const credEnv = await resolveCredentialEnv('cursor', run.credentialOwnerId, run.credentialId);
-  const env: NodeJS.ProcessEnv = { ...process.env, ...(credEnv.CURSOR_API_KEY ? { CURSOR_API_KEY: credEnv.CURSOR_API_KEY } : {}) };
+  const env: NodeJS.ProcessEnv = { ...process.env, ...cursorAuthEnv({ apiKey: credEnv.CURSOR_API_KEY, authToken: credEnv.CURSOR_AUTH_TOKEN }) };
 
   // The person's own Cursor rules (Configuration > Cursor) go into the workspace the CLI runs in.
   try { applyCursorRules(run.workDir, await getCursorConfigFiles(run.credentialOwnerId)); }

@@ -18,21 +18,24 @@ import { withSkillsGuidance } from './skills-guidance.ts';
 import { recordCursorUsage } from './cursor.ts';
 import { getCursorConfigFiles } from '../user-config.ts';
 import { parseCursorModels, type CursorModel } from '../cursor-models.ts';
+import type { CursorAuth } from '../cursor-login-token.ts';
 
 const allowedEvents = new Set(['assistant-text', 'agent-thought', 'tool-start', 'tool-end', 'tool-blocked', 'status']);
 const count = (n: unknown): number => (typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0);
 
-async function apiKeyFor(userId: string, credentialId: string | null): Promise<string> {
+/** The person's Cursor API key or login token. Cloud Cursor has no `agent login` of its own, so one of them is required. */
+async function authFor(userId: string, credentialId: string | null): Promise<CursorAuth> {
   const env = await resolveCredentialEnv('cursor', userId, credentialId);
-  if (!env.CURSOR_API_KEY) throw new HttpError(400, 'Cloud Cursor needs a Cursor API key. Add one under Credentials.');
-  return env.CURSOR_API_KEY;
+  if (!env.CURSOR_API_KEY && !env.CURSOR_AUTH_TOKEN) throw new HttpError(400, 'Cloud Cursor needs a Cursor API key or login token. Add one under Credentials.');
+  return { apiKey: env.CURSOR_API_KEY, authToken: env.CURSOR_AUTH_TOKEN };
 }
 
 export async function runCursorViaAgentCore(ctx: RunContext, prompt: string): Promise<string> {
   const { run } = ctx;
   const arn = process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN;
   if (!arn || !run.credentialOwnerId) throw new HttpError(503, 'The Cursor cloud runtime or the session owner is missing.');
-  const apiKey = await apiKeyFor(run.credentialOwnerId, run.credentialId);
+  const auth = await authFor(run.credentialOwnerId, run.credentialId);
+  const secrets = [auth.apiKey, auth.authToken].filter((s): s is string => Boolean(s));
   const [workspace, state] = await Promise.all([snapshotAccess(run.workflowId), cursorStateAccess(run.workflowId)]);
   if (!state || !workspace) throw new HttpError(503, 'Cloud Cursor needs durable S3 conversation and workspace snapshots.');
   const session = agentCoreSessionId(run.workflowId, 'cursor');
@@ -46,13 +49,13 @@ export async function runCursorViaAgentCore(ctx: RunContext, prompt: string): Pr
   }
   const payload = {
     mode: 'cursor-run', runId: run.runId, workflowId: run.workflowId,
-    prompt: withSkillsGuidance(prompt, Boolean(run.runnerRepos?.length)), apiKey,
+    prompt: withSkillsGuidance(prompt, Boolean(run.runnerRepos?.length)), apiKey: auth.apiKey, authToken: auth.authToken,
     cursorConfig: await getCursorConfigFiles(run.credentialOwnerId).catch(() => []),
     trusted: run.trusted, model: run.model, sessionId: run.engineSessionId, repos: run.runnerRepos,
     mcpServers: run.runnerMcpServers, inputFiles: run.runnerInputFiles, checks: run.runnerChecks,
     snapshot: workspace, stateSnapshot: state, finalizeCheck,
   };
-  const scrub = (value: unknown): Record<string, any> => JSON.parse(JSON.stringify(value).split(apiKey).join('***'));
+  const scrub = (value: unknown): Record<string, any> => JSON.parse(secrets.reduce((text, secret) => text.split(secret).join('***'), JSON.stringify(value)));
   const cancelControl = async (): Promise<void> => {
     try {
       for await (const _ of invokeAgentCore(arn, session, { mode: 'cancel', runId: run.runId })) { /* one reply */ }
@@ -66,7 +69,7 @@ export async function runCursorViaAgentCore(ctx: RunContext, prompt: string): Pr
   let model: string | null = null;
   try {
     if (ctx.signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
-    ctx.emit('status', { text: 'Running Cursor on AgentCore with your Cursor API key.' });
+    ctx.emit('status', { text: `Running Cursor on AgentCore with your Cursor ${auth.authToken ? 'login' : 'API key'}.` });
     for await (const raw of invokeAgentCore(arn, session, payload, ctx.signal ?? undefined)) {
       const event = scrub(raw);
       if (event.type === 'portal-event' && allowedEvents.has(event.eventType) && event.payload && typeof event.payload === 'object') ctx.emit(event.eventType, event.payload);
@@ -110,8 +113,8 @@ export async function runCursorViaAgentCore(ctx: RunContext, prompt: string): Pr
 export async function listCursorModelsViaAgentCore(userId: string, credentialId: string | null): Promise<CursorModel[]> {
   const arn = process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN;
   if (!arn) throw new HttpError(503, 'The Cursor cloud runtime is not configured.');
-  const apiKey = await apiKeyFor(userId, credentialId);
-  for await (const raw of invokeAgentCore(arn, 'cursor-models-' + randomUUID(), { mode: 'cursor-models', apiKey }, AbortSignal.timeout(60_000))) {
+  const auth = await authFor(userId, credentialId);
+  for await (const raw of invokeAgentCore(arn, 'cursor-models-' + randomUUID(), { mode: 'cursor-models', apiKey: auth.apiKey, authToken: auth.authToken }, AbortSignal.timeout(60_000))) {
     const event = raw as unknown as Record<string, any>;
     if (event.type === 'models' && typeof event.text === 'string') return parseCursorModels(event.text);
     if (event.type === 'error') throw new HttpError(502, 'The Cursor cloud runner could not list models.');

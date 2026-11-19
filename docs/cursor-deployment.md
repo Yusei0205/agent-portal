@@ -1,7 +1,18 @@
 # Cursor deployment
 
-Cursor runs the Cursor CLI (`agent -p --output-format stream-json`). The person signs in with a **Cursor API key**
-(Credentials > Cursor, created at https://cursor.com/dashboard/api). It is stored encrypted like a Kiro key.
+Cursor runs the Cursor CLI (`agent -p --output-format stream-json`). A person signs in under Credentials > Cursor with either:
+
+- a **Cursor API key** (created at https://cursor.com/dashboard/api; the supported route for automation), or
+- an **advanced login token**: their own `agent login`, pasted as the contents of `auth.json` (or just its `accessToken`). Only the
+  access token is stored (encrypted), as `CURSOR_AUTH_TOKEN`; the refresh token stays on their machine. It is a 60-day session token:
+  the credential card shows the days left, a run says plainly when it has expired, and the person pastes a new one. `auth.json` is
+  `%APPDATA%Cursorauth.json` (Windows), `~/.cursor/auth.json` (macOS) or `~/.config/cursor/auth.json` (Linux). Experimental: check
+  your Cursor terms before using a personal login on a shared server.
+
+Both are stored encrypted like a Kiro key.
+
+`agent login` cannot finish inside the runner (it needs an OS keyring to store its token, and ignores a restored `auth.json` on
+Linux), so a login token is injected per turn as an environment variable, never restored as a file.
 
 | Deployment | How it runs | Persistence |
 | --- | --- | --- |
@@ -15,6 +26,14 @@ Cursor runs the Cursor CLI (`agent -p --output-format stream-json`). The person 
 2. Set the repository variable `CURSOR_RUNTIME_ARN` to the `CursorRuntimeArn` output. Every portal deploy passes
    `-c cursorRuntimeArn=...`; leaving it out removes `PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN` from the Lambda.
 3. Cloud Cursor needs the S3 storage bucket (workspace and chat snapshots) and the person's API key.
+
+## Portal provider (Settings > Model provider > Cursor)
+
+An admin can choose Cursor as the portal provider and set one portal Cursor API key (stored encrypted, never returned). It is used by
+Cursor sessions whose owner has no key or login of their own (a personal key or login always wins), and by portal AI generation
+(documents, test cases, reviews) when Cursor is the provider or a person's only sign-in. Generation sends one prompt and gets one
+answer: nothing is trusted, so no shell command runs, and image attachments are not accepted. In the cloud it runs in the Cursor
+runner's `cursor-text` mode.
 
 ## How approvals work
 

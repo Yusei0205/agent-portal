@@ -19,6 +19,7 @@ import { config } from './config.ts';
 import { hasCodexLogin } from './codex-auth.ts';
 import { generateId, now, str, badRequest, HttpError } from './util.ts';
 import { appendAudit } from './audit.ts';
+import { parseLoginToken, daysLeft } from './cursor-login-token.ts';
 import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from './kiro-idc.ts';
 import type { FetchProfilesResult } from './kiro-idc.ts';
 import { pollAgentCoreLoginShared } from './agent/kiro-agentcore.ts';
@@ -36,7 +37,8 @@ export { setProfilesFetcherOverride };
 export type Engine = 'kiro' | 'claude-code' | 'cursor';
 export type KiroMode = 'api_key' | 'identity_center';
 export type ClaudeCodeMode = 'api_key' | 'subscription_token' | 'bedrock_role' | 'aws_keys';
-export type CredentialMode = KiroMode | ClaudeCodeMode;
+export type CursorMode = 'api_key' | 'login_token';
+export type CredentialMode = KiroMode | ClaudeCodeMode | CursorMode;
 
 // CredentialRow is an alias for CredentialRecord for internal use
 type CredentialRow = CredentialRecord;
@@ -201,6 +203,10 @@ type CredentialStatus = 'ok' | 'expiring' | 'expired' | 'needs_sign_in' | 'pendi
  * For identity_center: computed from tokenExpiry, refreshTokenEnc, and clientSecretExpiresAt.
  */
 function computeIdcStatus(row: CredentialRow): { status: CredentialStatus; canRefresh: boolean } {
+  if (String(row.mode) === 'login_token') {
+    const left = daysLeft(safeJson(row.extra_config).tokenExpiry);
+    return { status: left === null ? 'ok' : left < 0 ? 'expired' : left <= 7 ? 'expiring' : 'ok', canRefresh: false };
+  }
   if (String(row.mode) !== 'identity_center') {
     return { status: 'ok', canRefresh: false };
   }
@@ -593,7 +599,7 @@ async function requireOwned(
 const VALID_MODES: Record<Engine, CredentialMode[]> = {
   kiro: ['api_key', 'identity_center'],
   'claude-code': ['api_key', 'subscription_token', 'bedrock_role', 'aws_keys'],
-  cursor: ['api_key'],
+  cursor: ['api_key', 'login_token'],
 };
 
 function validateMode(engine: Engine, mode: string): CredentialMode {
@@ -732,12 +738,17 @@ async function buildEnvFromCred(cred: CredentialRow): Promise<Record<string, str
   const label = `"${String(cred.name)}" (${String(cred.engine)}/${mode})`;
 
   if (String(cred.engine) === 'cursor') {
-    if (!cred.secret_enc) throw new HttpError(400, `Cursor credential ${label} has no API key stored. Update it in Credentials.`);
+    if (!cred.secret_enc) throw new HttpError(400, `Cursor credential ${label} has no key stored. Update it in Credentials.`);
+    if (mode === 'login_token') {
+      // A login token lasts about 60 days; say so plainly instead of letting the CLI fail with a generic sign-in error.
+      const left = daysLeft(extra.tokenExpiry);
+      if (left !== null && left < 0) throw new HttpError(400, `Cursor login token ${label} expired on ${String(extra.tokenExpiry).slice(0, 10)}. Run \`agent login\` again and paste the new token under Credentials.`);
+    }
     let val: string;
     try { val = decrypt(String(cred.secret_enc), config.secretKey); }
     catch { throw new HttpError(500, `Could not decrypt Cursor credential ${label}.`); }
     if (!val) throw new HttpError(400, `Cursor credential ${label} decrypted to an empty value.`);
-    return { CURSOR_API_KEY: val };
+    return mode === 'login_token' ? { CURSOR_AUTH_TOKEN: val } : { CURSOR_API_KEY: val };
   }
 
   if (String(cred.engine) === 'kiro') {
@@ -1079,6 +1090,14 @@ export function registerCredentialRoutes(): void {
       const roleArn = str(credConfig.roleArn as string, 'config.roleArn');
       if (!roleArn.startsWith('arn:')) throw badRequest('config.roleArn must be a valid ARN');
       str(credConfig.region as string, 'config.region'); // validate required
+    } else if (engine === 'cursor' && mode === 'login_token') {
+      // The token itself, or the whole auth.json: only the access token is kept, with its expiry for the card.
+      let parsed;
+      try { parsed = parseLoginToken(str(body.secret as string, 'secret')); }
+      catch (e) { throw badRequest((e as Error).message); }
+      secretEnc = encrypt(parsed.token, config.secretKey);
+      last4 = parsed.token.slice(-4);
+      credConfig.tokenExpiry = parsed.expiresAt;
     } else {
       // api_key or subscription_token: secret required
       const secret = str(body.secret as string, 'secret');
@@ -1130,7 +1149,14 @@ export function registerCredentialRoutes(): void {
       fields.last4 = parsed.last4;
     }
 
-    if (
+    if (String(cred.engine) === 'cursor' && String(cred.mode) === 'login_token' && typeof body.secret === 'string' && body.secret.trim()) {
+      let parsed;
+      try { parsed = parseLoginToken(body.secret); }
+      catch (e) { throw badRequest((e as Error).message); }
+      fields.secret_enc = encrypt(parsed.token, config.secretKey);
+      fields.last4 = parsed.token.slice(-4);
+      fields.extra_config = JSON.stringify({ ...safeJson(cred.extra_config), tokenExpiry: parsed.expiresAt });
+    } else if (
       typeof body.secret === 'string' &&
       body.secret.trim() &&
       String(cred.mode) !== 'bedrock_role' &&
