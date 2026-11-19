@@ -619,6 +619,8 @@ export class AgentPortalCloudStack extends cdk.Stack {
         },
         environmentVariables: {
           ...sharedEnv,
+          // Agent turns run here, and the conversation recap puts the project's approved notes in front of the agent.
+          PORTAL_MEMORY_ID: memory.attrMemoryId,
           PORTAL_JOB_RUNNER: '1',
           // Agent turns inside the runtime may run as long as the session lives (less 5 minutes to finish cleanly).
           PORTAL_RUN_TIMEOUT_MS: String((maxHours * 3600 - 300) * 1000),
