@@ -20,6 +20,7 @@ import { hasCodexLogin } from './codex-auth.ts';
 import { generateId, now, str, badRequest, HttpError } from './util.ts';
 import { appendAudit } from './audit.ts';
 import { parseLoginToken, daysLeft } from './cursor-login-token.ts';
+import { startCursorLogin, pollCursorLogin, LOGIN_WINDOW_SECONDS, type CursorLoginStart } from './cursor-login.ts';
 import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from './kiro-idc.ts';
 import type { FetchProfilesResult } from './kiro-idc.ts';
 import { pollAgentCoreLoginShared } from './agent/kiro-agentcore.ts';
@@ -197,6 +198,40 @@ async function assumeRole(roleArn: string, region: string, externalId?: string):
 
 type CredentialStatus = 'ok' | 'expiring' | 'expired' | 'needs_sign_in' | 'pending';
 
+// ── Cursor browser sign-in ("Sign in with Cursor", server/cursor-login.ts) ────
+
+/** What a pending sign-in keeps on the credential: the uuid, the verifier (encrypted) and when the link stops working. */
+function cursorPendingFields(login: CursorLoginStart): Record<string, unknown> {
+  return { pendingUuid: login.uuid, pendingVerifierEnc: encrypt(login.verifier, config.secretKey), pendingExpireAt: Date.now() + LOGIN_WINDOW_SECONDS * 1000 };
+}
+
+/** The challenge the dialog shows: a link and no code, because Cursor's page needs none. */
+function cursorChallenge(url: string): Record<string, unknown> {
+  return { verificationUri: url, verificationUriComplete: url, userCode: '', expiresIn: LOGIN_WINDOW_SECONDS, interval: 2 };
+}
+
+/** One poll of a pending Cursor sign-in: waits, finishes it (storing only the access token), or reports it expired. */
+async function pollCursorSignIn(req: PortalRequest, res: PortalResponse, cred: CredentialRow): Promise<void> {
+  const extra = safeJson(cred.extra_config);
+  const uuid = String(extra.pendingUuid ?? '');
+  if (!uuid || !extra.pendingVerifierEnc) { sendJson(res, 400, { error: 'No sign-in is in progress for this credential. Start it again.' }); return; }
+  if (Number(extra.pendingExpireAt ?? 0) < Date.now()) { sendJson(res, 200, { status: 'expired' }); return; }
+  let verifier: string;
+  try { verifier = decrypt(String(extra.pendingVerifierEnc), config.secretKey); }
+  catch { sendJson(res, 200, { status: 'expired' }); return; }
+  const result = await pollCursorLogin(uuid, verifier);
+  if (result.status === 'pending') { sendJson(res, 200, { status: 'pending' }); return; }
+  if (result.status === 'failed') { sendJson(res, 200, { status: 'expired', error: result.message }); return; }
+  const { pendingUuid: _u, pendingVerifierEnc: _v, pendingExpireAt: _e, ...rest } = extra;
+  void _u; void _v; void _e;
+  const updated = await getCredentialsRepository().update(String(cred.id), {
+    secret_enc: encrypt(result.token, config.secretKey), last4: result.token.slice(-4),
+    extra_config: JSON.stringify({ ...rest, tokenExpiry: result.expiresAt }), updated_at: now(), updated_by: req.user!.id,
+  });
+  appendAudit(getDb(), req.user!.id, 'credential.signin', `credential:${String(cred.id)}`, { engine: 'cursor' }, req.ip);
+  sendJson(res, 200, { status: 'complete', credential: updated ? credView(updated) : null });
+}
+
 /**
  * Compute the status and canRefresh flag for a credential row.
  * For non-identity_center credentials: status='ok', canRefresh=false.
@@ -204,6 +239,7 @@ type CredentialStatus = 'ok' | 'expiring' | 'expired' | 'needs_sign_in' | 'pendi
  */
 function computeIdcStatus(row: CredentialRow): { status: CredentialStatus; canRefresh: boolean } {
   if (String(row.mode) === 'login_token') {
+    if (!row.secret_enc) return { status: 'pending', canRefresh: false }; // a sign-in started and not finished
     const left = daysLeft(safeJson(row.extra_config).tokenExpiry);
     return { status: left === null ? 'ok' : left < 0 ? 'expired' : left <= 7 ? 'expiring' : 'ok', canRefresh: false };
   }
@@ -251,13 +287,14 @@ function credView(row: CredentialRow) {
     pendingClientSecretExpiresAt: _5,
     refreshTokenEnc: _6, clientSecretEnc: _7,
     pendingClientSecretEnc: _8,
+    pendingUuid: _cu, pendingVerifierEnc: _cv,
     availableProfiles: _av,
     selectedProfileArn: _spa,
     selectedProfileName: _spn,
     profileFetchError: _pfe,
     ...publicConfig
   } = rawConfig;
-  void _1; void _2; void _3; void _4; void _5; void _6; void _7; void _8;
+  void _1; void _2; void _3; void _4; void _5; void _6; void _7; void _8; void _cu; void _cv;
 
   const { status, canRefresh } = computeIdcStatus(row);
 
@@ -1077,6 +1114,20 @@ export function registerCredentialRoutes(): void {
       return;
     }
 
+    // ── Cursor sign-in: the browser login the CLI runs for `agent login`, done here ──
+    if (engine === 'cursor' && mode === 'login_token' && body.signIn === true) {
+      const login = startCursorLogin();
+      if (isDefault) await getCredentialsRepository().clearDefaults(req.user!.id, engine);
+      const created = await getCredentialsRepository().create({
+        id, user_id: req.user!.id, engine, name, mode, secret_enc: null,
+        extra_config: JSON.stringify(cursorPendingFields(login)),
+        is_default: isDefault ? 1 : 0, last4: '', created_at: ts, updated_at: ts, updated_by: req.user!.id,
+      });
+      appendAudit(getDb(), req.user!.id, 'credential.create', `credential:${id}`, { engine, mode, name, signIn: true }, req.ip);
+      sendJson(res, 201, { credential: credView(created), deviceChallenge: cursorChallenge(login.loginUrl) });
+      return;
+    }
+
     // ── bedrock_role: no secret, just config ──────────────────────────────
     let secretEnc: string | null = null;
     let last4 = '';
@@ -1250,6 +1301,11 @@ export function registerCredentialRoutes(): void {
     if (!requireBrowser(req, res)) return;
     const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
+
+    if (String(cred.engine) === 'cursor' && String(cred.mode) === 'login_token') {
+      await pollCursorSignIn(req, res, cred);
+      return;
+    }
 
     if (String(cred.mode) !== 'identity_center') {
       sendJson(res, 400, { error: 'Not an identity_center credential' });
@@ -1454,6 +1510,16 @@ export function registerCredentialRoutes(): void {
     if (!requireBrowser(req, res)) return;
     const cred = await requireOwned(res, req.params.id, req.user!.id);
     if (!cred) return;
+
+    if (String(cred.engine) === 'cursor' && String(cred.mode) === 'login_token') {
+      // Signing in again keeps the current token until the new one arrives, so a session mid-run is not cut off.
+      const login = startCursorLogin();
+      const updated = await getCredentialsRepository().update(String(cred.id), {
+        extra_config: JSON.stringify({ ...safeJson(cred.extra_config), ...cursorPendingFields(login) }), updated_at: now(), updated_by: req.user!.id,
+      });
+      sendJson(res, 200, { credential: credView(updated ?? cred), deviceChallenge: cursorChallenge(login.loginUrl) });
+      return;
+    }
 
     if (String(cred.mode) !== 'identity_center') {
       sendJson(res, 400, { error: 'Only identity_center credentials support re-authentication' });
