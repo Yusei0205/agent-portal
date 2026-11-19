@@ -652,7 +652,9 @@ export class DynamoDbStatsRepository implements StatsRepository {
   ): Promise<AgentRollup[]> {
     const projectIds = await resolveProjectIds(projectId, userId, isAdmin);
     const startDate = since.slice(0, 10);
-    const endDate = until.slice(0, 10);
+    // AGENTSTATS sort keys carry an '#AGENT#<name>' suffix, so 'DAY#<date>#AGENT#x' sorts after 'DAY#<date>'.
+    // The bound must be the day after `until`, otherwise today's rows (the whole 'today' period) are skipped.
+    const endDate = new Date(Date.parse(until) + 86_400_000).toISOString().slice(0, 10);
 
     // Admin (null projectIds) → query AGENTSTATS#GLOBAL (written atomically by finalizeRun).
     // Per-project → query each project's AGENTSTATS bucket.
@@ -670,9 +672,8 @@ export class DynamoDbStatsRepository implements StatsRepository {
           ExpressionAttributeValues: {
             ':pk': { S: `AGENTSTATS#${pid}` },
             ':start': { S: `DAY#${startDate}` },
-            // endDate is the exclusive upper bound; all actual SKs for that date
-            // are 'DAY#${endDate}#AGENT#...' which are lexicographically GREATER
-            // than 'DAY#${endDate}', so the BETWEEN stops before them.
+            // endDate is the day after the range; 'DAY#<endDate>#AGENT#...' sorts after
+            // 'DAY#<endDate>', so the BETWEEN stops before that day's rows.
             ':end': { S: `DAY#${endDate}` },
           },
         });
