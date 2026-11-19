@@ -5,6 +5,8 @@
 const FAMILIES = [
   { name: 'Anthropic Claude', test: /claude|anthropic/i },
   { name: 'OpenAI', test: /\bgpt|openai|codex|\bo[134]\b/i },
+  { name: 'xAI Grok', test: /grok/i },
+  { name: 'Cursor Composer', test: /composer/i },
   { name: 'Amazon Nova & Titan', test: /\bnova\b|titan|amazon\./i },
   { name: 'Meta Llama', test: /llama|meta\./i },
   { name: 'Mistral', test: /mistral|pixtral|mixtral/i },

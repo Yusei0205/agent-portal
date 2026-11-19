@@ -456,6 +456,8 @@ export function ComposerBar({
       ? 'Ask Kiro to continue, refine, or run another task…'
       : workflow?.engine === 'claude-code'
       ? 'Ask Claude to continue, refine, or run another task…'
+      : workflow?.engine === 'cursor'
+      ? 'Ask Cursor to continue, refine, or run another task…'
       : 'Ask the agent to continue, refine, or run another task…';
 
   // Command menu: opens while a "/command" is being typed (no space yet). Names that start with what was typed
@@ -1176,7 +1178,7 @@ export function ComposerBar({
           {trustArmed ? 'trust all tools? press again' : trusted ? 'tools: trusted' : 'tools: ask'}
         </button>
         
-        {workflow?.id && ['kiro', 'claude-code', 'codex'].includes(workflow.engine) && (
+        {workflow?.id && ['kiro', 'claude-code', 'codex', 'cursor'].includes(workflow.engine) && (
           <>
             <PickerChip label="agent" value={workflow.lead_agent || 'default'} disabled={isRunning} load={() => loadChoiceOptions('agent', workflow)} onPick={(v) => runCommand(`/agent ${v}`, 'Could not switch the agent.')} />
           </>

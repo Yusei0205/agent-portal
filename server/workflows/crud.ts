@@ -456,7 +456,7 @@ export function registerWorkflowRoutes(): void {
     const projectDefaultModel = typeof project.default_model === 'string' && project.default_model
       ? project.default_model
       : null;
-    const model: string = requestModel ?? (wsEngineMatches ? wsDefaultModel : null) ?? (engine === 'codex' ? null : projectDefaultModel) ?? '';
+    const model: string = requestModel ?? (wsEngineMatches ? wsDefaultModel : null) ?? (engine === 'codex' || engine === 'cursor' ? null : projectDefaultModel) ?? '';
 
     // A loop session's rules and checks are validated before anything is created (a check may not be allowed).
     let loopState: string | null = null;
@@ -504,7 +504,7 @@ export function registerWorkflowRoutes(): void {
     }
 
     // Terse replies (caveman) for a Claude, Kiro or Codex session that asked for them.
-    if (body.caveman === true && (engine === 'claude-code' || engine === 'kiro' || engine === 'codex')) await setCavemanMode(id, true);
+    if (body.caveman === true && (engine === 'claude-code' || engine === 'kiro' || engine === 'codex' || engine === 'cursor')) await setCavemanMode(id, true);
 
     // createWorkflow owns the child-count increment internally (both backends).
     emit(projectId, { type: 'workflow.created', workflowId: id });
@@ -1397,8 +1397,8 @@ ${answer}`,
 
 // ── Validation helpers ─────────────────────────────────────────────────────────
 
-type Engine = 'claude-code' | 'kiro' | 'codex' | 'demo';
-const VALID_ENGINES: Engine[] = ['claude-code', 'kiro', 'codex', 'demo'];
+type Engine = 'claude-code' | 'kiro' | 'codex' | 'cursor' | 'demo';
+const VALID_ENGINES: Engine[] = ['claude-code', 'kiro', 'codex', 'cursor', 'demo'];
 
 function validateEngine(v: unknown): Engine {
   if (!v) return 'demo'; // default to demo in greenfield

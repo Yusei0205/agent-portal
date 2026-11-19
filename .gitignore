@@ -1,6 +1,7 @@
 node_modules
 dist/
 codex-runner/dist/
+cursor-runner/dist/
 data/
 .env
 *.log

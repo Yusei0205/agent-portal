@@ -10,7 +10,7 @@ import { badRequest } from './util.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 
 export interface CreateAi {
-  engine: 'kiro' | 'claude-code' | 'codex' | 'demo';
+  engine: 'kiro' | 'claude-code' | 'codex' | 'cursor' | 'demo';
   credential_id: string | null;
   model: string;
 }
@@ -29,7 +29,7 @@ export function runsInCloud(): boolean {
  * The sign-in of `userId` for one engine, as the id the model pickers use: their default one, else any they have; 'codex-account'
  * for Codex. null when they have none. Used where a project names an engine and each person's own sign-in is found at run time.
  */
-export async function credentialIdForEngine(userId: string, engine: 'claude-code' | 'kiro' | 'codex'): Promise<string | null> {
+export async function credentialIdForEngine(userId: string, engine: 'claude-code' | 'kiro' | 'codex' | 'cursor'): Promise<string | null> {
   if (engine === 'codex') {
     const { hasCodexLogin } = await import('./codex-auth.ts');
     return (await hasCodexLogin(userId)) ? CODEX_ACCOUNT_ID : null;
@@ -58,7 +58,7 @@ export async function resolveCreateAi(userId: string, body: Record<string, unkno
   }
   if (credentialId) {
     const c = await repo.getByIdAndUser(credentialId, userId);
-    if (!c || (c.engine !== 'kiro' && c.engine !== 'claude-code')) throw badRequest('That sign-in was not found. Pick one of your Kiro, Claude or Codex sign-ins.');
+    if (!c || (c.engine !== 'kiro' && c.engine !== 'claude-code' && c.engine !== 'cursor')) throw badRequest('That sign-in was not found. Pick one of your Kiro, Claude, Cursor or Codex sign-ins.');
     return { engine: c.engine, credential_id: c.id, model: requestedModel };
   }
 

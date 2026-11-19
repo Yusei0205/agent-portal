@@ -2225,6 +2225,34 @@ export function migrateCodexConfig(database: DatabaseSync): void {
 }
 
 /**
+ * Cursor engine: widen the engine and folder CHECK constraints (same schema-edit procedure as migrateCodexEngine).
+ * Each constraint is patched only while it is still in its old form, so this is safe on a database that already has it.
+ */
+export function migrateCursorEngine(database: DatabaseSync): void {
+  const patches: Array<{ table: string; before: string; after: string }> = [
+    { table: 'p6_workflows', before: "CHECK(engine IN ('claude-code','kiro','codex','demo'))", after: "CHECK(engine IN ('claude-code','kiro','codex','cursor','demo'))" },
+    { table: 'engine_credentials', before: "CHECK(engine IN ('kiro','claude-code'))", after: "CHECK(engine IN ('kiro','claude-code','cursor'))" },
+    { table: 'user_config_state', before: "CHECK(folder IN ('kiro','claude','codex','aws'))", after: "CHECK(folder IN ('kiro','claude','codex','cursor','aws'))" },
+    { table: 'team_config_versions', before: "CHECK(folder IN ('kiro','claude','codex','aws'))", after: "CHECK(folder IN ('kiro','claude','codex','cursor','aws'))" },
+  ];
+  const todo: Array<{ table: string; sql: string }> = [];
+  for (const p of patches) {
+    const row = database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = ?").get(p.table) as { sql: string } | undefined;
+    if (!row || row.sql.includes(p.after)) continue;
+    if (!row.sql.includes(p.before)) throw new Error(`Unexpected ${p.table} constraint`);
+    todo.push({ table: p.table, sql: row.sql.replace(p.before, p.after) });
+  }
+  if (!todo.length) return;
+  const version = Number((database.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version);
+  database.exec('PRAGMA writable_schema = ON');
+  try {
+    for (const p of todo) database.prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = ?").run(p.sql, p.table);
+    database.exec('PRAGMA schema_version = ' + (version + 1));
+  } finally { database.exec('PRAGMA writable_schema = RESET'); }
+  if ((database.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check !== 'ok') throw new Error('Cursor schema migration integrity check failed');
+}
+
+/**
  * API simulation tables (docs/plans/2026-11-10-api-simulation.md).
  */
 const M52_API_SIMULATION = `
@@ -2323,7 +2351,7 @@ function ensureApiSimSchema(database: DatabaseSync): void {
   `);
 }
 
-const MIGRATIONS: Array<string | ((database: DatabaseSync) => void)> = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY, M44_APPROVAL_BINDING, M45_RUN_LIMITS, M46_LOOP_STATE, M47_FEEDBACK, M48_KIRO_CREDITS, migrateCodexEngine, M50_CODEX_CLOUD, migrateCodexConfig, M52_API_SIMULATION];
+const MIGRATIONS: Array<string | ((database: DatabaseSync) => void)> = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY, M44_APPROVAL_BINDING, M45_RUN_LIMITS, M46_LOOP_STATE, M47_FEEDBACK, M48_KIRO_CREDITS, migrateCodexEngine, M50_CODEX_CLOUD, migrateCodexConfig, M52_API_SIMULATION, migrateCursorEngine];
 
 MIGRATIONS.push(`CREATE TABLE IF NOT EXISTS automation_records (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

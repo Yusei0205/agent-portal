@@ -26,6 +26,7 @@ import { safeUrl } from '../lib/safeUrl.js';
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function modeLabel(engine, mode) {
+  if (engine === 'cursor') return 'API key';
   if (engine === 'kiro') {
     return mode === 'api_key' ? 'API key' : 'IAM Identity Center';
   }
@@ -297,7 +298,10 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
     { id: 'aws_keys',          label: 'Amazon Bedrock (AWS access keys)', desc: 'Your company signs in to AWS with SSO. Paste the keys the AWS access portal copies for you; they expire after a few hours.' },
     { id: 'bedrock_role',      label: 'Amazon Bedrock (IAM role)', desc: 'Your company runs Claude on AWS Bedrock and gave you a role ARN. No secret is stored.' },
   ];
-  const modes = engine === 'kiro' ? KIRO_MODES : CLAUDE_MODES;
+  const CURSOR_MODES = [
+    { id: 'api_key', label: 'Cursor API key', desc: 'Create one at cursor.com/dashboard/api. Usage is billed to your Cursor plan.' },
+  ];
+  const modes = engine === 'kiro' ? KIRO_MODES : engine === 'cursor' ? CURSOR_MODES : CLAUDE_MODES;
 
   const dialogRef = useRef(null);
   const firstFieldRef = useRef(null);
@@ -367,7 +371,7 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
     }
   };
 
-  const engineLabel = engine === 'kiro' ? 'Kiro' : 'Claude Code';
+  const engineLabel = engine === 'kiro' ? 'Kiro' : engine === 'cursor' ? 'Cursor' : 'Claude Code';
   const isDeviceFlow = deviceChallenge && deviceCredId;
   const overlayDismiss = useOverlayDismiss(onClose);
 
@@ -920,8 +924,8 @@ function CredentialCard({ cred, onSetDefault, onRemove, onRefresh }) {
 
 function EngineSection({ engine, credentials, onRefresh }) {
   const [addOpen, setAddOpen] = useState(false);
-  const label = engine === 'kiro' ? 'Kiro' : 'Claude Code';
-  const folder = engine === 'kiro' ? '~/.kiro' : 'claude setup-token / API';
+  const label = engine === 'kiro' ? 'Kiro' : engine === 'cursor' ? 'Cursor' : 'Claude Code';
+  const folder = engine === 'kiro' ? '~/.kiro' : engine === 'cursor' ? 'API key from cursor.com/dashboard/api' : 'claude setup-token / API';
 
   return (
     <section className="cred-engine-section" aria-labelledby={`cred-engine-${engine}`}>
@@ -1018,13 +1022,14 @@ export function Credentials({ user }) {
 
   const kiroCredentials = (credentials || []).filter((c) => c.engine === 'kiro');
   const claudeCredentials = (credentials || []).filter((c) => c.engine === 'claude-code');
+  const cursorCredentials = (credentials || []).filter((c) => c.engine === 'cursor');
 
   return (
     <div className="page">
       <PageHeader
         title="Credentials"
         description={<>
-          Your own sign-ins for Codex, Kiro and Claude Code. Your sessions use these first; without one
+          Your own sign-ins for Codex, Kiro, Claude Code and Cursor. Your sessions use these first; without one
           they fall back to the{' '}
           {isAdmin ? <a href="#/settings">portal AI provider</a> : 'portal AI provider'}.{' '}
           Secrets are write-only and never appear in logs or transcripts.
@@ -1042,6 +1047,12 @@ export function Credentials({ user }) {
       <EngineSection
         engine="claude-code"
         credentials={claudeCredentials}
+        onRefresh={load}
+      />
+
+      <EngineSection
+        engine="cursor"
+        credentials={cursorCredentials}
         onRefresh={load}
       />
     </div>

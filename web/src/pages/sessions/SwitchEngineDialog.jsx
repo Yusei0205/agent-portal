@@ -22,7 +22,7 @@ import { ENGINES, AgentPicker, ModelPicker, CredentialPicker, defaultCredential 
 export function SwitchEngineDialog({ workflow, projectId, onClose, onSwitched }) {
   const current = workflow.engine || 'demo';
   // Default to the other real engine: the usual reason to switch is that the current one can't go on.
-  const [engine, setEngine] = useState(current === 'kiro' ? 'claude-code' : current === 'claude-code' ? 'kiro' : 'claude-code');
+  const [engine, setEngine] = useState(current === 'kiro' ? 'claude-code' : current === 'claude-code' ? 'kiro' : current === 'cursor' ? 'claude-code' : 'claude-code');
   const [credSummary, setCredSummary] = useState(null);
   const [codexReady, setCodexReady] = useState(false);
   const [portalMode, setPortalMode] = useState('demo');

@@ -224,6 +224,7 @@ function AddSpecModal({ projectId, onClose, onCreated }) {
                 <option value="claude-code">Claude Code</option>
                 <option value="kiro">Kiro</option>
                     <option value="codex">Codex</option>
+                    <option value="cursor">Cursor</option>
                 <option value="demo">Demo (no AI)</option>
               </select>
             </div>

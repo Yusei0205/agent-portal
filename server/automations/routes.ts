@@ -160,7 +160,7 @@ export function registerAutomationRoutes(): void {
     const description = str(body.description, 'Description', { max: DESCRIPTION_MAX }).trim();
     const changes = str(body.changes as string, 'Changes', { max: 2000, optional: true }).trim();
     const previous = body.previous ? parseGraph(body.previous) : null;
-    const engine = ['codex', 'claude-code', 'kiro', 'demo'].includes(String(body.engine)) ? body.engine as 'codex' | 'claude-code' | 'kiro' | 'demo' : undefined;
+    const engine = ['codex', 'claude-code', 'kiro', 'cursor', 'demo'].includes(String(body.engine)) ? body.engine as 'codex' | 'claude-code' | 'kiro' | 'cursor' | 'demo' : undefined;
     const repos = await getGitReposRepository().listByProject(project);
     const integrations = (await getIntegrationsRepository().listByProject(project)).filter((i) => i.type === 'http' && i.enabled === 1);
     const draft = await generateWorkflow({

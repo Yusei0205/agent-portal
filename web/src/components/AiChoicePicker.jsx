@@ -29,7 +29,7 @@ export function AiChoicePicker({ onChange, disabled = false, idPrefix = 'ai', al
         if (cancelled) return;
         // Claude Code credentials first (they also give a choice of model), then Kiro ones.
         const list = [];
-        for (const engine of ['claude-code', 'kiro']) {
+        for (const engine of ['claude-code', 'kiro', 'cursor']) {
           const entry = (cs.summary || []).find((e) => e.engine === engine);
           for (const c of entry?.credentials || []) list.push({ ...c, engine });
         }

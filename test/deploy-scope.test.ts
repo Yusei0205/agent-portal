@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 // @ts-expect-error pure JavaScript CI helper has no declaration file
-import { RUNNER_PATHS, CODEX_PATHS, matches, anyMatch, scopeFor, changedFiles, codexBundleFiles } from '../scripts/deploy-scope.mjs';
+import { RUNNER_PATHS, CODEX_PATHS, CURSOR_PATHS, matches, anyMatch, scopeFor, changedFiles, codexBundleFiles, cursorBundleFiles } from '../scripts/deploy-scope.mjs';
 // @ts-expect-error pure JavaScript deploy helper has no declaration file
 import { HARNESS_SERVER_FILES } from '../infra/scripts/harness-sources.mjs';
 
@@ -63,14 +63,16 @@ describe('Codex image scope', () => {
 
   it('decides from the changed files', async () => {
     const codex = await codexBundleFiles();
-    const of = (...files: string[]) => scopeFor(files, codex);
-    assert.deepEqual(of('web/src/pages/CodeMap.jsx', 'docs/x.md', 'test/zip-attachments.test.ts'), { runners: false, codex: false });
-    assert.deepEqual(of('codex-runner/src/index.ts'), { runners: false, codex: true });
-    assert.deepEqual(of('codex-runner/Dockerfile'), { runners: false, codex: true });
-    assert.deepEqual(of('package-lock.json'), { runners: false, codex: true });
-    assert.deepEqual(of('kiro-runner/src/run.ts'), { runners: true, codex: false });
-    assert.deepEqual(of('server/agent/runner-files.ts'), { runners: true, codex: true });
-    assert.deepEqual(of('server/agent/codex-session.ts'), { runners: false, codex: true });
+    const cursor = await cursorBundleFiles();
+    const of = (...files: string[]) => scopeFor(files, codex, cursor);
+    const none = { runners: false, codex: false, cursor: false };
+    assert.deepEqual(of('web/src/pages/CodeMap.jsx', 'docs/x.md', 'test/zip-attachments.test.ts'), none);
+    assert.deepEqual(of('codex-runner/src/index.ts'), { ...none, codex: true });
+    assert.deepEqual(of('codex-runner/Dockerfile'), { ...none, codex: true });
+    assert.deepEqual(of('package-lock.json'), { ...none, codex: true, cursor: true });
+    assert.deepEqual(of('kiro-runner/src/run.ts'), { ...none, runners: true });
+    assert.deepEqual(of('server/agent/runner-files.ts'), { runners: true, codex: true, cursor: true });
+    assert.deepEqual(of('server/agent/codex-session.ts'), { ...none, codex: true });
     assert.ok(CODEX_PATHS.includes('infra/lib/codex-runner-stack.ts'));
   });
 
@@ -78,6 +80,30 @@ describe('Codex image scope', () => {
     assert.equal(changedFiles(undefined, 'abc'), null);
     assert.equal(changedFiles('0000000000000000000000000000000000000000', 'abc'), null);
     assert.equal(changedFiles('deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', 'cafebabecafebabecafebabecafebabecafebabe'), null);
+  });
+});
+
+describe('Cursor image scope', () => {
+  it('reads the files the Cursor bundle is made of', async () => {
+    const files = await cursorBundleFiles();
+    assert.ok(files.has('cursor-runner/src/index.ts'));
+    assert.ok(files.has('server/agent/cursor-turn.ts'), 'its shared turn driver');
+    assert.ok(files.has('server/agent/runner-files.ts'), 'a shared module it imports');
+    assert.ok([...files].every((f) => !f.includes('node_modules')));
+    assert.equal(files.has('server/agent/codex-session.ts'), false);
+  });
+
+  it('decides from the changed files, apart from the Codex runner', async () => {
+    const codex = await codexBundleFiles();
+    const cursor = await cursorBundleFiles();
+    const of = (...files: string[]) => scopeFor(files, codex, cursor);
+    const none = { runners: false, codex: false, cursor: false };
+    assert.deepEqual(of('cursor-runner/src/service.ts'), { ...none, cursor: true });
+    assert.deepEqual(of('cursor-runner/Dockerfile'), { ...none, cursor: true });
+    assert.deepEqual(of('server/agent/cursor-turn.ts'), { ...none, cursor: true });
+    assert.deepEqual(of('server/agent/codex-session.ts'), { ...none, codex: true });
+    assert.deepEqual(of('server/agent/cursor-agentcore.ts'), none);
+    assert.ok(CURSOR_PATHS.includes('infra/lib/cursor-runner-stack.ts'));
   });
 });
 
@@ -109,6 +135,14 @@ describe('portal deploy workflow', () => {
     assert.doesNotMatch(wf, /aws cloudformation/);
     assert.match(wf, /CODEX_RUNTIME_ARN: \$\{\{ vars\.CODEX_RUNTIME_ARN \|\| 'arn:aws:bedrock-agentcore:[^']+agentPortalCodexRunner-[^']+' \}\}/);
     assert.match(wf, /Codex runtime changed/);
+  });
+
+  it('deploys the Cursor runner only when its image changed, and passes its runtime on every portal deploy', () => {
+    assert.ok(wf.includes("if: steps.scope.outputs.cursor == 'true'"));
+    assert.ok(wf.includes("CURSOR_RUNTIME_ARN: ${{ vars.CURSOR_RUNTIME_ARN }}"));
+    assert.ok(wf.includes('-c "cursorRuntimeArn=$CURSOR_RUNTIME_ARN"'));
+    assert.ok(wf.includes("Cursor runtime changed"));
+    assert.ok(wf.includes("- cursor-runner/**"));
   });
 
   it('builds the portal Lambda for arm64 like the other images', () => {

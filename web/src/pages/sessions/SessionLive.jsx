@@ -1192,7 +1192,7 @@ export function SessionLive({
 
   // ── Derived values ──────────────────────────────────────────────────────
 
-  const agentName = workflow?.engine === 'codex' ? 'Codex' : workflow?.engine === 'kiro'         ? 'Kiro'
+  const agentName = workflow?.engine === 'codex' ? 'Codex' : workflow?.engine === 'cursor' ? 'Cursor' : workflow?.engine === 'kiro'         ? 'Kiro'
     : workflow?.engine === 'claude-code' ? 'Claude'
     : (workflow?.engine ? String(workflow.engine) : 'Agent');
 

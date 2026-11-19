@@ -19,6 +19,11 @@ export async function findUserCredential(userId: string | null | undefined, engi
   const repo = getCredentialsRepository();
   const flagged = await repo.getDefaultByUserAndEngine(userId, engine);
   if (flagged) return flagged;
+  if (engine === 'cursor') {
+    // Cursor has one kind of sign-in (an API key), so the oldest usable one is the only way to run it.
+    return (await repo.listByUser(userId)).filter((c) => c.engine === 'cursor' && usable(c))
+      .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)))[0] ?? null;
+  }
   if (engine !== 'kiro') return null;
   const mine = (await repo.listByUser(userId))
     .filter((c) => c.engine === 'kiro')

@@ -32,6 +32,11 @@ export async function codexStateAccess(workflowId: string): Promise<SnapshotAcce
   return accessForKey(`codex-state-snapshots/${workflowId}.tar.gz`);
 }
 
+/** Cursor chat files (~/.cursor/chats), kept apart from the workspace snapshot; never credentials. */
+export async function cursorStateAccess(workflowId: string): Promise<SnapshotAccess | null> {
+  return accessForKey(`cursor-state-snapshots/${workflowId}.tar.gz`);
+}
+
 async function accessForKey(key: string): Promise<SnapshotAccess | null> {
   try {
     const storage = getStorage();
@@ -50,4 +55,5 @@ async function accessForKey(key: string): Promise<SnapshotAccess | null> {
 export async function deleteSnapshot(workflowId: string): Promise<void> {
   try { await getStorage().delete(snapshotKey(workflowId)); } catch { /* the bucket's expiry rule removes it anyway */ }
   try { await getStorage().delete(`codex-state-snapshots/${workflowId}.tar.gz`); } catch { /* the bucket's expiry rule removes it anyway */ }
+  try { await getStorage().delete(`cursor-state-snapshots/${workflowId}.tar.gz`); } catch { /* the bucket's expiry rule removes it anyway */ }
 }

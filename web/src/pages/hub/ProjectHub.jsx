@@ -1239,6 +1239,7 @@ function PullRequestsTab({ projectId, canEdit, toast }) {
               <option value="claude-code">Claude</option>
               <option value="kiro">Kiro</option>
               <option value="codex">Codex</option>
+              <option value="cursor">Cursor</option>
             </select>
           </div>
           {settings.reviewEngine && canEdit && (

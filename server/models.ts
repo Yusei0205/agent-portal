@@ -37,6 +37,7 @@ import type { KiroTokenPayload } from './agent/kiro-agentcore.ts';
 import type { KiroModelRaw } from './kiro-list-models.ts';
 import { checkKiroIdcHookSupport } from './kiro-idc-check.ts';
 import { findUserCredential } from './credential-default.ts';
+import { listCursorModels } from './cursor-models.ts';
 import { getCredentialsRepository } from './repositories/credentials.ts';
 
 // ── Re-export test hook so tests can inject Bedrock mock here too ─────────────
@@ -51,7 +52,7 @@ export interface EngineModelEntry {
   default?: true;
 }
 
-export type EngineModelSource = 'codex' | 'kiro-cli' | 'bedrock' | 'anthropic' | 'static' | 'none';
+export type EngineModelSource = 'codex' | 'cursor' | 'kiro-cli' | 'bedrock' | 'anthropic' | 'static' | 'none';
 
 /**
  * Credential isolation status for identity_center credentials.
@@ -404,7 +405,7 @@ export function planCheckModelIds(): string[] {
  * `userId` is the authenticated user's ID; `requestedCredentialId` may be null.
  */
 export async function getEngineModels(
-  engine: 'kiro' | 'claude-code' | 'codex',
+  engine: 'kiro' | 'claude-code' | 'codex' | 'cursor',
   userId: string,
   requestedCredentialId: string | null,
   refresh: boolean,
@@ -432,6 +433,28 @@ export async function getEngineModels(
     } catch {
       return { models: [], source: 'codex', runsAs, error: 'Could not list Codex models. Check Codex installation and sign-in in Connect > Agent sign-ins.' };
     } finally { client?.close(); }
+  }
+
+  if (engine === 'cursor') {
+    // The person's Cursor API key (an explicit choice, else their default); with none, a local install's own `agent login` answers.
+    const cred = requestedCredentialId
+      ? await getCredentialsRepository().getByIdAndUser(requestedCredentialId, userId)
+      : await findUserCredential(userId, 'cursor');
+    if (requestedCredentialId && (!cred || cred.engine !== 'cursor')) return { models: [], source: 'none', runsAs: { kind: 'credential', label: 'unknown' }, error: 'Cursor sign-in not found.' };
+    const runsAs = { kind: 'credential' as const, label: cred ? `Cursor API key "${String(cred.name)}"` : 'The Cursor CLI sign-in on this machine' };
+    let key: string | null = null;
+    if (cred) {
+      try { key = decrypt(String(cred.secret_enc), config.secretKey); }
+      catch { return { models: [], source: 'none', runsAs, error: 'Could not decrypt the Cursor API key.' }; }
+    }
+    if (process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN) {
+      try {
+        const { listCursorModelsViaAgentCore } = await import('./agent/cursor-agentcore.ts');
+        return { models: await listCursorModelsViaAgentCore(userId, cred ? String(cred.id) : null), source: 'cursor', runsAs };
+      } catch (e) { return { models: [], source: 'cursor', runsAs, error: (e as Error).message }; }
+    }
+    const r = await listCursorModels(key);
+    return { models: r.models, source: 'cursor', runsAs, ...(r.error ? { error: r.error } : {}) };
   }
 
   // ── 1. Resolve which credential to use ──────────────────────────────────
@@ -842,8 +865,8 @@ async function listBedrockModelsForRole(
 export function registerEngineModelRoutes(): void {
   router.get('/api/engines/:engine/models', requireAuth(async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const engine = req.params.engine;
-    if (engine !== 'kiro' && engine !== 'claude-code' && engine !== 'codex') {
-      sendJson(res, 400, { error: 'engine must be kiro, claude-code, or codex' });
+    if (engine !== 'kiro' && engine !== 'claude-code' && engine !== 'codex' && engine !== 'cursor') {
+      sendJson(res, 400, { error: 'engine must be kiro, claude-code, codex, or cursor' });
       return;
     }
 
@@ -852,7 +875,7 @@ export function registerEngineModelRoutes(): void {
     const refresh = qs.get('refresh') === '1';
 
     const result = await getEngineModels(
-      engine as 'kiro' | 'claude-code' | 'codex',
+      engine as 'kiro' | 'claude-code' | 'codex' | 'cursor',
       req.user!.id,
       credentialId,
       refresh,

@@ -31,6 +31,7 @@ on:
     paths:
       - server/**
       - codex-runner/**
+      - cursor-runner/**
       - web/**
       - scripts/**
       - '!scripts/test-*.mjs'
@@ -42,6 +43,7 @@ on:
     paths:
       - server/**
       - codex-runner/**
+      - cursor-runner/**
       - web/**
       - infra/**
       - .github/workflows/deploy-portal.yml
@@ -107,6 +109,8 @@ jobs:
       PUBLIC_URL: ${{ vars.PUBLIC_URL || 'https://d1tah6dqw2fe9f.cloudfront.net' }}
       # The running Codex runtime. A push that changes its image deploys it again and reads the ARN from that deploy; any other push keeps this one.
       CODEX_RUNTIME_ARN: ${{ vars.CODEX_RUNTIME_ARN || 'arn:aws:bedrock-agentcore:ap-southeast-1:366019841051:runtime/agentPortalCodexRunner-zv1jk79Zxs' }}
+      # The running Cursor runtime (empty until the Cursor runner is first deployed: Cursor then runs on the portal host only).
+      CURSOR_RUNTIME_ARN: ${{ vars.CURSOR_RUNTIME_ARN }}
       CODEX_AUTH_MODE: ${{ vars.CODEX_AUTH_MODE || 'oauth' }}
       CODEX_OAUTH_CLIENT_ID: ${{ vars.CODEX_OAUTH_CLIENT_ID }}
       CODEX_OAUTH_CLIENT_SECRET_ARN: ${{ vars.CODEX_OAUTH_CLIENT_SECRET_ARN }}
@@ -198,6 +202,35 @@ jobs:
           echo "CODEX_RUNTIME_ARN=$arn" >> "$GITHUB_ENV"
           echo "CODEX_OAUTH_REDIRECT_URI=$callback" >> "$GITHUB_ENV"
 
+      - name: Deploy Cursor AgentCore runner
+        # Only when a file that goes into its image changed. Its image is built here, natively (this runner is arm64).
+        if: steps.scope.outputs.cursor == 'true'
+        working-directory: infra
+        run: >-
+          npx aws-cdk@2.1147.0 deploy AgentPortalCursorRunner
+          -c cursorRunner=1
+          -c "publicUrl=$PUBLIC_URL"
+          --require-approval never
+          --outputs-file "$RUNNER_TEMP/cursor-runner-outputs.json"
+
+      - name: Find the Cursor AgentCore runtime
+        shell: bash
+        run: |
+          arn="$CURSOR_RUNTIME_ARN"
+          if [[ -f "$RUNNER_TEMP/cursor-runner-outputs.json" ]]; then
+            deployed=$(node -e "const o=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));process.stdout.write(o.AgentPortalCursorRunner?.CursorRuntimeArn||'')" "$RUNNER_TEMP/cursor-runner-outputs.json")
+            if [[ -z "$deployed" ]]; then echo "CDK did not return the CursorRuntimeArn output" >&2; exit 1; fi
+            if [[ "$deployed" != "$arn" ]]; then
+              echo "::warning title=Cursor runtime changed::The Cursor runtime is now $deployed. Set the repository variable CURSOR_RUNTIME_ARN to it, or the next push that does not deploy the Cursor runner drops it."
+            fi
+            arn="$deployed"
+          elif [[ -n "$arn" ]]; then
+            echo "The Cursor runner image is unchanged: keeping the running one ($arn)."
+          else
+            echo "No Cursor runner is deployed: Cursor sessions run on the portal host."
+          fi
+          echo "CURSOR_RUNTIME_ARN=$arn" >> "$GITHUB_ENV"
+
       - name: Deploy AgentPortalCloud
         working-directory: infra
         shell: bash
@@ -211,6 +244,7 @@ jobs:
             -c agentcoreBrowser=true
             -c "publicUrl=$PUBLIC_URL"
             -c "codexRuntimeArn=$CODEX_RUNTIME_ARN"
+            -c "cursorRuntimeArn=$CURSOR_RUNTIME_ARN"
             -c "codexAuthMode=$CODEX_AUTH_MODE"
             -c "codexOAuthClientId=$CODEX_OAUTH_CLIENT_ID"
             -c "codexOAuthRedirectUri=$CODEX_OAUTH_REDIRECT_URI"
@@ -229,5 +263,5 @@ jobs:
           {
             echo "### Portal deploy"
             echo "Commit \`${GITHUB_SHA::7}\` → AgentPortalCloud, ${PUBLIC_URL}"
-            echo "Runner images changed: ${{ steps.scope.outputs.runners || 'not checked' }}; Codex runner deployed: ${{ steps.scope.outputs.codex || 'not checked' }}."
+            echo "Runner images changed: ${{ steps.scope.outputs.runners || 'not checked' }}; Codex runner deployed: ${{ steps.scope.outputs.codex || 'not checked' }}; Cursor runner deployed: ${{ steps.scope.outputs.cursor || 'not checked' }}."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -42,6 +42,7 @@ import { runDemo } from './demo.ts';
 import { runClaudeCode } from './claude-code.ts';
 import { runKiro } from './kiro.ts';
 import { runCodex } from './codex.ts';
+import { runCursor } from './cursor.ts';
 import { materialiseForRun, cleanupRunHome } from '../user-config.ts';
 import { projectAwsEnv } from '../project-aws.ts';
 import { collectInputFilesWithUrls } from './input-file-urls.ts';
@@ -502,7 +503,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       projectId: workflow.project_id ? String(workflow.project_id) : null,
       goal: prompt,  // pending messages on resume; original goal on first run
       kind: workflow.kind ? String(workflow.kind) : null,
-      engine: (workflow.engine as 'claude-code' | 'kiro' | 'codex' | 'demo') || 'demo',
+      engine: (workflow.engine as 'claude-code' | 'kiro' | 'codex' | 'cursor' | 'demo') || 'demo',
       trusted: Boolean(workflow.trust_tools),
       planMode: planMode(workflowId),
       dataDir: config.dataDir,
@@ -513,7 +514,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       permissions,
       // A session made without a chosen sign-in (a workflow, a review) uses the person's Kiro sign-in rather than none.
       credentialId: workflow.credential_id ? String(workflow.credential_id)
-        : workflow.engine === 'kiro' ? ((await findUserCredential(workflow.created_by ? String(workflow.created_by) : null, 'kiro'))?.id ?? null) : null,
+        : workflow.engine === 'kiro' || workflow.engine === 'cursor' ? ((await findUserCredential(workflow.created_by ? String(workflow.created_by) : null, String(workflow.engine)))?.id ?? null) : null,
       credentialOwnerId: workflow.created_by ? String(workflow.created_by) : null,
       model: workflow.model && String(workflow.model).trim() ? String(workflow.model).trim() : null,
       engineSessionId: resumableEngineSessionId(workflow),
@@ -550,7 +551,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
     const runsOnAgentCore =
       (agentRun.engine === 'kiro' && Boolean(process.env.PORTAL_KIRO_AGENTCORE_RUNTIME_ARN))
       || (agentRun.engine === 'claude-code' && Boolean(process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN))
-      || (agentRun.engine === 'codex' && Boolean(process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN));
+      || (agentRun.engine === 'codex' && Boolean(process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN))
+      || (agentRun.engine === 'cursor' && Boolean(process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN));
     let availableRepoNames: string[] = [];
     let jiraHint = '';
     if (runsOnAgentCore) {
@@ -608,7 +610,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         // Clone them before the run's clock starts, so a long clone does not use up the turn's time (a 4-minute clone
         // is 4 of the 14 minutes a cloud turn has), and a refused sign-in is reported instead of starting an agent
         // that cannot see the code.
-        if (agentRun.engine !== 'codex') {
+        if (agentRun.engine !== 'codex' && agentRun.engine !== 'cursor') {
           const problem = await ensureReposPrepared(
             workflowId, specs.map((r) => r.name),
             (text) => emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text }),
@@ -673,11 +675,13 @@ ${agentRun.goal}`;
         result = await runClaudeCode(runContext);
       } else if (agentRun.engine === 'codex') {
         result = await runCodex(runContext);
+      } else if (agentRun.engine === 'cursor') {
+        result = await runCursor(runContext);
       } else if (agentRun.engine === 'kiro') {
         result = await runKiro(runContext);
       } else {
         // Unknown engine: fail with a clear error (requirement D-12 — no silent fallback)
-        throw new Error(`Unknown engine "${agentRun.engine}". Set the workflow engine to claude-code, kiro, codex, or demo.`);
+        throw new Error(`Unknown engine "${agentRun.engine}". Set the workflow engine to claude-code, kiro, codex, cursor, or demo.`);
       }
       if (!runsOnAgentCore && agentRun.runnerChecks?.length) {
         const check = await runCheckSteps(agentRun.runnerChecks, workDir, ctrl.signal);

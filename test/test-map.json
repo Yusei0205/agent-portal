@@ -1876,6 +1876,28 @@
         "credentials",
         "codex-setup"
       ]
+    },
+    "cursor": {
+      "description": "Cursor engine: CLI stream-json runs, API-key sign-in, AgentCore runner and chat-state snapshots",
+      "sources": [
+        "server/cursor-cmd.ts",
+        "server/cursor-models.ts",
+        "server/agent/cursor.ts",
+        "server/agent/cursor-stream.ts",
+        "server/agent/cursor-turn.ts",
+        "server/agent/cursor-config.ts",
+        "server/agent/cursor-agentcore.ts",
+        "cursor-runner/src/service.ts",
+        "cursor-runner/src/state.ts",
+        "cursor-runner/src/index.ts"
+      ],
+      "tests": [
+        "test/cursor.test.ts",
+        "test/cursor-stream.test.ts",
+        "test/cursor-runner.test.ts",
+        "test/cursor-config.test.ts"
+      ],
+      "smokeIds": []
     }
   },
   "shared": [

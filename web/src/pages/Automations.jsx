@@ -13,7 +13,7 @@ import { useAttachmentLimits, limitsHint } from '../lib/attachment-limits.js';
 import { WorkflowJiraContextPicker } from '../components/WorkflowJiraContextPicker.jsx';
 
 const kinds = { start: 'Start', agent: 'Agent task', condition: 'Condition', approval: 'Human approval', end: 'End' };
-const engineLabel = { codex: 'Codex', 'claude-code': 'Claude Code', kiro: 'Kiro', demo: 'Demo' };
+const engineLabel = { codex: 'Codex', cursor: 'Cursor', 'claude-code': 'Claude Code', kiro: 'Kiro', demo: 'Demo' };
 
 function StepNode({ data, selected }) {
   const { node, status } = data;
@@ -410,10 +410,10 @@ export default function Automations({ projectId }) {
         <div className="automation-settings">
           <label>Name<input value={definition.name} maxLength={120} onChange={(e) => { setDefinition((d) => ({ ...d, name: e.target.value })); setDirty(true); }} /></label>
           {templateEditing && <label>Description<textarea aria-label="Description" value={templateEditing.description || ''} maxLength={1000} onChange={(event) => { setTemplateEditing((value) => ({ ...value, description: event.target.value })); setDirty(true); }} /></label>}
-          <label>Engine<select value={graph.engine} onChange={(e) => updateGraph({ engine: e.target.value, budgetUsd: ['codex', 'kiro'].includes(e.target.value) ? null : graph.budgetUsd })}><option value="codex">Codex</option><option value="claude-code">Claude Code</option><option value="kiro">Kiro</option><option value="demo">Demo</option></select></label>
+          <label>Engine<select value={graph.engine} onChange={(e) => updateGraph({ engine: e.target.value, budgetUsd: ['codex', 'kiro', 'cursor'].includes(e.target.value) ? null : graph.budgetUsd })}><option value="codex">Codex</option><option value="cursor">Cursor</option><option value="claude-code">Claude Code</option><option value="kiro">Kiro</option><option value="demo">Demo</option></select></label>
           <label>Step limit<input type="number" min="1" max="100" value={graph.maxSteps} onChange={(e) => updateGraph({ maxSteps: Number(e.target.value) })} /></label>
           <label>Time limit (minutes)<input type="number" min="1" max="1440" value={graph.timeoutMinutes} onChange={(e) => updateGraph({ timeoutMinutes: Number(e.target.value) })} /></label>
-          <label>USD budget (optional)<input type="number" min="0.01" max="1000" step="0.01" value={graph.budgetUsd ?? ''} disabled={['codex', 'kiro'].includes(graph.engine)} onChange={(e) => updateGraph({ budgetUsd: e.target.value ? Number(e.target.value) : null })} /></label>
+          <label>USD budget (optional)<input type="number" min="0.01" max="1000" step="0.01" value={graph.budgetUsd ?? ''} disabled={['codex', 'kiro', 'cursor'].includes(graph.engine)} onChange={(e) => updateGraph({ budgetUsd: e.target.value ? Number(e.target.value) : null })} /></label>
         </div>
         <fieldset className="automation-repos"><legend>Repositories</legend>{repos.length ? repos.map((r) => <label key={r.id}><input type="checkbox" checked={graph.repoIds.includes(r.id)} onChange={(e) => updateGraph({ repoIds: e.target.checked ? [...graph.repoIds, r.id] : graph.repoIds.filter((id) => id !== r.id) })} />{r.name}</label>) : <span className="muted">Connect a repository in Workspaces to use it here.</span>}</fieldset>
       </details>

@@ -36,6 +36,7 @@ export const ENGINES = [
   { key: 'claude', label: 'Claude', unit: 'dollars', metric: 'costUsd', fmt: fmtUsd, color: 'var(--accent)' },
   { key: 'kiro', label: 'Kiro', unit: 'credits', metric: 'credits', fmt: fmtCredits, color: 'var(--info)' },
   { key: 'codex', label: 'Codex', unit: 'tokens', metric: 'tokens', fmt: fmtTok, color: 'var(--ok)' },
+  { key: 'cursor', label: 'Cursor', unit: 'tokens', metric: 'tokens', fmt: fmtTok, color: 'var(--accent)' },
   { key: 'other', label: 'Other', unit: 'tokens', metric: 'tokens', fmt: fmtTok, color: 'var(--ink-3)' },
 ];
 
@@ -185,7 +186,7 @@ export function Usage({ projects }) {
 
   const totals = data?.totals;
   const nothingReported = Boolean(data) && (totals?.runs ?? 0) === 0;
-  // Claude, Kiro and Codex always have a card; "Other" only when something used it.
+  // Claude, Kiro, Codex and Cursor always have a card; "Other" only when something used it.
   const shown = ENGINES.filter((e) => e.key !== 'other' || (totals?.engines?.other?.runs ?? 0) > 0);
   const days = data?.byDay ?? [];
 

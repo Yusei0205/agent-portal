@@ -25,6 +25,9 @@ const CODEX_STARTER = [
   { path: 'agents/example-agent.toml', content: 'name = "example-agent"\ndescription = "A focused assistant for your project."\ndeveloper_instructions = "Read the project instructions and complete the assigned task within the workspace."\n' },
   { path: 'skills/example/SKILL.md', content: '---\nname: example\ndescription: A reusable workflow for your project tasks.\n---\n\nWrite the workflow instructions here.\n' },
 ];
+const CURSOR_STARTER = [
+  { path: 'rules/team-conventions.mdc', content: '---\ndescription: Team conventions\nalwaysApply: true\n---\n\nDescribe your team conventions and project guidance here.\n' },
+];
 const KIRO_STARTER = [
   {
     path: 'agents/example-agent.json',
@@ -289,7 +292,7 @@ export function ConfigFileTree({
   // ── Starter structure ──────────────────────────────────────────────────────
 
   const handleAddStarter = async () => {
-    const starterFiles = folder === 'kiro' ? KIRO_STARTER : folder === 'claude' ? CLAUDE_STARTER : folder === 'codex' ? CODEX_STARTER : null;
+    const starterFiles = folder === 'kiro' ? KIRO_STARTER : folder === 'claude' ? CLAUDE_STARTER : folder === 'codex' ? CODEX_STARTER : folder === 'cursor' ? CURSOR_STARTER : null;
     if (!starterFiles) return;
 
     setAddingStarter(true);
@@ -578,7 +581,7 @@ export function ConfigFileTree({
     );
   }
 
-  const hasStarter = folder === 'kiro' || folder === 'claude' || folder === 'codex';
+  const hasStarter = folder === 'kiro' || folder === 'claude' || folder === 'codex' || folder === 'cursor';
   const isEmpty = entries.length === 0;
 
   return (

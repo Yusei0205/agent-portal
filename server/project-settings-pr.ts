@@ -25,7 +25,7 @@ export interface PullRequestSettings {
   reviewModel: string | null;
 }
 
-export const REVIEW_ENGINES = ['claude-code', 'kiro', 'codex'] as const;
+export const REVIEW_ENGINES = ['claude-code', 'kiro', 'codex', 'cursor'] as const;
 export type ReviewEngine = (typeof REVIEW_ENGINES)[number];
 const MODEL_RE = /^[A-Za-z0-9._:/@-]{1,120}$/;
 

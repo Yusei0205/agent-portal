@@ -8,7 +8,7 @@ export interface AutomationNode {
 }
 export interface AutomationEdge { id: string; source: string; target: string; branch: 'next' | 'yes' | 'no' }
 export interface AutomationGraph {
-  schemaVersion: 1; engine: 'demo' | 'codex' | 'claude-code' | 'kiro'; repoIds: string[];
+  schemaVersion: 1; engine: 'demo' | 'codex' | 'claude-code' | 'kiro' | 'cursor'; repoIds: string[];
   maxSteps: number; timeoutMinutes: number; budgetUsd: number | null;
   nodes: AutomationNode[]; edges: AutomationEdge[];
 }
@@ -38,7 +38,7 @@ function checks(raw: unknown): CheckStep[] {
 export function parseGraph(raw: unknown, publish = false): AutomationGraph {
   const g = record(raw);
   if (g.schemaVersion !== 1) throw badRequest('Unsupported workflow schema version');
-  if (!['demo', 'codex', 'claude-code', 'kiro'].includes(String(g.engine))) throw badRequest('Choose a supported engine');
+  if (!['demo', 'codex', 'claude-code', 'kiro', 'cursor'].includes(String(g.engine))) throw badRequest('Choose a supported engine');
   if (!Array.isArray(g.nodes) || g.nodes.length > 40 || !Array.isArray(g.edges) || g.edges.length > 80) throw badRequest('A workflow supports up to 40 steps and 80 connections');
   if (Buffer.byteLength(JSON.stringify(raw)) > 140_000) throw badRequest('Workflow definition exceeds 140 KB');
   const nodes = g.nodes.map((rawNode) => {
@@ -67,7 +67,7 @@ export function parseGraph(raw: unknown, publish = false): AutomationGraph {
   if (!Array.isArray(g.repoIds) || g.repoIds.length > 20 || !g.repoIds.every((v) => typeof v === 'string' && v.length <= 100)) throw badRequest('Invalid repository selection');
   const budget = g.budgetUsd ?? null;
   if (budget !== null && (typeof budget !== 'number' || !Number.isFinite(budget) || budget <= 0 || budget > 1000)) throw badRequest('Budget must be between 0 and 1000 USD');
-  if (budget !== null && ['codex', 'kiro'].includes(String(g.engine))) throw badRequest('This engine does not report dollar cost. Use step and time limits instead.');
+  if (budget !== null && ['codex', 'kiro', 'cursor'].includes(String(g.engine))) throw badRequest('This engine does not report dollar cost. Use step and time limits instead.');
   const graph: AutomationGraph = {
     schemaVersion: 1, engine: g.engine as AutomationGraph['engine'], repoIds: [...new Set(g.repoIds as string[])],
     maxSteps: integer(g.maxSteps, 30, 1, 100), timeoutMinutes: integer(g.timeoutMinutes, 120, 1, 1440), budgetUsd: budget as number | null,

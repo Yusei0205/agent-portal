@@ -26,6 +26,7 @@ function dotClass(status) {
 /** Engine badge label. */
 function engineLabel(engine) {
   if (engine === 'codex') return 'Codex';
+  if (engine === 'cursor') return 'Cursor';
   if (engine === 'kiro') return 'kiro';
   if (engine === 'claude-code') return 'claude';
   return engine || 'demo';
@@ -64,6 +65,8 @@ function SessionRow({ w, projectName, active, checked, onCheck, onRename, select
       ? 'badge badge-engine-kiro'
       : w.engine === 'claude-code'
       ? 'badge badge-engine-claude'
+      : w.engine === 'cursor'
+      ? 'badge badge-engine-cursor'
       : 'badge';
 
   const startRename = (e) => {
@@ -446,6 +449,7 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
               { value: 'all', label: 'All engines' },
               { value: 'kiro', label: 'Kiro' },
               { value: 'codex', label: 'Codex' },
+              { value: 'cursor', label: 'Cursor' },
               { value: 'claude-code', label: 'Claude Code' },
             ].map((f) => (
               <button

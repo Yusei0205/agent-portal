@@ -48,6 +48,7 @@ export const ENGINES = [
     hint: 'Kiro CLI engine',
     providerModes: ['kiro'],
   },
+  { id: 'cursor', label: 'Cursor', hint: 'Cursor CLI with your Cursor API key', providerModes: [] },
 ];
 
 // ── Agent select ───────────────────────────────────────────────────────────────
@@ -378,7 +379,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
     if (!defEngine) { setWsDefaultNote(''); return; }
     const available = isEngineAvailable(defEngine);
     if (!available) {
-      const label = defEngine === 'kiro' ? 'Kiro' : defEngine === 'claude-code' ? 'Claude Code' : defEngine;
+      const label = defEngine === 'kiro' ? 'Kiro' : defEngine === 'claude-code' ? 'Claude Code' : defEngine === 'cursor' ? 'Cursor' : defEngine;
       setWsDefaultNote(`Engine "${label}" from workspace "${ws.name}" is not set up — no credential found.`);
       return;
     }
@@ -434,7 +435,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
     setBusy(true);
     setError(null);
     try {
-      if ((engine === 'kiro' || engine === 'claude-code') && !preflight) {
+      if ((engine === 'kiro' || engine === 'claude-code' || engine === 'cursor') && !preflight) {
         const check = await api.post('/api/credentials/check', { engine, credentialId: credentialId || undefined }).catch(() => null);
         if (check && !check.ok) {
           setPreflight(check);

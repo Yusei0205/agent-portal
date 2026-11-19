@@ -33,7 +33,7 @@ export { setProfilesFetcherOverride };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type Engine = 'kiro' | 'claude-code';
+export type Engine = 'kiro' | 'claude-code' | 'cursor';
 export type KiroMode = 'api_key' | 'identity_center';
 export type ClaudeCodeMode = 'api_key' | 'subscription_token' | 'bedrock_role' | 'aws_keys';
 export type CredentialMode = KiroMode | ClaudeCodeMode;
@@ -593,6 +593,7 @@ async function requireOwned(
 const VALID_MODES: Record<Engine, CredentialMode[]> = {
   kiro: ['api_key', 'identity_center'],
   'claude-code': ['api_key', 'subscription_token', 'bedrock_role', 'aws_keys'],
+  cursor: ['api_key'],
 };
 
 function validateMode(engine: Engine, mode: string): CredentialMode {
@@ -646,7 +647,7 @@ export async function resolveBedrockEnvForRunner(
 }
 
 export async function resolveCredentialEnv(
-  engine: 'kiro' | 'claude-code',
+  engine: 'kiro' | 'claude-code' | 'cursor',
   credentialOwnerId: string | null,
   credentialId: string | null,
   _db?: unknown,
@@ -729,6 +730,15 @@ async function buildEnvFromCred(cred: CredentialRow): Promise<Record<string, str
   const mode = String(cred.mode);
   const extra = safeJson(cred.extra_config);
   const label = `"${String(cred.name)}" (${String(cred.engine)}/${mode})`;
+
+  if (String(cred.engine) === 'cursor') {
+    if (!cred.secret_enc) throw new HttpError(400, `Cursor credential ${label} has no API key stored. Update it in Credentials.`);
+    let val: string;
+    try { val = decrypt(String(cred.secret_enc), config.secretKey); }
+    catch { throw new HttpError(500, `Could not decrypt Cursor credential ${label}.`); }
+    if (!val) throw new HttpError(400, `Cursor credential ${label} decrypted to an empty value.`);
+    return { CURSOR_API_KEY: val };
+  }
 
   if (String(cred.engine) === 'kiro') {
     if (mode === 'api_key') {
@@ -984,8 +994,8 @@ export function registerCredentialRoutes(): void {
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const engineStr = str(body.engine as string, 'engine');
-    if (engineStr !== 'kiro' && engineStr !== 'claude-code') {
-      throw badRequest('engine must be kiro or claude-code');
+    if (engineStr !== 'kiro' && engineStr !== 'claude-code' && engineStr !== 'cursor') {
+      throw badRequest('engine must be kiro, claude-code, or cursor');
     }
     const engine = engineStr as Engine;
     const modeStr = str(body.mode as string, 'mode');
@@ -993,7 +1003,7 @@ export function registerCredentialRoutes(): void {
     const name = (str(body.name as string, 'name', { max: 100, optional: true }).trim()) || `${engine} credential`;
     // A person's first Kiro sign-in is their default whatever the form says (it sends isDefault: false when the box is not
     // ticked): with none marked, every Kiro feature would report "no credentials".
-    const firstKiro = engine === 'kiro' && !(await getCredentialsRepository().getDefaultByUserAndEngine(req.user!.id, engine));
+    const firstKiro = (engine === 'kiro' || engine === 'cursor') && !(await getCredentialsRepository().getDefaultByUserAndEngine(req.user!.id, engine));
     const isDefault = Boolean(body.isDefault ?? false) || firstKiro;
     const credConfig = ((body.config ?? {}) as Record<string, unknown>);
 
@@ -1150,9 +1160,9 @@ export function registerCredentialRoutes(): void {
     if (!cred) return;
 
     await getCredentialsRepository().delete(String(cred.id));
-    if (cred.engine === 'kiro' && cred.is_default) {
-      // Do not leave the person with Kiro sign-ins but none marked as the default.
-      const next = await findUserCredential(req.user!.id, 'kiro');
+    if ((cred.engine === 'kiro' || cred.engine === 'cursor') && cred.is_default) {
+      // Do not leave the person with Kiro (or Cursor) sign-ins but none marked as the default.
+      const next = await findUserCredential(req.user!.id, String(cred.engine));
       if (next) await getCredentialsRepository().setDefault(String(next.id), now());
     }
     appendAudit(getDb(), req.user!.id, 'credential.delete', `credential:${String(cred.id)}`,
@@ -1166,7 +1176,7 @@ export function registerCredentialRoutes(): void {
     if (!requireBrowser(req, res)) return;
     const body = (req.body ?? {}) as Record<string, unknown>;
     const engine = String(body.engine ?? '');
-    if (engine !== 'kiro' && engine !== 'claude-code') throw new HttpError(400, 'engine must be kiro or claude-code');
+    if (engine !== 'kiro' && engine !== 'claude-code' && engine !== 'cursor') throw new HttpError(400, 'engine must be kiro, claude-code, or cursor');
     const credentialId = body.credentialId ? String(body.credentialId) : null;
     if (credentialId && !isBedrockRuntimeChoice(engine, credentialId)) {
       const own = await getCredentialsRepository().getByIdAndUser(credentialId, req.user!.id);
@@ -1590,7 +1600,7 @@ export function registerCredentialRoutes(): void {
   router.get('/api/credentials/summary', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     if (!requireBrowser(req, res)) return;
 
-    const engines: Engine[] = ['kiro', 'claude-code'];
+    const engines: Engine[] = ['kiro', 'claude-code', 'cursor'];
     const summary = await Promise.all(engines.map(async (engine) => {
       const rows = await getCredentialsRepository().listByUser(req.user!.id);
       const engineRows = rows.filter((r) => r.engine === engine);

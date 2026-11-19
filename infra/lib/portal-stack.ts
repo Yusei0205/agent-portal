@@ -79,6 +79,8 @@ export interface AgentPortalCloudProps extends cdk.StackProps {
   /** AgentCore runtime that runs Claude (the agent-runner image); enables Claude sessions on the cloud portal. */
   claudeRuntimeArn?: string;
   codexRuntimeArn?: string;
+  /** The Cursor AgentCore runner (infra/lib/cursor-runner-stack.ts); pass -c cursorRuntimeArn on every deploy or the setting is dropped. */
+  cursorRuntimeArn?: string;
   codexAuthMode?: 'device' | 'oauth';
   codexOAuthClientId?: string;
   codexOAuthRedirectUri?: string;
@@ -278,6 +280,7 @@ export class AgentPortalCloudStack extends cdk.Stack {
       ...(props.googleAllowed ? { PORTAL_GOOGLE_ALLOWED: props.googleAllowed } : {}),
       ...(props.claudeRuntimeArn ? { PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN: props.claudeRuntimeArn } : {}),
       ...(props.codexRuntimeArn ? { PORTAL_CODEX_AGENTCORE_RUNTIME_ARN: props.codexRuntimeArn } : {}),
+      ...(props.cursorRuntimeArn ? { PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN: props.cursorRuntimeArn } : {}),
       PORTAL_CODEX_AUTH_MODE: props.codexAuthMode || 'oauth',
       ...(props.codexOAuthClientId ? { PORTAL_CODEX_OAUTH_CLIENT_ID: props.codexOAuthClientId } : {}),
       ...(props.codexOAuthRedirectUri ? { PORTAL_CODEX_OAUTH_REDIRECT_URI: props.codexOAuthRedirectUri } : {}),
@@ -433,6 +436,10 @@ export class AgentPortalCloudStack extends cdk.Stack {
     if (props.codexRuntimeArn) fn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:InvokeAgentRuntimeWithWebSocketStream', 'bedrock-agentcore:StopRuntimeSession'],
       resources: [props.codexRuntimeArn, `${props.codexRuntimeArn}/*`],
+    }));
+    if (props.cursorRuntimeArn) fn.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['bedrock-agentcore:InvokeAgentRuntime', 'bedrock-agentcore:InvokeAgentRuntimeWithWebSocketStream', 'bedrock-agentcore:StopRuntimeSession'],
+      resources: [props.cursorRuntimeArn, `${props.cursorRuntimeArn}/*`],
     }));
     if (props.storageBucket) {
       const storage = s3.Bucket.fromBucketName(this, 'StorageBucket', props.storageBucket);
