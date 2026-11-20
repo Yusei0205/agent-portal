@@ -594,6 +594,17 @@ async function main() {
       await assertHeading(p, 'Projects');
     }, page);
 
+    await test('the cat mascot pops up a tip, × closes it, and clicking the cat shows a tip again', async (p) => {
+      await goto(p, '/projects');
+      await p.waitForSelector('[data-testid="cat-bubble"]', { timeout: 6000 });
+      const first = await p.locator('[data-testid="cat-bubble"]').innerText();
+      if (!first.includes('Tip:')) throw new Error(`Unexpected bubble text: ${first}`);
+      await p.getByRole('button', { name: 'Close tip' }).click();
+      if (await p.locator('[data-testid="cat-bubble"]').count() !== 0) throw new Error('The bubble did not close');
+      await p.getByRole('button', { name: 'Show a tip' }).click();
+      await p.waitForSelector('[data-testid="cat-bubble"]', { timeout: 2000 });
+    }, page);
+
     await test('New Project modal opens and form is usable', async (p) => {
       await goto(p, '/projects');
       const newBtn = p.locator('button').filter({ hasText: /new project/i }).first();

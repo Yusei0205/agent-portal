@@ -1,0 +1,140 @@
+/* Cat mascot with a tip bubble (web/src/components/CatMascot.jsx). Decorative; theme tokens only, so it fits every theme. */
+
+.cat-mascot {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 150; /* above page content, below dialogs, the command palette and toasts */
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none; /* only the bubble and the cat take clicks */
+}
+
+.cat-bubble,
+.cat-button { pointer-events: auto; }
+
+.cat-bubble {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 10px 10px 10px 12px;
+  margin-right: 18px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--ink) 14%, transparent);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+/* The bubble's tail, pointing at the cat. */
+.cat-bubble::after {
+  content: '';
+  position: absolute;
+  right: 16px;
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  transform: rotate(45deg);
+}
+.cat-bubble-text { margin: 0; overflow-wrap: anywhere; }
+.cat-bubble-text strong { color: var(--accent); font-weight: 650; }
+.cat-bubble-close {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin: -2px -2px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.cat-bubble-close:hover { color: var(--ink); background: var(--raised); }
+.cat-bubble-close:focus-visible,
+.cat-button:focus-visible { outline: none; box-shadow: var(--accent-glow); }
+
+.cat-button {
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  line-height: 0;
+}
+
+/* The cat: drawn with theme colours. */
+.cat-svg { display: block; overflow: visible; }
+.cat-head,
+.cat-body,
+.cat-ear {
+  fill: var(--panel);
+  stroke: var(--ink-2);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.cat-ear-inner { fill: color-mix(in srgb, var(--accent) 35%, var(--panel)); }
+.cat-eye { fill: var(--ink); }
+.cat-nose { fill: color-mix(in srgb, var(--accent) 70%, var(--ink)); }
+.cat-mouth,
+.cat-whisker {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+}
+.cat-whisker { stroke: var(--ink-3); }
+.cat-tail {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+/* Idle animation: a blink and a tail twitch, only when motion is welcome. */
+@media (prefers-reduced-motion: no-preference) {
+  .cat-eyes {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: cat-blink 5s infinite;
+  }
+  .cat-tail {
+    transform-box: fill-box;
+    transform-origin: 0% 100%;
+    animation: cat-tail 3.2s ease-in-out infinite;
+  }
+  .cat-bubble { animation: cat-pop 180ms ease-out; }
+  .cat-button:hover .cat-svg { transform: translateY(-2px); transition: transform 150ms ease-out; }
+}
+@keyframes cat-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
+@keyframes cat-tail {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-12deg); }
+}
+@keyframes cat-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Phones: a smaller cat closer to the corner. */
+@media (max-width: 600px) {
+  .cat-mascot { right: 10px; bottom: 10px; }
+  .cat-svg { width: 44px; height: 44px; }
+  .cat-bubble { max-width: calc(100vw - 44px); margin-right: 12px; font-size: 0.8rem; }
+}
+
+/* Never in print. */
+@media print { .cat-mascot { display: none; } }

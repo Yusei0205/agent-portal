@@ -6,6 +6,7 @@ import { registerShortcuts, registerHandler, triggerShortcut, isEditingField } f
 import { AppHeader } from './components/AppHeader.jsx';
 import { CommandPalette } from './components/CommandPalette.jsx';
 import { ShortcutsSheet } from './components/ShortcutsSheet.jsx';
+import { CatMascot } from './components/CatMascot.jsx';
 import { getTemplate, getActiveTemplateId, fetchAndApplyTheme } from './lib/theme.js';
 import { subscribeGlobal } from './lib/events.js';
 import { usePageScroll } from './lib/page-context.js';
@@ -630,6 +631,7 @@ function Shell({ user, onSignOut }) {
         isOpen={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
       />
+      <CatMascot />
     </div>
   );
 }
