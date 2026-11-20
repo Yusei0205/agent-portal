@@ -126,6 +126,22 @@ function runContract(label: string, makeRepo: () => Promise<AutofixFindingsRepos
       assert.equal((await repo.list(p, { limit: 1 })).length, 1);
     });
 
+    test('a patch never changes fingerprint or created_at; list orders by created_at then id, newest first', async () => {
+      const p = maybeProject(pid('ord'));
+      const a = await repo.upsertByFingerprint(input(p, fp()));
+      const patch = { status: 'triaged', fingerprint: 'tampered', created_at: '2000-01-01T00:00:00.000Z' } as unknown as Parameters<AutofixFindingsRepository['transition']>[2];
+      assert.equal(await repo.transition(a.finding.id, ['new'], patch), true);
+      const got = (await repo.getById(a.finding.id))!;
+      assert.equal(got.fingerprint, a.finding.fingerprint);
+      assert.equal(got.created_at, a.finding.created_at);
+      assert.equal((await repo.getByFingerprint(p, a.finding.fingerprint))!.id, a.finding.id);
+      // Several findings, some created in the same millisecond: the order is exactly (created_at, id) descending.
+      for (let n = 0; n < 6; n++) await repo.upsertByFingerprint(input(p, fp()));
+      const rows = await repo.list(p, { limit: 50 });
+      const expected = [...rows].sort((x, y) => y.created_at.localeCompare(x.created_at) || y.id.localeCompare(x.id)).map((x) => x.id);
+      assert.deepEqual(rows.map((x) => x.id), expected);
+    });
+
     test('countByStatus returns a zero for every status', async () => {
       const p = maybeProject(pid('g'));
       const empty = await repo.countByStatus(p);
@@ -191,4 +207,51 @@ describe('DynamoDB Local suite', async () => {
   });
 
   runContract('DynamoDB', async () => repo);
+});
+
+describe('DynamoDB transaction conflicts (stubbed client; the DynamoDB Local suite above needs DYNAMODB_ENDPOINT)', () => {
+  type Sent = { input: unknown };
+  const conflict = () => Object.assign(new Error('cancelled'), { name: 'TransactionCanceledException', CancellationReasons: [{ Code: 'TransactionConflict' }, { Code: 'None' }] });
+  const failedCondition = () => Object.assign(new Error('cancelled'), { name: 'TransactionCanceledException', CancellationReasons: [{ Code: 'ConditionalCheckFailed' }, { Code: 'None' }] });
+
+  async function repoWith(responses: Array<unknown | Error>) {
+    const { DynamoDbAutofixFindingsRepository } = await import('../server/repositories/autofix-findings-dynamodb.ts');
+    const r = new DynamoDbAutofixFindingsRepository();
+    const sent: Sent[] = [];
+    let n = 0;
+    (r as unknown as { client: { send: (c: Sent) => Promise<unknown> } }).client = {
+      send: async (c: Sent) => {
+        sent.push(c);
+        // The first send is the id lookup (getItem).
+        if (sent.length === 1) return { Item: { PK: { S: 'AFID#f1' }, SK: { S: '#META' }, project_id: { S: 'p1' } } };
+        const next = responses[n++];
+        if (next instanceof Error) throw next;
+        return next ?? {};
+      },
+    };
+    return { r, sent };
+  }
+
+  test('a conflict is retried (up to 3 tries) and then applies', async () => {
+    const { r, sent } = await repoWith([conflict(), conflict(), {}]);
+    assert.equal(await r.transition('f1', ['new'], { status: 'triaged', workflow_id: 'wf1' }), true);
+    assert.equal(sent.length, 4);
+  });
+
+  test('a transaction that keeps conflicting reports an error after 3 tries; it is not reported as a failed condition', async () => {
+    const { r, sent } = await repoWith([conflict(), conflict(), conflict()]);
+    await assert.rejects(() => r.transition('f1', ['new'], { status: 'triaged', workflow_id: 'wf1' }), /cancelled/);
+    assert.equal(sent.length, 4);
+  });
+
+  test('a failed condition returns false at once (no retry)', async () => {
+    const { r, sent } = await repoWith([failedCondition()]);
+    assert.equal(await r.transition('f1', ['new'], { status: 'triaged', workflow_id: 'wf1' }), false);
+    assert.equal(sent.length, 2);
+  });
+
+  test('a plain update that collides with a transaction is retried too', async () => {
+    const { r } = await repoWith([Object.assign(new Error('c'), { name: 'TransactionConflictException' }), {}]);
+    assert.equal(await r.transition('f1', ['new'], { status: 'triaged' }), true);
+  });
 });

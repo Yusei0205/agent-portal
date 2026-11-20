@@ -64,7 +64,7 @@ export interface AutofixFindingsRepository {
   getByFingerprint(projectId: string, fp: string): Promise<AutofixFinding | null>;
   getByFixBranch(projectId: string, branch: string): Promise<AutofixFinding | null>;
   getByWorkflowId(workflowId: string): Promise<AutofixFinding | null>;
-  /** Newest first. */
+  /** Newest first (by created_at, then id, descending). */
   list(projectId: string, o: { status?: FindingStatus; limit: number }): Promise<AutofixFinding[]>;
   /**
    * Apply the patch only when the current status is one of `from`. Returns true when this call applied it, false when
@@ -78,10 +78,10 @@ export interface AutofixFindingsRepository {
   sumCostSince(projectId: string, sinceIso: string): Promise<number>;
 }
 
-/** Fields a patch may set (everything except the key fields). */
+/** Fields a patch may set (everything except the key fields; fingerprint and created_at never change after creation). */
 export const PATCHABLE_FIELDS = [
-  'source', 'kind', 'fingerprint', 'severity', 'evidence', 'status', 'repo_id', 'branch', 'commit_sha', 'workflow_id',
-  'fix_branch', 'pr_number', 'pr_url', 'attempts', 'occurrences', 'cost_usd', 'cooldown_until', 'pr_branch', 'pr_head_sha', 'previous_attempt', 'created_at', 'updated_at',
+  'source', 'kind', 'severity', 'evidence', 'status', 'repo_id', 'branch', 'commit_sha', 'workflow_id',
+  'fix_branch', 'pr_number', 'pr_url', 'attempts', 'occurrences', 'cost_usd', 'cooldown_until', 'pr_branch', 'pr_head_sha', 'previous_attempt', 'updated_at',
 ] as const;
 
 let _instance: AutofixFindingsRepository | null = null;

@@ -79,8 +79,8 @@ export class SqliteAutofixFindingsRepository implements AutofixFindingsRepositor
 
   async list(projectId: string, o: { status?: FindingStatus; limit: number }): Promise<AutofixFinding[]> {
     const rows = o.status
-      ? all<Row>('SELECT * FROM autofix_findings WHERE project_id = ? AND status = ? ORDER BY created_at DESC, rowid DESC LIMIT ?', projectId, o.status, o.limit)
-      : all<Row>('SELECT * FROM autofix_findings WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?', projectId, o.limit);
+      ? all<Row>('SELECT * FROM autofix_findings WHERE project_id = ? AND status = ? ORDER BY created_at DESC, id DESC LIMIT ?', projectId, o.status, o.limit)
+      : all<Row>('SELECT * FROM autofix_findings WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT ?', projectId, o.limit);
     return rows.map(toFinding);
   }
 

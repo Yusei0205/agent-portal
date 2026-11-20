@@ -63,10 +63,33 @@ function findingItem(f: AutofixFinding): Item {
   return item;
 }
 
+/** Cancellation reason codes of a failed transaction (empty when the error carries none). */
+function reasonCodes(e: unknown): string[] {
+  const reasons = (e as { CancellationReasons?: Array<{ Code?: string }> }).CancellationReasons;
+  return Array.isArray(reasons) ? reasons.map((r) => String(r?.Code ?? '')) : [];
+}
+
+/**
+ * Whether the write collided with another in-flight write (not a failed condition): the item may well still be in the state the
+ * caller wanted, so the write is tried again. DynamoDB reports it as TransactionConflict in the cancellation reasons of a cancelled
+ * transaction, or as a TransactionConflictException on a plain update.
+ */
+function isConflict(e: unknown): boolean {
+  const name = (e as { name?: string }).name ?? '';
+  if (name === 'TransactionConflictException') return true;
+  return name === 'TransactionCanceledException' && reasonCodes(e).includes('TransactionConflict');
+}
+
+/** A real failed condition (the status or the key was not as required): the write did not apply and retrying cannot change that. */
 function isCancelled(e: unknown): boolean {
   const name = (e as { name?: string }).name ?? '';
-  return name === 'TransactionCanceledException' || name === 'ConditionalCheckFailedException';
+  if (name === 'ConditionalCheckFailedException') return true;
+  // A transaction cancelled for a conflict is not a failed condition, even when another item of it also failed.
+  return name === 'TransactionCanceledException' && !isConflict(e);
 }
+
+/** How many times a write that collided with another is tried before the collision is reported as an error. */
+const CONFLICT_TRIES = 3;
 
 export class DynamoDbAutofixFindingsRepository implements AutofixFindingsRepository {
   private readonly client: DynamoDBClient;
@@ -193,7 +216,7 @@ export class DynamoDbAutofixFindingsRepository implements AutofixFindingsReposit
 
   async getByFixBranch(projectId: string, branch: string): Promise<AutofixFinding | null> {
     const matches = (await this.partition(projectId)).filter((f) => f.fix_branch === branch);
-    matches.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    matches.sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id));
     return matches[0] ?? null;
   }
 
@@ -210,7 +233,7 @@ export class DynamoDbAutofixFindingsRepository implements AutofixFindingsReposit
 
   async list(projectId: string, o: { status?: FindingStatus; limit: number }): Promise<AutofixFinding[]> {
     const rows = (await this.partition(projectId)).filter((f) => !o.status || f.status === o.status);
-    rows.sort((a, b) => b.created_at.localeCompare(a.created_at));
+    rows.sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id));
     return rows.slice(0, o.limit);
   }
 
@@ -236,22 +259,26 @@ export class DynamoDbAutofixFindingsRepository implements AutofixFindingsReposit
       ExpressionAttributeNames: names,
       ExpressionAttributeValues: vals,
     };
-    try {
-      const workflowId = typeof values.workflow_id === 'string' && values.workflow_id ? values.workflow_id : null;
-      if (workflowId) {
-        await this.client.send(new TransactWriteItemsCommand({
-          TransactItems: [
-            { Update: update },
-            { Put: { TableName: table(), Item: { ...workflowKey(workflowId), project_id: av(projectId), id: av(id) } } },
-          ],
-        }));
-      } else {
-        await this.client.send(new UpdateItemCommand(update));
+    const workflowId = typeof values.workflow_id === 'string' && values.workflow_id ? values.workflow_id : null;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        if (workflowId) {
+          await this.client.send(new TransactWriteItemsCommand({
+            TransactItems: [
+              { Update: update },
+              { Put: { TableName: table(), Item: { ...workflowKey(workflowId), project_id: av(projectId), id: av(id) } } },
+            ],
+          }));
+        } else {
+          await this.client.send(new UpdateItemCommand(update));
+        }
+        return true;
+      } catch (e) {
+        // A conflict says nothing about the status: try again; after the last try the error is reported (the write did not apply).
+        if (isConflict(e) && attempt < CONFLICT_TRIES) continue;
+        if (isCancelled(e)) return false;
+        throw e;
       }
-      return true;
-    } catch (e) {
-      if (isCancelled(e)) return false;
-      throw e;
     }
   }
 
