@@ -22,7 +22,7 @@ import { fillGoal } from '../server/loop-triggers.ts';
 import { newLoopState, readLoopState, afterRun } from '../server/workflows/loop.ts';
 import { cancelRun } from '../server/workflows/controls.ts';
 import {
-  processFinding, processNew, onFixSessionEnded, maybeProcess, cannotReproduce, _setFireLoopSpec, _drainPipelineForTest,
+  processFinding, processNew, onFixSessionEnded, reconcileStuck, maybeProcess, cannotReproduce, _setFireLoopSpec, _drainPipelineForTest,
 } from '../server/autofix/pipeline.ts';
 import { now } from '../server/util.ts';
 
@@ -561,5 +561,61 @@ describe('with the Demo engine', () => {
     }
     assert.equal(after?.status, 'new');
     assert.equal(after?.attempts, 0);
+  });
+});
+
+describe('reconcileStuck', () => {
+  const old = () => new Date(Date.now() - 11 * 60_000).toISOString();
+
+  it("a finding stuck in 'triaged' for over ten minutes goes back to new; a recent one is left alone", async () => {
+    const stuck = await newFinding();
+    const recent = await newFinding();
+    await repo().transition(stuck.id, ['new'], { status: 'triaged', updated_at: old() });
+    await repo().transition(recent.id, ['new'], { status: 'triaged' });
+    await reconcileStuck();
+    assert.equal((await repo().getById(stuck.id))!.status, 'new');
+    assert.equal((await repo().getById(recent.id))!.status, 'triaged');
+  });
+
+  it("a 'fixing' finding with no fix branch whose session is over gets the session-end decision (a failed session counts an attempt)", async () => {
+    const f = await newFinding();
+    await processFinding(f.id);
+    const wf = calls[0].workflowId!;
+    await endSession(wf, 'failed', { ok: false, output: 'still red' });
+    await repo().transition(f.id, ['fixing'], { status: 'fixing', updated_at: old() });
+    await reconcileStuck();
+    const got = (await repo().getById(f.id))!;
+    assert.equal(got.status, 'new');
+    assert.equal(got.attempts, 1);
+    assert.ok(got.cooldown_until);
+  });
+
+  it("is left alone while the session still runs, when it is recent, or when delivery began (fix_branch set)", async () => {
+    const running = await newFinding();
+    await processFinding(running.id);
+    await repo().transition(running.id, ['fixing'], { status: 'fixing', updated_at: old() });
+    const recent = await newFinding();
+    await processFinding(recent.id);
+    await endSession(calls[1].workflowId!, 'failed', { ok: false, output: 'red' });
+    const delivering = await newFinding();
+    await processFinding(delivering.id);
+    await endSession(calls[2].workflowId!, 'done', { ok: true, output: 'ok' });
+    await repo().transition(delivering.id, ['fixing'], { status: 'fixing', fix_branch: 'autofix/x-1', updated_at: old() });
+    await reconcileStuck();
+    assert.equal((await repo().getById(running.id))!.status, 'fixing');
+    assert.equal((await repo().getById(recent.id))!.status, 'fixing');
+    assert.equal((await repo().getById(delivering.id))!.status, 'fixing');
+  });
+
+  it('is conditional: a finding that already left the stuck state is not touched, and the sweep runs it first', async () => {
+    const f = await newFinding();
+    await repo().transition(f.id, ['new'], { status: 'triaged', updated_at: old() });
+    // processNewEverywhere reconciles first, then starts the (now new) finding's session.
+    const { processNewEverywhere } = await import('../server/autofix/pipeline.ts');
+    await processNewEverywhere(projectId);
+    assert.equal((await repo().getById(f.id))!.status, 'fixing');
+    assert.equal(calls.length, 1);
+    await reconcileStuck(); // fixing and recent: unchanged
+    assert.equal((await repo().getById(f.id))!.status, 'fixing');
   });
 });

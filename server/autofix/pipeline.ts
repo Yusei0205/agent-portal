@@ -317,6 +317,7 @@ export async function processNew(projectId: string): Promise<void> {
  * projects. The fixer specs are portal-wide, so a session ending in one project frees the spec for the others.
  */
 export async function processNewEverywhere(firstProjectId?: string): Promise<void> {
+  await reconcileStuck();
   const ids = (await getProjectRepository().listProjects()).map((p) => p.id);
   const ordered = firstProjectId ? [firstProjectId, ...ids.filter((id) => id !== firstProjectId)] : ids;
   const all: AutofixFinding[] = [];
@@ -354,9 +355,15 @@ export function cannotReproduce(summary: string | null | undefined): boolean {
  * Only a finding still `fixing` with this session is changed. Afterwards, findings that were held back are processed.
  */
 export async function onFixSessionEnded(workflowId: string, opts: { cancelled?: boolean } = {}): Promise<void> {
-  const repo = getAutofixFindingsRepository();
-  const f = await repo.getByWorkflowId(workflowId);
+  const f = await getAutofixFindingsRepository().getByWorkflowId(workflowId);
   if (!f) return;
+  await decideFixEnded(f, workflowId, opts);
+  await processNewEverywhere(f.project_id);
+}
+
+/** The status decision for a finding whose fix session ended; changes it only while it is still `fixing` with this session. */
+async function decideFixEnded(f: AutofixFinding, workflowId: string, opts: { cancelled?: boolean }): Promise<void> {
+  const repo = getAutofixFindingsRepository();
   if (f.status === 'fixing' && f.workflow_id === workflowId) {
     const sessions = getSessionsRepository();
     const [w, totals, policy] = await Promise.all([
@@ -384,7 +391,37 @@ export async function onFixSessionEnded(workflowId: string, opts: { cancelled?: 
       await repo.transition(f.id, ['fixing'], { status: 'fixing', cost_usd });
     }
   }
-  await processNewEverywhere(f.project_id);
+}
+
+/** A finding must have been in its state this long before reconcileStuck touches it (a live pass or session link is not a stuck one). */
+export const STUCK_AFTER_MS = 10 * 60_000;
+/** Workflow statuses of a session that is over (a paused one may be resumed by a person, so it is left alone). */
+const FINISHED_WORKFLOW = new Set(['done', 'failed', 'cancelled']);
+
+/**
+ * Repair findings a crash, a lost run or a lost race left behind: `triaged` for over STUCK_AFTER_MS goes back to `new`; `fixing`
+ * with no fix branch, whose session is over (or gone) and which is over STUCK_AFTER_MS old, gets the decision a session end gives.
+ * Every change is a conditional transition, so a live pass that moves the finding at the same time wins. Never rejects.
+ */
+export async function reconcileStuck(nowMs: number = Date.now()): Promise<void> {
+  const repo = getAutofixFindingsRepository();
+  const cutoff = nowMs - STUCK_AFTER_MS;
+  const older = (f: AutofixFinding): boolean => Date.parse(f.updated_at) <= cutoff;
+  let ids: string[] = [];
+  try { ids = (await getProjectRepository().listProjects()).map((p) => p.id).slice(0, SWEEP_PROJECTS); } catch (e) { log('listing projects to reconcile failed', e); return; }
+  for (const pid of ids) {
+    try {
+      for (const f of (await repo.list(pid, { status: 'triaged', limit: 200 })).filter(older)) {
+        await repo.transition(f.id, ['triaged'], { status: 'new' });
+      }
+      for (const f of (await repo.list(pid, { status: 'fixing', limit: 200 })).filter(older)) {
+        if (f.fix_branch || !f.workflow_id) continue; // delivery began (the PR step owns it), or there is no session to judge
+        const w = await getSessionsRepository().getWorkflowById(f.workflow_id).catch(() => null);
+        if (w && !FINISHED_WORKFLOW.has(String(w.status))) continue; // still pending/running (or paused)
+        await decideFixEnded(f, f.workflow_id, { cancelled: w ? String(w.status) === 'cancelled' : false });
+      }
+    } catch (e) { log(`reconciling findings of project ${pid} failed`, e); }
+  }
 }
 
 // ── Closing the loop: CI results and PR closings on the fix branch ──────────
