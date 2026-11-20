@@ -2330,6 +2330,54 @@ const M53_AUTOFIX_FINDINGS = `
   CREATE INDEX IF NOT EXISTS autofix_findings_fix_branch ON autofix_findings(fix_branch);
 `;
 
+/**
+ * The pipeline monitor tables (workflow runs and one alert state per repository + workflow + branch), created by
+ * ensurePipelineSchema on every start. Not a numbered migration: migration ids are array positions (see ensureAutofixSchema).
+ */
+const PIPELINE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS pipeline_runs (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    run_id INTEGER NOT NULL,
+    repo_id TEXT NOT NULL,
+    repo_full_name TEXT NOT NULL DEFAULT '',
+    run_attempt INTEGER NOT NULL DEFAULT 1,
+    run_number INTEGER NOT NULL DEFAULT 0,
+    workflow_id INTEGER NOT NULL,
+    workflow_name TEXT NOT NULL DEFAULT '',
+    branch TEXT NOT NULL DEFAULT '',
+    head_sha TEXT NOT NULL DEFAULT '',
+    actor TEXT NOT NULL DEFAULT '',
+    event TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK(status IN ('queued','in_progress','success','failure','timed_out','cancelled','skipped','other')),
+    html_url TEXT NOT NULL DEFAULT '',
+    started_at TEXT,
+    completed_at TEXT,
+    inbox_alerted_attempt INTEGER NOT NULL DEFAULT 0,
+    chat_alerted_attempt INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, run_id)
+  );
+  CREATE INDEX IF NOT EXISTS pipeline_runs_branch ON pipeline_runs(project_id, repo_id, workflow_id, branch, run_number);
+  CREATE TABLE IF NOT EXISTS pipeline_alerts (
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    repo_id TEXT NOT NULL,
+    workflow_id INTEGER NOT NULL,
+    branch TEXT NOT NULL,
+    open INTEGER NOT NULL DEFAULT 1,
+    inbox_id TEXT,
+    last_run_id INTEGER NOT NULL,
+    last_run_number INTEGER NOT NULL,
+    failures INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (project_id, repo_id, workflow_id, branch)
+  );
+`;
+
+/** The pipeline monitor tables, checked on every start (CREATE ... IF NOT EXISTS; never a positional migration). */
+function ensurePipelineSchema(database: DatabaseSync): void {
+  database.exec(PIPELINE_SCHEMA);
+}
+
 /** The goal template the builtin-autofix-ci spec was first seeded with (before retries after red CI); kept to upgrade it. */
 const AUTOFIX_CI_GOAL_V1 = `Fix the failing {{kind}} check on branch {{branch}}.
 
@@ -2550,6 +2598,7 @@ export function openDb(file?: string, cfg?: Config): DatabaseSync {
   ensureApiSimSchema(db);
   ensureFlowStateColumn(db);
   ensureAutofixSchema(db);
+  ensurePipelineSchema(db);
   // Two-step sign-in state (mfa.ts). Checked on every start, like the schema above.
   if (!(db.prepare('PRAGMA table_info(users)').all() as Array<{ name: string }>).some((c) => c.name === 'mfa')) {
     db.exec('ALTER TABLE users ADD COLUMN mfa TEXT');

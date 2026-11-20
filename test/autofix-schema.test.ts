@@ -102,3 +102,34 @@ describe('auto-fix schema on an existing database', () => {
     closeDb();
   });
 });
+
+describe('pipeline monitor schema', () => {
+  const tables = (db: ReturnType<typeof openDb>) =>
+    (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('pipeline_runs', 'pipeline_alerts') ORDER BY name").all() as Array<{ name: string }>).map((t) => t.name);
+
+  it('a fresh database has the pipeline tables and still records exactly SCHEMA_VERSION migrations', () => {
+    const db = openDb(path.join(dir, 'pipe-fresh.db'));
+    assert.deepEqual(tables(db), ['pipeline_alerts', 'pipeline_runs']);
+    assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'pipeline_runs_branch'").all().length, 1);
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get() as { n: number }).n, SCHEMA_VERSION);
+    closeDb();
+  });
+
+  it('an existing database without the tables gets them on open, and reopening is idempotent', () => {
+    const f = path.join(dir, 'pipe-upgrade.db');
+    let db = openDb(f);
+    db.exec('DROP TABLE pipeline_runs; DROP TABLE pipeline_alerts;');
+    assert.deepEqual(tables(db), []);
+    closeDb();
+
+    db = openDb(f);
+    assert.deepEqual(tables(db), ['pipeline_alerts', 'pipeline_runs']);
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get() as { n: number }).n, SCHEMA_VERSION);
+    closeDb();
+
+    db = openDb(f);
+    assert.deepEqual(tables(db), ['pipeline_alerts', 'pipeline_runs']);
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get() as { n: number }).n, SCHEMA_VERSION);
+    closeDb();
+  });
+});
