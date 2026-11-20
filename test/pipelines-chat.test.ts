@@ -2,9 +2,10 @@ import { describe, it, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestServer, cleanup } from './fixtures.ts';
 import { getAuditRepository } from '../server/repositories/audit.ts';
+import { getSettingsRepository } from '../server/repositories/settings.ts';
 import type { PipelineRun } from '../server/repositories/pipeline-runs.ts';
 import {
-  chatUrlProblem, getChatTarget, setChatUrl, chatUrlHint, chatStatus, buildChatMessage, sendChat,
+  chatUrlProblem, getChatTarget, setChatUrl, chatUrlHint, chatStatus, buildChatMessage, sendChat, notifyRunChat,
   _setChatFetch, _setChatBackoff, _setChatTimeout,
 } from '../server/pipelines/chat.ts';
 
@@ -170,8 +171,8 @@ describe('buildChatMessage', () => {
     html_url: 'https://github.com/acme/app/actions/runs/9',
   } as PipelineRun;
   it('matches the copy', () => {
-    assert.equal(buildChatMessage('failed', run), 'Deploy failed: Deploy prod on acme/app@main (abcdef1) by jo. https://github.com/acme/app/actions/runs/9');
-    assert.equal(buildChatMessage('recovered', run), 'Deploy recovered: Deploy prod on acme/app@main (abcdef1) by jo. https://github.com/acme/app/actions/runs/9');
+    assert.equal(buildChatMessage('failed', run, 'slack'), 'Deploy failed: Deploy prod on acme/app@main (abcdef1) by jo. https://github.com/acme/app/actions/runs/9');
+    assert.equal(buildChatMessage('recovered', run, 'slack'), 'Deploy recovered: Deploy prod on acme/app@main (abcdef1) by jo. https://github.com/acme/app/actions/runs/9');
   });
   it('escapes dynamic fields for Slack and neutralises markdown for Teams, URL unchanged', () => {
     const evil = { ...run, workflow_name: '<!channel> <https://evil|click>', branch: 'a&b<c>', actor: '<@U123>' } as PipelineRun;
@@ -179,7 +180,50 @@ describe('buildChatMessage', () => {
     assert.equal(slack, 'Deploy failed: &lt;!channel&gt; &lt;https://evil|click&gt; on acme/app@a&amp;b&lt;c&gt; (abcdef1) by &lt;@U123&gt;. https://github.com/acme/app/actions/runs/9');
     const md = { ...run, workflow_name: '[x](https://evil) *b* _i_ `c`' } as PipelineRun;
     const teams = buildChatMessage('failed', md, 'teams');
-    assert.ok(teams.startsWith('Deploy failed: \\[x\\]\\(https://evil\\) \\*b\\* \\_i\\_ \\`c\\` on '));
+    assert.ok(teams.startsWith('Deploy failed: \\[x\\]\\(https:\\/\\/evil\\) \\*b\\* \\_i\\_ \\`c\\` on '));
     assert.ok(teams.endsWith('. https://github.com/acme/app/actions/runs/9'));
+  });
+  it('Teams neutralises # and autolinks', () => {
+    const t = buildChatMessage('failed', { ...run, workflow_name: 'https://evil #1' } as PipelineRun, 'teams');
+    assert.ok(t.startsWith('Deploy failed: https:\\/\\/evil \\#1 on '));
+  });
+});
+
+describe('notifyRunChat', () => {
+  const evil = {
+    workflow_name: '<!channel> [x](https://evil)', repo_full_name: 'acme/app', branch: 'main', head_sha: 'abcdef1234567890', actor: 'jo',
+    html_url: 'https://github.com/acme/app/actions/runs/9',
+  } as PipelineRun;
+  it('escapes for a Slack target', async () => {
+    await setChatUrl('n1', SLACK, actor);
+    const calls = fake([200]);
+    assert.equal(await notifyRunChat('n1', 'failed', evil), true);
+    assert.equal(JSON.parse(String(calls[0].init.body)).text, buildChatMessage('failed', evil, 'slack'));
+    assert.ok(JSON.parse(String(calls[0].init.body)).text.includes('&lt;!channel&gt;'));
+  });
+  it('neutralises for a Teams target', async () => {
+    await setChatUrl('n2', TEAMS, actor);
+    const calls = fake([200]);
+    assert.equal(await notifyRunChat('n2', 'recovered', evil), true);
+    const text = JSON.parse(String(calls[0].init.body)).attachments[0].content.body[0].text;
+    assert.equal(text, buildChatMessage('recovered', evil, 'teams'));
+    assert.ok(text.includes('\\[x\\]\\(https:\\/\\/evil\\)'));
+  });
+  it('returns false without fetching when there is no target', async () => {
+    const calls = fake([200]);
+    assert.equal(await notifyRunChat('n-none', 'failed', evil), false);
+    assert.equal(calls.length, 0);
+  });
+  it('reads the target once', async () => {
+    await setChatUrl('n3', SLACK, actor);
+    const repo = getSettingsRepository()!;
+    const orig = repo.getSecret.bind(repo);
+    let reads = 0;
+    repo.getSecret = (async (name: string) => { reads++; return orig(name); }) as typeof repo.getSecret;
+    try {
+      fake([200]);
+      await notifyRunChat('n3', 'failed', evil);
+    } finally { repo.getSecret = orig; }
+    assert.equal(reads, 1);
   });
 });

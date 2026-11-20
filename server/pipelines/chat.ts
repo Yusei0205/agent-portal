@@ -101,13 +101,13 @@ export async function chatStatus(projectId: string): Promise<{ lastFailureAt: st
 }
 
 const escSlack = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const escTeams = (t: string) => t.replace(/[\\[\]()*_`]/g, '\\$&');
+const escTeams = (t: string) => t.replace(/[\\[\]()*_`#]/g, '\\$&').replace(/:\/\//g, ':\\/\\/');
 
 /**
  * Message text for one target kind. Workflow, repo, branch, sha and actor are attacker-influenced, so they are escaped
- * (Slack: `&`, `<`, `>`; Teams: markdown link/emphasis characters). The run URL is kept raw.
+ * (Slack: `&`, `<`, `>`; Teams: markdown link/emphasis characters, `#`, and `://` so nothing autolinks). The run URL is kept raw.
  */
-export function buildChatMessage(kind: 'failed' | 'recovered', run: PipelineRun, target: ChatKind = 'slack'): string {
+export function buildChatMessage(kind: 'failed' | 'recovered', run: PipelineRun, target: ChatKind): string {
   const esc = target === 'slack' ? escSlack : escTeams;
   const head = kind === 'failed' ? 'Deploy failed' : 'Deploy recovered';
   return `${head}: ${esc(run.workflow_name)} on ${esc(run.repo_full_name)}@${esc(run.branch)} (${esc(run.head_sha.slice(0, 7))}) by ${esc(run.actor)}. ${run.html_url}`;
@@ -155,11 +155,8 @@ function isPermanent(error: string): boolean {
   return n >= 400 && n < 500 && n !== 408 && n !== 429;
 }
 
-/** Posts `text` to the project's chat webhook. 3 tries; never throws. */
-export async function sendChat(projectId: string, text: string): Promise<boolean> {
+async function deliver(projectId: string, target: { url: string; kind: ChatKind }, text: string): Promise<boolean> {
   try {
-    const target = await getChatTarget(projectId);
-    if (!target) return false;
     let error: string | null = 'network error';
     for (let i = 0; i < 3; i++) {
       if (i > 0 && backoff[i - 1] > 0) await new Promise((r) => setTimeout(r, backoff[i - 1]));
@@ -170,6 +167,29 @@ export async function sendChat(projectId: string, text: string): Promise<boolean
     if (error === null && !getSetting(getDb(), statusKey(projectId))) return true;
     await setSetting(getDb(), statusKey(projectId), value);
     return error === null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Posts static text (the plain test message, no dynamic fields) to the project's chat webhook. 3 tries; never throws.
+ * Do NOT pass run data here: use notifyRunChat, which escapes for the target kind.
+ */
+export async function sendChat(projectId: string, text: string): Promise<boolean> {
+  try {
+    const target = await getChatTarget(projectId);
+    return target ? await deliver(projectId, target, text) : false;
+  } catch {
+    return false;
+  }
+}
+
+/** Resolves the target once, builds the message escaped for that target's kind, and sends it. Never throws. */
+export async function notifyRunChat(projectId: string, kind: 'failed' | 'recovered', run: PipelineRun): Promise<boolean> {
+  try {
+    const target = await getChatTarget(projectId);
+    return target ? await deliver(projectId, target, buildChatMessage(kind, run, target.kind)) : false;
   } catch {
     return false;
   }
