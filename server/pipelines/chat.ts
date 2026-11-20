@@ -15,7 +15,7 @@ export type ChatKind = 'slack' | 'teams';
 type Actor = { actorId: string | null; ip: string | null };
 
 const MAX_URL = 2000;
-const TIMEOUT_MS = 10_000;
+const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_BACKOFF = [1000, 4000];
 
 const secretName = (projectId: string) => `pipelines.chat.${projectId}`;
@@ -23,10 +23,14 @@ const statusKey = (projectId: string) => `pipelines.chat_status.${projectId}`;
 
 let fetchImpl: typeof fetch | null = null;
 let backoff: number[] = DEFAULT_BACKOFF;
+let timeoutMs = DEFAULT_TIMEOUT_MS;
 /** Test seam: replace the fetch used for delivery. */
 export function _setChatFetch(fn: typeof fetch | null): void { fetchImpl = fn; }
 /** Test seam: delays (ms) before the 2nd and 3rd try; null restores the defaults. */
 export function _setChatBackoff(delays: number[] | null): void { backoff = delays ?? DEFAULT_BACKOFF; }
+
+/** Test seam: per-try timeout in ms; null restores the default. */
+export function _setChatTimeout(ms: number | null): void { timeoutMs = ms ?? DEFAULT_TIMEOUT_MS; }
 
 function parse(url: string): { u: URL; kind: ChatKind } | string {
   if (typeof url !== 'string' || !url) return 'A chat webhook URL is required';
@@ -40,7 +44,7 @@ function parse(url: string): { u: URL; kind: ChatKind } | string {
   const host = u.hostname.toLowerCase();
   if (host === 'hooks.slack.com') return { u, kind: 'slack' };
   for (const suffix of ['.webhook.office.com', '.logic.azure.com']) {
-    if (host.endsWith(suffix) && host.length > suffix.length && !host.startsWith('.')) return { u, kind: 'teams' };
+    if (host.endsWith(suffix) && host.length > suffix.length) return { u, kind: 'teams' };
   }
   return 'Only Slack (hooks.slack.com), Microsoft Teams (webhook.office.com) or Power Automate (logic.azure.com) webhook URLs are allowed';
 }
@@ -96,9 +100,17 @@ export async function chatStatus(projectId: string): Promise<{ lastFailureAt: st
   }
 }
 
-export function buildChatMessage(kind: 'failed' | 'recovered', run: PipelineRun): string {
+const escSlack = (t: string) => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escTeams = (t: string) => t.replace(/[\\[\]()*_`]/g, '\\$&');
+
+/**
+ * Message text for one target kind. Workflow, repo, branch, sha and actor are attacker-influenced, so they are escaped
+ * (Slack: `&`, `<`, `>`; Teams: markdown link/emphasis characters). The run URL is kept raw.
+ */
+export function buildChatMessage(kind: 'failed' | 'recovered', run: PipelineRun, target: ChatKind = 'slack'): string {
+  const esc = target === 'slack' ? escSlack : escTeams;
   const head = kind === 'failed' ? 'Deploy failed' : 'Deploy recovered';
-  return `${head}: ${run.workflow_name} on ${run.repo_full_name}@${run.branch} (${run.head_sha.slice(0, 7)}) by ${run.actor}. ${run.html_url}`;
+  return `${head}: ${esc(run.workflow_name)} on ${esc(run.repo_full_name)}@${esc(run.branch)} (${esc(run.head_sha.slice(0, 7))}) by ${esc(run.actor)}. ${run.html_url}`;
 }
 
 function body(kind: ChatKind, text: string): string {
@@ -115,7 +127,7 @@ function body(kind: ChatKind, text: string): string {
 /** One try; returns null on success or a short generic error (never containing the URL). */
 async function attempt(target: { url: string; kind: ChatKind }, text: string): Promise<string | null> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await (fetchImpl ?? fetch)(target.url, {
       method: 'POST',
@@ -124,6 +136,7 @@ async function attempt(target: { url: string; kind: ChatKind }, text: string): P
       redirect: 'manual',
       signal: ctrl.signal,
     });
+    try { await res.body?.cancel(); } catch { /* ignore */ }
     if (res.status >= 300 && res.status < 400) return 'redirect refused';
     if (res.status >= 200 && res.status < 300) return null;
     return `HTTP ${res.status}`;
@@ -132,6 +145,14 @@ async function attempt(target: { url: string; kind: ChatKind }, text: string): P
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** A 4xx other than 408 and 429 will not get better by retrying. */
+function isPermanent(error: string): boolean {
+  const m = /^HTTP (\d+)$/.exec(error);
+  if (!m) return false;
+  const n = Number(m[1]);
+  return n >= 400 && n < 500 && n !== 408 && n !== 429;
 }
 
 /** Posts `text` to the project's chat webhook. 3 tries; never throws. */
@@ -143,7 +164,7 @@ export async function sendChat(projectId: string, text: string): Promise<boolean
     for (let i = 0; i < 3; i++) {
       if (i > 0 && backoff[i - 1] > 0) await new Promise((r) => setTimeout(r, backoff[i - 1]));
       error = await attempt(target, text);
-      if (error === null) break;
+      if (error === null || isPermanent(error)) break;
     }
     const value = error === null ? '' : JSON.stringify({ lastFailureAt: now(), lastError: error });
     if (error === null && !getSetting(getDb(), statusKey(projectId))) return true;

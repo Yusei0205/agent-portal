@@ -5,7 +5,7 @@ import { getAuditRepository } from '../server/repositories/audit.ts';
 import type { PipelineRun } from '../server/repositories/pipeline-runs.ts';
 import {
   chatUrlProblem, getChatTarget, setChatUrl, chatUrlHint, chatStatus, buildChatMessage, sendChat,
-  _setChatFetch, _setChatBackoff,
+  _setChatFetch, _setChatBackoff, _setChatTimeout,
 } from '../server/pipelines/chat.ts';
 
 const actor = { actorId: 'u1', ip: '10.0.0.1' };
@@ -14,8 +14,8 @@ const TEAMS = 'https://contoso.webhook.office.com/webhookb2/abc/IncomingWebhook/
 const LOGIC = 'https://prod-1.westus.logic.azure.com/workflows/abc?sig=q1w2';
 
 before(async () => { await createTestServer(); });
-after(() => { _setChatFetch(null); _setChatBackoff(null); return cleanup(); });
-beforeEach(() => { _setChatBackoff([0, 0]); });
+after(() => { _setChatFetch(null); _setChatBackoff(null); _setChatTimeout(null); return cleanup(); });
+beforeEach(() => { _setChatBackoff([0, 0]); _setChatTimeout(null); });
 
 type Call = { url: string; init: RequestInit };
 function fake(responses: Array<number | Error>) {
@@ -114,6 +114,27 @@ describe('sendChat', () => {
     assert.ok(st.lastError);
     assert.ok(!st.lastError.includes('hooks.slack.com') && !st.lastError.includes('abcdWXYZ'));
   });
+  it('does not retry a 404 but retries a 429', async () => {
+    await setChatUrl('s9', SLACK, actor);
+    let calls = fake([404]);
+    assert.equal(await sendChat('s9', 'x'), false);
+    assert.equal(calls.length, 1);
+    assert.equal((await chatStatus('s9')).lastError, 'HTTP 404');
+    calls = fake([429, 200]);
+    assert.equal(await sendChat('s9', 'x'), true);
+    assert.equal(calls.length, 2);
+  });
+  it('aborts a hung try and records a timeout', async () => {
+    await setChatUrl('s10', SLACK, actor);
+    _setChatTimeout(20);
+    let n = 0;
+    _setChatFetch(((_u: string, init: RequestInit) => { n++; return new Promise((_res, rej) => {
+      init.signal!.addEventListener('abort', () => rej(Object.assign(new Error('aborted'), { name: 'AbortError' })));
+    }); }) as typeof fetch);
+    assert.equal(await sendChat('s10', 'x'), false);
+    assert.equal(n, 3);
+    assert.equal((await chatStatus('s10')).lastError, 'timeout');
+  });
   it('treats a 302 as failure and does not follow it', async () => {
     await setChatUrl('s6', SLACK, actor);
     const calls = fake([302]);
@@ -151,5 +172,14 @@ describe('buildChatMessage', () => {
   it('matches the copy', () => {
     assert.equal(buildChatMessage('failed', run), 'Deploy failed: Deploy prod on acme/app@main (abcdef1) by jo. https://github.com/acme/app/actions/runs/9');
     assert.equal(buildChatMessage('recovered', run), 'Deploy recovered: Deploy prod on acme/app@main (abcdef1) by jo. https://github.com/acme/app/actions/runs/9');
+  });
+  it('escapes dynamic fields for Slack and neutralises markdown for Teams, URL unchanged', () => {
+    const evil = { ...run, workflow_name: '<!channel> <https://evil|click>', branch: 'a&b<c>', actor: '<@U123>' } as PipelineRun;
+    const slack = buildChatMessage('failed', evil, 'slack');
+    assert.equal(slack, 'Deploy failed: &lt;!channel&gt; &lt;https://evil|click&gt; on acme/app@a&amp;b&lt;c&gt; (abcdef1) by &lt;@U123&gt;. https://github.com/acme/app/actions/runs/9');
+    const md = { ...run, workflow_name: '[x](https://evil) *b* _i_ `c`' } as PipelineRun;
+    const teams = buildChatMessage('failed', md, 'teams');
+    assert.ok(teams.startsWith('Deploy failed: \\[x\\]\\(https://evil\\) \\*b\\* \\_i\\_ \\`c\\` on '));
+    assert.ok(teams.endsWith('. https://github.com/acme/app/actions/runs/9'));
   });
 });
