@@ -799,12 +799,14 @@
         "server/jira.ts",
         "server/jira-text.ts",
         "server/jira-adf.ts",
+        "web/src/components/AssigneePicker.jsx",
         "server/workflows/crud.ts",
         "server/workflows/driver.ts",
         "server/agent/runner.ts"
       ],
       "tests": [
-        "test/jira.test.ts"
+        "test/jira.test.ts",
+        "test/web-assignee-picker.test.ts"
       ],
       "smokeIds": []
     },

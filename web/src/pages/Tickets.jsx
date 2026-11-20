@@ -11,6 +11,7 @@ import { useSort } from '../lib/useSort.jsx';
 import { statusSortKey, prioritySortKey } from '../lib/ticketSort.js';
 import { formatRelative } from '../lib/util.js';
 import { Icon } from '../components/Icon.jsx';
+import { AssigneePicker } from '../components/AssigneePicker.jsx';
 import { TicketPreview } from '../components/TicketPreview.jsx';
 import { useConfirm, ConfirmDialog } from '../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
@@ -767,9 +768,9 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
   const [jiraProject, setJiraProject] = useState('');
   const [q, setQ]                     = useState('');
   const [status, setStatus]           = useState('');
-  // 'me' | 'any' | 'unassigned' | a Jira account id
+  // 'me' | 'any' | 'unassigned' | a Jira account id (then `person` says whose)
   const [assignee, setAssignee]       = useState('me');
-  const [assignees, setAssignees]     = useState([]);
+  const [person, setPerson]           = useState(null);
   const [statuses, setStatuses]       = useState([]);
   const [issues, setIssues]           = useState(null);
   const { sorted: sortedIssues, sortProps } = useSort(issues, {
@@ -787,6 +788,9 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
 
   const loadIdRef = useRef(0);
 
+  // The people on the tickets shown: the person list's first choices when Jira has no list of its own (all projects).
+  const assigneeSuggestions = [...new Map((issues ?? []).filter((i) => i.assigneeId && i.assignee).map((i) => [i.assigneeId, { accountId: i.assigneeId, name: i.assignee }])).values()];
+
   // Load available statuses when project changes
   useEffect(() => {
     if (!jiraProject) { setStatuses([]); return; }
@@ -798,17 +802,6 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
       .catch(() => setStatuses([]));
   }, [projectId, jiraProject]);
 
-  // The people tickets can be assigned to in this project, for the assignee filter. A chosen person from another project
-  // does not carry over: the filter goes back to "me".
-  useEffect(() => {
-    let live = true;
-    setAssignee((cur) => (['me', 'any', 'unassigned'].includes(cur) ? cur : 'me'));
-    api
-      .get(`/api/projects/${projectId}/jira/assignees${jiraProject ? `?project=${encodeURIComponent(jiraProject)}` : ''}`)
-      .then((r) => { if (live) setAssignees(r.assignees ?? []); })
-      .catch(() => { if (live) setAssignees([]); });
-    return () => { live = false; };
-  }, [projectId, jiraProject]);
 
   // Debounce search
   const [debouncedQ, setDebouncedQ] = useState('');
@@ -951,25 +944,26 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
             </select>
           )}
 
-          {/* Assignee filter */}
+          {/* Assignee filter: me / anyone / unassigned, or one person from the list */}
           <select
             aria-label="Assignee filter"
             className="input"
             style={{ maxWidth: 180 }}
-            value={assignee}
-            onChange={(e) => setAssignee(e.target.value)}
+            value={person ? 'person' : assignee}
+            onChange={(e) => { setPerson(null); setAssignee(e.target.value); }}
           >
             <option value="me">Assigned to me</option>
             <option value="any">Anyone</option>
             <option value="unassigned">Unassigned</option>
-            {assignees.length > 0 && (
-              <optgroup label="People">
-                {assignees.map((a) => (
-                  <option key={a.accountId} value={a.accountId}>{a.name}</option>
-                ))}
-              </optgroup>
-            )}
+            {person && <option value="person" disabled>Chosen person</option>}
           </select>
+          <AssigneePicker
+            projectId={projectId}
+            jiraProject={jiraProject}
+            suggestions={assigneeSuggestions}
+            value={person}
+            onPick={(p) => { setPerson(p); setAssignee(p ? p.accountId : 'any'); }}
+          />
         </div>
 
         {/* Issue list */}
