@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 
 /**
  * The portal's cat mascot: a small cat in the bottom-right corner that pops up a bubble with a tip. Decorative only: the tips are static
- * text, nothing is loaded or changed. The bubble appears a moment after the page loads; × closes it until the next load, and clicking the
- * cat shows the next tip. Colours come from the theme tokens, and the idle animation stops for people who ask for reduced motion.
+ * text, nothing is loaded or changed. On wider screens the bubble appears a moment after the page loads; on phones it would cover the
+ * page, so it appears only when the cat is tapped. × closes it until the next load, and clicking the cat shows the next tip. Colours come from the theme tokens, and the idle animation stops for people who ask for reduced motion.
  */
 export const CAT_TIPS = [
   'Things that need you, like approvals and questions, wait in the Inbox.',
@@ -17,6 +17,16 @@ export const CAT_TIPS = [
 ];
 
 const SHOW_AFTER_MS = 2000;
+/** The bubble opens by itself only from this width up (on phones it would cover the page). */
+const AUTO_OPEN_QUERY = '(min-width: 601px)';
+
+function autoOpenAllowed() {
+  try {
+    return typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(AUTO_OPEN_QUERY).matches;
+  } catch {
+    return false;
+  }
+}
 
 export function CatMascot() {
   const [open, setOpen] = useState(false);
@@ -24,6 +34,7 @@ export function CatMascot() {
   const timer = useRef(null);
 
   useEffect(() => {
+    if (!autoOpenAllowed()) return undefined;
     timer.current = setTimeout(() => setOpen(true), SHOW_AFTER_MS);
     return () => clearTimeout(timer.current);
   }, []);

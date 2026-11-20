@@ -605,6 +605,22 @@ async function main() {
       await p.waitForSelector('[data-testid="cat-bubble"]', { timeout: 2000 });
     }, page);
 
+    await test('on a phone the cat does not pop up a tip by itself; tapping it shows one', async (p) => {
+      await p.setViewportSize({ width: 390, height: 800 });
+      try {
+        await goto(p, '/projects', 300);
+        await p.reload({ waitUntil: 'domcontentloaded' }); // a fresh load, so the cat mounts at phone width
+        await p.locator('[data-testid="cat-mascot"]').waitFor({ timeout: 6000 });
+        await p.waitForTimeout(3000);
+        if (await p.locator('[data-testid="cat-bubble"]').count() !== 0) throw new Error('The tip bubble opened by itself on a phone');
+        await p.getByRole('button', { name: 'Show a tip' }).click();
+        await p.waitForSelector('[data-testid="cat-bubble"]', { timeout: 2000 });
+        await p.getByRole('button', { name: 'Close tip' }).click();
+      } finally {
+        await p.setViewportSize({ width: 1280, height: 800 });
+      }
+    }, page);
+
     await test('New Project modal opens and form is usable', async (p) => {
       await goto(p, '/projects');
       const newBtn = p.locator('button').filter({ hasText: /new project/i }).first();
