@@ -138,3 +138,42 @@
 
 /* Never in print. */
 @media print { .cat-mascot { display: none; } }
+
+/* Pixel cat sprite (web/src/components/CatSprite.jsx): a sheet of frames stepped with steps(); colours from the theme tokens. */
+.cat-sprite {
+  --cat-outline: color-mix(in srgb, var(--ink) 88%, var(--panel));
+  --cat-fur: color-mix(in srgb, var(--accent) 55%, var(--panel));
+  --cat-belly: color-mix(in srgb, var(--ink) 5%, var(--panel));
+  --cat-accent: var(--accent);
+  --cat-eye: var(--ink);
+  --cat-blush: color-mix(in srgb, var(--accent) 70%, var(--panel));
+  position: relative;
+  overflow: hidden;
+  image-rendering: pixelated;
+}
+.cat-sheet {
+  display: block;
+  height: 100%;
+  width: calc(100% * var(--cat-n));
+}
+/* Dark themes: a light belly and dark eyes read better than the light-theme values mirrored. */
+[data-theme="dark"] .cat-sprite {
+  --cat-fur: color-mix(in srgb, var(--accent) 48%, var(--panel));
+  --cat-belly: color-mix(in srgb, var(--ink) 72%, var(--panel));
+  --cat-eye: var(--panel);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .cat-sprite {
+    --cat-fur: color-mix(in srgb, var(--accent) 48%, var(--panel));
+    --cat-belly: color-mix(in srgb, var(--ink) 72%, var(--panel));
+    --cat-eye: var(--panel);
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cat-sheet {
+    animation: cat-frames var(--cat-dur) steps(var(--cat-n), jump-none) var(--cat-iter) forwards;
+  }
+}
+@keyframes cat-frames {
+  to { transform: translateX(calc(-100% * (var(--cat-n) - 1) / var(--cat-n))); }
+}
