@@ -140,6 +140,16 @@ test('JQL building: multiple project keys, filters, escaping', () => {
   assert.match(jql2, /statusCategory != Done/);
   assert.ok(!/assignee/.test(jql2));
 
+  // assignee: a person, unassigned, anyone; a bad id never reaches the JQL
+  const jqlPerson = buildJql(m, { projectKey: 'RLP', assignee: '5b10ac8d82e05b22cc7d4ef5' });
+  assert.match(jqlPerson, /assignee = "5b10ac8d82e05b22cc7d4ef5"/);
+  assert.match(jqlPerson, /statusCategory != Done/);
+  assert.match(buildJql(m, { projectKey: 'RLP', assignee: '712020:abc-def_1' }), /assignee = "712020:abc-def_1"/);
+  assert.match(buildJql(m, { projectKey: 'RLP', assignee: 'unassigned' }), /assignee is EMPTY/);
+  assert.ok(!/assignee/.test(buildJql(m, { projectKey: 'RLP', assignee: 'any' })));
+  const evilAssignee = buildJql(m, { projectKey: 'RLP', assignee: 'x" OR project = SECRET' });
+  assert.ok(!/assignee/.test(evilAssignee) && !evilAssignee.includes('SECRET'), 'an invalid assignee adds no clause');
+
   // multi-key query (new: projectKeys array)
   const jqlMulti = buildJql(m, { projectKeys: ['RLP', 'PAY'] });
   assert.match(jqlMulti, /^project in \("RLP", "PAY"\)/);
@@ -243,12 +253,13 @@ test('composeRunPrompt: fences ticket, default instruction when empty', () => {
 interface Seen {
   tokenCalls: Record<string, unknown>[];
   jqls: string[];
+  assignable: string[];
   comments: unknown[];
   auths: string[];
   projectSearchCalls: number;
 }
 
-const seen: Seen = { tokenCalls: [], jqls: [], comments: [], auths: [], projectSearchCalls: 0 };
+const seen: Seen = { tokenCalls: [], jqls: [], assignable: [], comments: [], auths: [], projectSearchCalls: 0 };
 let refreshBehaviour: 'ok' | 'fail' = 'ok';
 let fake: http.Server;
 let fakeBase = '';
@@ -360,6 +371,16 @@ before(async () => {
     const api = '/ex/jira/cloud1/rest/api/3';
     if (url.pathname === `${api}/myself`)
       return send(200, { accountId: 'acc1', displayName: 'Dev One', emailAddress: 'dev@example.com' });
+
+    if (url.pathname === `${api}/user/assignable/search` || url.pathname === `${api}/user/assignable/multiProjectSearch`) {
+      seen.assignable.push(url.pathname.split('/').pop() + '?' + (url.searchParams.get('project') ?? url.searchParams.get('projectKeys')) + '&' + (url.searchParams.get('query') ?? ''));
+      return send(200, [
+        { accountId: 'u-zed', displayName: 'Zed Z', accountType: 'atlassian', active: true },
+        { accountId: 'u-amy', displayName: 'Amy A', accountType: 'atlassian', active: true },
+        { accountId: 'app-1', displayName: 'Some App', accountType: 'app', active: true },
+        { accountId: 'u-gone', displayName: 'Gone G', accountType: 'atlassian', active: false },
+      ]);
+    }
 
     if (url.pathname === `${api}/search/jql`) {
       seen.jqls.push(url.searchParams.get('jql')!);
@@ -753,6 +774,22 @@ describe('Jira integration', () => {
     const p2 = await fetchJson(baseUrl, `/api/projects/${pid}/jira/issues?project=RLP&page=page2`, { cookie: adminCookie });
     assert.equal(p2.status, 200);
     assert.equal((p2.body as any).nextPage, null, 'last page returns null (fake server returns no nextPageToken)');
+  });
+
+  test('assignees: people who can be assigned, sorted, no apps or inactive users; the issue list takes a person, unassigned, or rejects a bad value', async () => {
+    seen.assignable.length = 0; seen.jqls.length = 0;
+    const one = await fetchJson(baseUrl, `/api/projects/${pid}/jira/assignees?project=RLP&q=am`, { cookie: adminCookie });
+    assert.equal(one.status, 200);
+    assert.deepEqual((one.body as any).assignees, [{ accountId: 'u-amy', name: 'Amy A' }, { accountId: 'u-zed', name: 'Zed Z' }]);
+    assert.equal((await fetchJson(baseUrl, `/api/projects/${pid}/jira/assignees`, { cookie: adminCookie })).status, 200);
+    assert.deepEqual(seen.assignable, ['search?RLP&am', 'multiProjectSearch?RLP,PAY&']);
+    assert.equal((await fetchJson(baseUrl, `/api/projects/${pid}/jira/assignees?project=OTHER`, { cookie: adminCookie })).status, 400, 'a project outside the allowed list');
+
+    assert.equal((await fetchJson(baseUrl, `/api/projects/${pid}/jira/issues?project=RLP&assignee=u-amy`, { cookie: adminCookie })).status, 200);
+    assert.equal((await fetchJson(baseUrl, `/api/projects/${pid}/jira/issues?project=RLP&assignee=unassigned`, { cookie: adminCookie })).status, 200);
+    assert.match(seen.jqls[0], /assignee = "u-amy"/);
+    assert.match(seen.jqls[1], /assignee is EMPTY/);
+    assert.equal((await fetchJson(baseUrl, `/api/projects/${pid}/jira/issues?project=RLP&assignee=${encodeURIComponent('x" OR 1=1')}`, { cookie: adminCookie })).status, 400);
   });
 
   test('statuses: deduplicated and sorted; with ?project uses that key; without uses all allowed', async () => {

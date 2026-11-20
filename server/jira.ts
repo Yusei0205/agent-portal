@@ -25,6 +25,7 @@ import { HttpError, badRequest, now, parseJson, str, withLock } from './util.ts'
 import {
   KEY_RE,
   buildJql,
+  ACCOUNT_ID_RE,
   clip,
   ticketMarkdown,
   type Mapping,
@@ -1073,7 +1074,43 @@ export function registerJiraRoutes(): void {
     }
   });
 
-  // ---- GET /api/projects/:pid/jira/issues?project=KEY&q=&status=&assignee=me|any&page=<token> ----
+  // ---- GET /api/projects/:pid/jira/assignees?project=KEY&q=name ----
+  // People who can be assigned tickets in the project (or, with no project, in the allowed projects): the choices for the ticket
+  // list's assignee filter. At most 50, matched by name when `q` is given. A Jira failure gives an empty list, so the list
+  // still works with its Me / Anyone / Unassigned choices.
+  router.get('/api/projects/:pid/jira/assignees', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    const p = await requireProjectAccess(req, res, req.params.pid);
+    if (!p) return;
+    const projectId = String(p.id);
+    const mapping = mustMapping(projectId);
+    const project = req.query.get('project') ?? '';
+    let keys: string[];
+    if (project) {
+      if (!PROJECT_KEY_RE.test(project)) throw badRequest('Invalid project key');
+      if (mapping.projectKeys.length > 0 && !mapping.projectKeys.includes(project))
+        throw badRequest(`Project ${project} is not in the allowed list`);
+      keys = [project];
+    } else {
+      keys = mapping.projectKeys.slice(0, 10);
+    }
+    if (keys.length === 0) { sendJson(res, 200, { assignees: [] }); return; }
+    const qs = new URLSearchParams({ query: (req.query.get('q') ?? '').slice(0, 100), maxResults: '50' });
+    let path: string;
+    if (keys.length === 1) { qs.set('project', keys[0]); path = `/user/assignable/search?${qs}`; }
+    else { qs.set('projectKeys', keys.join(',')); path = `/user/assignable/multiProjectSearch?${qs}`; }
+    try {
+      const data = (await jira(projectId, path)) as any[];
+      const assignees = (Array.isArray(data) ? data : [])
+        .filter((u) => u?.accountId && u.active !== false && (!u.accountType || u.accountType === 'atlassian'))
+        .map((u) => ({ accountId: String(u.accountId), name: String(u.displayName ?? u.accountId) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      sendJson(res, 200, { assignees });
+    } catch {
+      sendJson(res, 200, { assignees: [] });
+    }
+  });
+
+  // ---- GET /api/projects/:pid/jira/issues?project=KEY&q=&status=&assignee=me|any|unassigned|<accountId>&page=<token> ----
   router.get('/api/projects/:pid/jira/issues', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const p = await requireProjectAccess(req, res, req.params.pid);
     if (!p) return;
@@ -1096,11 +1133,15 @@ export function registerJiraRoutes(): void {
       projectFilterKeys = [];
     }
 
+    const assigneeParam = req.query.get('assignee') ?? '';
+    if (assigneeParam && !['me', 'any', 'unassigned'].includes(assigneeParam) && !ACCOUNT_ID_RE.test(assigneeParam))
+      throw badRequest('Invalid assignee');
+
     const jql = buildJql(mapping, {
       projectKeys: projectFilterKeys,
       status: req.query.get('status') ?? '',
       q: req.query.get('q') ?? '',
-      assignee: req.query.get('assignee') ?? '',
+      assignee: assigneeParam,
     });
 
     // Pagination: /rest/api/3/search/jql uses nextPageToken (opaque string), not numeric startAt
