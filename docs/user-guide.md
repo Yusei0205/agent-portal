@@ -1090,7 +1090,7 @@ Safety model: Auto-fix is off until a project admin turns it on; checks, protect
 
 1. Open the project, **Setup > Auto-fix**. Only a project owner or admin can change the policy.
 2. Set the **verify command** (for example `npm test`). Auto-fix refuses to leave `off` without one. The fix session must make it pass, and the portal runs it as the check after each iteration.
-3. Choose the **classes** (kinds of finding to fix): `lint`, `tests`, `types`, `build` are on by default. `review` (review findings) and `session` (failed sessions) are optional and off by default. Anything not listed is suppressed and not fixed.
+3. Choose the **classes** (kinds of finding to fix): `lint`, `tests`, `types`, `build` are on by default. The kind of a CI finding comes from the failed **workflow's name** (words such as lint, type, build or test), so a workflow named just "CI" has kind `other`, which is suppressed until you add `other` to the classes (or name the workflows after what they check). `review` (review findings) and `session` (failed sessions) are optional and off by default. Anything not listed is suppressed and not fixed.
 4. Choose the **mode**: `propose` (the diff waits for your approval in the Inbox, nothing is pushed until you approve) or `draft_pr` (opens a draft PR when the checks pass; see below for what "unattended" means here).
 5. Choose the **engine** and the **run-as user**: the unattended sessions run as that user, who must still be a project editor or owner (a non-member admin is refused). It is set to you when you first enable.
 6. Optionally edit branches, protected paths and limits, then save. The form shows the server's error if a value is refused.
@@ -1115,7 +1115,7 @@ Requests with a missing or wrong signature are rejected. Only GitHub repositorie
 |---|---|
 | New | Seen, waiting to be checked against the policy (also while a limit or cooldown holds it back) |
 | Triaged | Allowed by the policy, about to get a fix session |
-| Fixing | A fix session is running |
+| Fixing | A fix session is running, or its change is waiting for an Inbox approval |
 | PR open | A draft PR (or an approved push) exists; CI on the fix branch is being watched |
 | Resolved | CI on the fix branch went green, or the PR was merged |
 | Dismissed | A person dismissed it, or the fix PR was closed without merging (a cooldown applies) |
@@ -1129,7 +1129,7 @@ Repeats of the same failure (same repository, branch family and error) increase 
 - **Auto-fix PR ready**: the fix passed the server's checks and a person must approve the push. The item shows the changed paths. Approving pushes the branch and opens the draft PR with the `autofix` label.
 - **Auto-fix needs a human**: Auto-fix stopped and says why (cannot reproduce, a guardrail refused the change, attempts used up, and so on).
 
-By default every push is approved by a person, in both modes. Caveat until the queued fix lands (see the open-items note, `docs/superpowers/notes/2026-11-17-autofix-open-items.md`): an Inbox approval given after the finding has left the fixing state (for example the session was cancelled or the policy turned off) pushes through the ordinary path, without the protected-path and base checks.
+By default every push is approved by a person, in both modes. An approval given after the finding has left the fixing state (the session was cancelled, the finding went to a person, the policy was turned off) pushes nothing: the item says so, and the finding can be retried on the Auto-fix tab. A session started by Auto-fix, an earlier session of a retried finding or a session delegated from one never uses the ordinary push, and its **Create PR** button answers 409.
 
 ### Guardrails
 
@@ -1139,7 +1139,7 @@ By default every push is approved by a person, in both modes. Caveat until the q
 - **Open-PR cap**: at most 3 open auto-fix PRs per project by default.
 - **Cost caps**: $2 per finding and $10 per day by default.
 - **Kill switch**: **Pause** on the Auto-fix tab stops new fix sessions for the project; an admin can pause the whole portal (`POST /api/autofix/pause`).
-- Fix sessions of one spec run one at a time and at most 3 an hour; other findings wait.
+- Fix sessions: the built-in fixer specs allow at most 12 sessions an hour, portal-wide, and one auto-fix session runs at a time across all projects; other findings wait.
 
 ### Retry on red CI
 
@@ -1147,17 +1147,17 @@ When CI on the fix branch fails, the portal starts one retry session per red CI 
 
 ### Review findings and failed sessions
 
-Review findings are opt-in. Put `review` in the classes and add the pull request's branch pattern under extra branches. The fix is a **stacked PR** against the reviewed branch, not against the default branch. A failed portal session is recorded as a finding too (kind `session`), but with the default classes it is suppressed. Add `session` to the classes to have failed sessions sent to a person; a failed session is never retried automatically.
+Review findings are opt-in. Put `review` in the classes and add the pull request's branch pattern under extra branches. The fix session clones the repository and works against the default branch first, then starts from the reviewed commit; the fix is a **stacked PR** whose base is the reviewed branch, not the default branch. A failed portal session is recorded as a finding too (kind `session`), but with the default classes it is suppressed. Add `session` to the classes to have failed sessions sent to a person; a failed session is never retried automatically.
 
 ### Unattended push: security prerequisites
 
 The default is human approval for every push. Setting `AUTOFIX_ALLOW_UNATTENDED_PUSH=1` on the portal server lets `draft_pr` mode push and open the PR without asking. Set it only when **all** of these are true:
 
-1. The runner images (agent-runner, kiro-runner, codex-runner) are rebuilt and redeployed with the hardened finalize code. Until then old runners reject the new request fields and Auto-fix pushes nothing.
+1. The runner images (agent-runner, kiro-runner, codex-runner) are rebuilt and redeployed with the hardened finalize code. Until then old runners reject the new request fields and Auto-fix pushes nothing. Runs of auto-fix sessions carry a new `checkedReport` field: an old runner rejects them (fails closed), while ordinary sessions are unaffected and keep their usual end-of-run change report.
 2. The credentialed git commands run where the agent cannot read them: as a separate user or outside the microVM, or after all agent processes are killed. Today the agent and the runner share a user and a microVM, so a process the agent leaves behind can read the push token from `/proc`.
 3. A repository ruleset restricts pushes to `.github/workflows/**`, `infra/**` and tags, or the token lacks the `workflows` scope. Push-triggered workflows run with secrets at push time.
 4. You accept the residual risk: some server-side checks (the GitHub compare after the push) run after the push.
-5. The two queued security items are fixed: the Inbox approval bypass described above, and a credentialed `symbolic-ref` call in the session repository (`server/agent/runner-finalize-run.ts`). Until every item marked "queued" in `docs/superpowers/notes/2026-11-17-autofix-open-items.md` is fixed, do not enable unattended push.
+5. Know what is still open (see `docs/superpowers/notes/2026-11-17-autofix-open-items.md`): the `/proc` exposure above is structural; the ordinary session push still has a pre-existing token leak through an agent-set `pushurl`, and other git calls in the runner (`runner-repos.ts`, `runner-files.ts`, `runner-inspect.ts`, `runner.ts`) run with the token in the agent's repository. Do not enable unattended push until you accept these.
 
 ### Known limits
 
