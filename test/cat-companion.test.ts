@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // @ts-expect-error — plain JS module without type declarations
 import { DEFAULT_CAT_PREFS, loadCatPrefs, saveCatPrefs } from '../web/src/lib/cat-prefs.js';
 // @ts-expect-error — plain JS module without type declarations
-import { moodForEvent, createReactionGate } from '../web/src/lib/cat-mood.js';
+import { moodForEvent, createReactionGate, trackRunning, isWorking, pickMotion, roamPaused } from '../web/src/lib/cat-mood.js';
 // @ts-expect-error — plain JS module without type declarations
 import { roamAllowed, initialBrain, nextBrainStep, clampX, WALK_SPEED_PX_S } from '../web/src/lib/cat-brain.js';
 
@@ -129,5 +129,55 @@ describe('roaming brain', () => {
     assert.equal(clampX(5000, bounds), 1000);
     assert.equal(clampX(300, bounds), 300);
     assert.equal(clampX(300, { min: 10, max: 4 }), 10);
+  });
+});
+
+describe('working tracker', () => {
+  const ev = (status: string, workflowId?: string, type = 'workflow.updated') => ({ type, status, workflowId });
+  it('running adds, every other status removes', () => {
+    let s: ReadonlySet<string> = new Set();
+    assert.equal(isWorking(s), false);
+    s = trackRunning(s, ev('running', 'a'));
+    assert.equal(isWorking(s), true);
+    s = trackRunning(s, ev('running', 'b'));
+    assert.equal(s.size, 2);
+    for (const [status, id] of [['done', 'a'], ['failed', 'b']]) s = trackRunning(s, ev(status, id));
+    assert.equal(isWorking(s), false);
+    for (const status of ['blocked', 'stopped', 'paused', 'cancelled']) {
+      s = trackRunning(new Set(['x']), ev('running', 'x'));
+      s = trackRunning(s, ev(status, 'x'));
+      assert.equal(s.size, 0, status);
+    }
+    assert.equal(trackRunning(new Set(), ev('pending', 'p')).has('p'), true);
+  });
+  it('keeps working while another session still runs', () => {
+    let s: ReadonlySet<string> = trackRunning(trackRunning(new Set(), ev('running', 'a')), ev('running', 'b'));
+    s = trackRunning(s, ev('done', 'a'));
+    assert.equal(isWorking(s), true);
+  });
+  it('returns the same set when nothing changes, and ignores other events', () => {
+    const s: ReadonlySet<string> = new Set(['a']);
+    assert.equal(trackRunning(s, ev('running', 'a')), s);
+    assert.equal(trackRunning(s, ev('done', 'zzz')), s);
+    assert.equal(trackRunning(s, ev('done')), s);
+    assert.equal(trackRunning(s, ev('done', 'a', 'inbox.created')), s);
+    assert.equal(trackRunning(s, null), s);
+    assert.equal(trackRunning(s, { type: 'workflow.updated', workflowId: 'a' }), s);
+  });
+  it('does not mutate its input', () => {
+    const s = new Set(['a']);
+    const n = trackRunning(s, ev('done', 'a'));
+    assert.equal(s.size, 1);
+    assert.equal(n.size, 0);
+  });
+  it('pickMotion: reactions win, then walking, wave, working, idle; working stops roaming', () => {
+    assert.equal(pickMotion({ working: true }), 'working');
+    assert.equal(pickMotion({}), 'idle');
+    assert.equal(pickMotion({ working: true, reaction: 'celebrate' }), 'celebrate');
+    assert.equal(pickMotion({ working: true, reaction: 'alert', hovered: true }), 'alert');
+    assert.equal(pickMotion({ working: true, hovered: true }), 'wave');
+    assert.equal(pickMotion({ walking: true }), 'walk');
+    assert.equal(roamPaused(true), true);
+    assert.equal(roamPaused(false), false);
   });
 });

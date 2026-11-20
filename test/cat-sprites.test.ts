@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 // @ts-expect-error — plain JS module without type declarations
 import { SPRITES, SPRITE_SIZE, PALETTE_KEYS, sheetRects, frameCount } from '../web/src/lib/cat-sprites.js';
 
-const EXPECTED: Record<string, number> = { walk: 4, idle: 4, wave: 2, celebrate: 4, worried: 2, alert: 2 };
+const EXPECTED: Record<string, number> = { walk: 4, idle: 4, wave: 2, celebrate: 4, worried: 2, alert: 2, working: 4 };
 const names = Object.keys(EXPECTED);
 const count = (frame: string[], ch?: string) => frame.join('').split('').filter((c) => (ch ? c === ch : c !== '.')).length;
 
@@ -47,6 +47,13 @@ describe('cat sprites', () => {
     const f0 = (SPRITES.idle.frames as string[][])[0];
     assert.equal(count(f0, 'e'), 4); // two eyes, two pixels tall
     assert.ok(count(f0, 'r') >= 4); // two ear insides, two nose pixels
+  });
+  it('working shows the laptop and typing dots that change from frame to frame', () => {
+    const frames = SPRITES.working.frames as string[][];
+    assert.equal(SPRITES.working.loop, true);
+    assert.equal(new Set(frames.map((f) => f.join('|'))).size, 4);
+    for (const f of frames) assert.ok(count(f, 'a') >= 15, 'laptop lid is painted in the accent');
+    assert.ok(count(frames[2], 'a') > count(frames[0], 'a'), 'dots count up');
   });
   it('walk frames differ (a cycle, not a still)', () => {
     const distinct = new Set((SPRITES.walk.frames as string[][]).map((f) => f.join('|')));

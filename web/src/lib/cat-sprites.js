@@ -95,6 +95,13 @@ function side({ legs, tail, step }) {
 
 const sparkle = (pts) => (c) => { for (const [x, y] of pts) c.put(x, y, 'a'); };
 const bang = (c) => { for (const y of [1, 2, 3]) c.put(14, y, 'a'); c.put(14, 5, 'a'); };
+/** The cat at a tiny laptop (seen from behind the lid), typing with alternating paws, with dots counting up beside its head. */
+const typing = (dots, paw) => (c) => {
+  c.row(4, 10, 'oooooooo'); c.row(4, 11, 'oaaaaaao'); c.row(4, 12, 'oaaabaao'); c.row(4, 13, 'oaaaaaao');
+  c.row(3, 14, 'oooooooooo');
+  c.put(paw ? 11 : 4, 14, 'f'); c.put(paw ? 4 : 11, 14, 'o'); // the paw that is down is on the keys
+  for (let i = 0; i < dots; i++) c.put(13 + i, 3 - (i === 1 ? 1 : 0), 'a');
+};
 const drop = (y) => (c) => { c.put(14, y, 'a'); c.put(14, y + 1, 'a'); };
 
 export const SPRITES = {
@@ -134,6 +141,15 @@ export const SPRITES = {
     frames: [
       front({ eyes: 'worried', ears: 'flat', extra: drop(5) }),
       front({ eyes: 'worried', ears: 'flat', tail: 1, extra: drop(7) }),
+    ],
+  },
+  working: {
+    fps: 4, loop: true,
+    frames: [
+      front({ dy: 2, eyes: 'open', tail: 0, extra: typing(1, 0) }),
+      front({ dy: 2, eyes: 'open', tail: 1, extra: typing(2, 1) }),
+      front({ dy: 2, eyes: 'blink', tail: 1, extra: typing(3, 0) }),
+      front({ dy: 2, eyes: 'open', tail: 2, extra: typing(0, 1) }),
     ],
   },
   alert: {

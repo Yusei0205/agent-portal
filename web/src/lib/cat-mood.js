@@ -35,3 +35,38 @@ export function createReactionGate(gapMs = REACTION_GAP_MS) {
     return true;
   };
 }
+
+/**
+ * Which sessions are running, from the live events: a `workflow.updated` with status running (or pending) adds the session,
+ * any other status (done, failed, blocked, stopped, paused, cancelled ...) removes it. Pure: returns the same set when nothing changed,
+ * a new set when it did, so a caller can compare by identity. Events without a workflow id, and other event types, change nothing.
+ * @param {ReadonlySet<string>} running
+ * @returns {ReadonlySet<string>}
+ */
+export function trackRunning(running, event) {
+  if (!event || typeof event !== 'object' || event.type !== 'workflow.updated') return running;
+  const id = event.workflowId;
+  if (typeof id !== 'string' || !id || typeof event.status !== 'string') return running;
+  const on = event.status === 'running' || event.status === 'pending';
+  if (on === running.has(id)) return running;
+  const next = new Set(running);
+  if (on) next.add(id); else next.delete(id);
+  return next;
+}
+
+/** The cat works while at least one session of the open project is running. */
+export const isWorking = (running) => running.size > 0;
+
+/**
+ * Which animation the cat shows: a reaction (celebrate / worried / alert) wins, then a wave while hovered, then walking, then working
+ * (a running session), then idle. Working also stops it roaming (see `roamPaused`).
+ */
+export function pickMotion({ reaction = null, walking = false, hovered = false, working = false } = {}) {
+  if (reaction) return reaction;
+  if (walking) return 'walk';
+  if (hovered) return 'wave';
+  return working ? 'working' : 'idle';
+}
+
+/** Roaming pauses while the cat works (it stays at its laptop). */
+export const roamPaused = (working) => Boolean(working);

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CatSprite } from './CatSprite.jsx';
 import { subscribeProject } from '../lib/events.js';
 import { loadCatPrefs, saveCatPrefs } from '../lib/cat-prefs.js';
-import { createReactionGate, moodForEvent } from '../lib/cat-mood.js';
+import { createReactionGate, isWorking, moodForEvent, pickMotion, roamPaused, trackRunning } from '../lib/cat-mood.js';
 import {
   DRAG_THRESHOLD_PX, REACTION_SHOW_MS, clampX, initialBrain, nextBrainStep, roamAllowed,
 } from '../lib/cat-brain.js';
@@ -90,6 +90,7 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
   const [dragging, setDragging] = useState(false);
   const [bubble, setBubble] = useState(null); // { kind: 'tip' | 'reaction', text, href, id }
   const [menuOpen, setMenuOpen] = useState(false);
+  const [running, setRunning] = useState(() => new Set()); // ids of the open project's running sessions, from the live events
   const [anim, setAnim] = useState(null); // { name, id } while a reaction plays
   const [tip, setTip] = useState(() => Math.floor(Math.random() * CAT_TIPS.length));
 
@@ -164,7 +165,8 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
     setBottom(Math.min(prefsRef.current.bottom, maxBottom));
   }, [env.width, env.height, size, moveTo]);
 
-  const roaming = prefs.mode === 'roam' && roamAllowed(env) && !dragging && !bubble && !menuOpen;
+  const working = isWorking(running);
+  const roaming = prefs.mode === 'roam' && roamAllowed(env) && !roamPaused(working) && !dragging && !bubble && !menuOpen;
 
   // Roaming: sit a while, walk a short way, repeat. Stops where it is when roaming is no longer allowed.
   useEffect(() => {
@@ -221,10 +223,12 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
 
   // The open project's live events. Closed when the project changes or the cat unmounts (also on sign-out).
   useEffect(() => {
+    setRunning((prev) => (prev.size ? new Set() : prev));
     if (!projectId) return undefined;
     let live = true;
     const unsubscribe = subscribeProject(projectId, (ev) => {
       if (!live) return;
+      setRunning((prev) => trackRunning(prev, ev));
       const r = moodForEvent(ev, { projectId });
       if (r) react(r);
     });
@@ -355,13 +359,13 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
     );
   }
 
-  const motionName = anim ? anim.name : walking ? 'walk' : hovered && !dragging ? 'wave' : 'idle';
+  const motionName = pickMotion({ reaction: anim ? anim.name : null, walking, hovered: hovered && !dragging, working });
   const hoverCapable = matches('(hover: hover)');
   const showLabel = hovered && hoverCapable && !bubble && !menuOpen && !dragging && !walking;
   const style = { bottom, '--cat-x': `${x}px`, '--cat-size': `${size}px` };
 
   return (
-    <div className="cat-mascot" data-testid="cat-mascot" data-mode={prefs.mode} data-walking={walking ? 'true' : 'false'} style={style}>
+    <div className="cat-mascot" data-testid="cat-mascot" data-mode={prefs.mode} data-walking={walking ? 'true' : 'false'} data-working={working ? 'true' : 'false'} style={style}>
       {bubble && (
         <div className="cat-bubble" role="status" aria-live="polite" data-testid="cat-bubble" data-kind={bubble.kind}>
           <p className="cat-bubble-text">
