@@ -621,6 +621,235 @@ async function main() {
       }
     }, page);
 
+    // ── Cat companion (roaming, drag, reactions, modes) ─────────────────
+    // Each case uses its own page in the shared context, with a fake EventSource so the project event stream can be fed by hand.
+    {
+      const CAT_PREFS = 'portal.cat.prefs';
+      const sessionsHash = () => `/p/${projectId}/sessions`;
+      const catPage = async (opts: { width?: number; height?: number; reducedMotion?: boolean; prefs?: string | null; mode?: 'light' | 'dark' } = {}): Promise<Page> => {
+        const cp = await context!.newPage();
+        await cp.setViewportSize({ width: opts.width ?? 1280, height: opts.height ?? 800 });
+        if (opts.reducedMotion) await cp.emulateMedia({ reducedMotion: 'reduce' });
+        // A string, not a function: the test runner's transpiler would add helpers that do not exist in the page.
+        await cp.addInitScript(`(function () {
+          var Real = window.EventSource;
+          var live = [];
+          window.__catEs = live;
+          function Fake(url) { this.url = url; this.onmessage = null; this.onerror = null; this.closed = false; live.push(this); }
+          Fake.prototype.close = function () { this.closed = true; };
+          window.EventSource = function (url, init) {
+            return /\\/api\\/projects\\/[^/]+\\/events/.test(String(url)) ? new Fake(String(url)) : new Real(url, init);
+          };
+          window.__catEmit = function (ev) {
+            live.forEach(function (es) { if (!es.closed && es.onmessage) es.onmessage({ data: JSON.stringify(ev) }); });
+          };
+        })();`);
+        await cp.goto(`${BASE}/#/projects`, { waitUntil: 'domcontentloaded' });
+        await cp.evaluate(({ k, v, m }) => {
+          try {
+            if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v);
+            if (m) localStorage.setItem('portal-mode', m);
+          } catch { /* storage blocked */ }
+        }, { k: CAT_PREFS, v: opts.prefs === undefined ? null : opts.prefs, m: opts.mode ?? null });
+        await cp.goto(`${BASE}/#${sessionsHash()}`, { waitUntil: 'domcontentloaded' });
+        await cp.reload({ waitUntil: 'domcontentloaded' });
+        await cp.locator('[data-testid="cat-mascot"]').waitFor({ timeout: 8000 });
+        return cp;
+      };
+      const catBox = async (cp: Page) => {
+        const b = await cp.locator('.cat-button').boundingBox();
+        if (!b) throw new Error('The cat has no box');
+        return b;
+      };
+      const closeTip = async (cp: Page) => {
+        await cp.locator('[data-testid="cat-bubble"]').waitFor({ timeout: 6000 });
+        await cp.locator('.cat-bubble-close').click();
+      };
+      const emitWhenReady = async (cp: Page, ev: unknown) => {
+        await cp.waitForFunction(() => (window as any).__catEs?.some((e: any) => !e.closed), null, { timeout: 8000 });
+        await cp.evaluate((e) => (window as any).__catEmit(e), ev);
+      };
+      const withCat = async (opts: Parameters<typeof catPage>[0], fn: (cp: Page) => Promise<void>) => {
+        const cp = await catPage(opts);
+        try { await fn(cp); } finally {
+          try { await cp.evaluate((k) => localStorage.removeItem(k), CAT_PREFS); } catch { /* best effort */ }
+          await cp.close();
+        }
+      };
+      const shots = process.env.CAT_SHOTS;
+
+      await test('the cat reacts to a failed session once, links to it, and stays quiet for 20 s (a burst gives one bubble)', async () => {
+        await withCat({ prefs: null }, async (cp) => {
+          for (let i = 0; i < 10; i++) await emitWhenReady(cp, { type: 'workflow.updated', workflowId: 'w-done', status: 'done' });
+          const bubble = cp.locator('[data-testid="cat-bubble"][data-kind="reaction"]');
+          await bubble.waitFor({ timeout: 3000 });
+          if (!(await bubble.innerText()).includes('A session finished.')) throw new Error(`Unexpected reaction: ${await bubble.innerText()}`);
+          await emitWhenReady(cp, { type: 'workflow.updated', workflowId: 'w-fail', status: 'failed' });
+          await cp.waitForTimeout(500);
+          if (!(await bubble.innerText()).includes('A session finished.')) throw new Error('A second reaction replaced the first inside the 20 s gap');
+          const href = await bubble.locator('a').getAttribute('href');
+          if (href !== `#/p/${projectId}/sessions/w-done`) throw new Error(`Unexpected link: ${href}`);
+          await bubble.getByRole('button', { name: 'Close', exact: true }).click();
+          if (await cp.locator('[data-testid="cat-bubble"]').count() !== 0) throw new Error('The reaction bubble did not close');
+        });
+      }, page);
+
+      await test('a failed session makes the cat worried with a link; events of other kinds are ignored', async () => {
+        await withCat({ prefs: null }, async (cp) => {
+          await emitWhenReady(cp, { type: 'workflow.updated', workflowId: 'w1', status: 'running' });
+          await emitWhenReady(cp, { type: 'run.event', status: 'failed' });
+          if (await cp.locator('[data-kind="reaction"]').count() !== 0) throw new Error('A non-reacting event made the cat react');
+          await emitWhenReady(cp, { type: 'workflow.updated', workflowId: 'w1', status: 'failed' });
+          const bubble = cp.locator('[data-testid="cat-bubble"][data-kind="reaction"]');
+          await bubble.waitFor({ timeout: 3000 });
+          if (!(await bubble.innerText()).includes('A session failed.')) throw new Error('Wrong bubble text');
+          await cp.locator('.cat-sprite[data-sprite="worried"]').waitFor({ timeout: 2000 });
+        });
+      }, page);
+
+      await test('the cat roams: it walks by itself, stays inside the window, and a typing field stops it', async () => {
+        await withCat({ prefs: null }, async (cp) => {
+          await closeTip(cp);
+          const x0 = (await catBox(cp)).x;
+          await cp.locator('.cat-mascot[data-walking="true"]').waitFor({ timeout: 9000 });
+          await cp.waitForTimeout(1500);
+          const x1 = (await catBox(cp)).x;
+          if (Math.abs(x1 - x0) < 8) throw new Error(`The cat did not move (${x0} -> ${x1})`);
+          if (x1 < 0 || x1 + 56 > 1280) throw new Error(`The cat left the window (${x1})`);
+          // A focused text field makes it stop where it is, and it stays there while typing.
+          await cp.evaluate(() => {
+            const i = document.createElement('input'); i.id = 'cat-test-input'; i.type = 'text';
+            i.style.cssText = 'position:fixed;left:8px;top:8px;z-index:1';
+            document.body.appendChild(i); i.focus();
+          });
+          await cp.waitForTimeout(400);
+          const xs = (await catBox(cp)).x;
+          await cp.waitForTimeout(3500);
+          const xe = (await catBox(cp)).x;
+          if (Math.abs(xe - xs) > 1) throw new Error(`The cat kept walking while a field had focus (${xs} -> ${xe})`);
+          if (await cp.locator('.cat-mascot[data-walking="true"]').count() !== 0) throw new Error('The cat is still walking');
+        });
+      }, page);
+
+      await test('the mode menu: Sit stops roaming and is remembered, Hidden leaves a paw that brings the cat back', async () => {
+        await withCat({ prefs: null }, async (cp) => {
+          await cp.locator('.cat-button').click({ button: 'right' });
+          await cp.getByRole('menuitemradio', { name: 'Sit' }).click();
+          if ((await cp.locator('[data-testid="cat-mascot"]').getAttribute('data-mode')) !== 'sit') throw new Error('Sit was not applied');
+          await cp.reload({ waitUntil: 'domcontentloaded' });
+          await cp.locator('[data-testid="cat-mascot"]').waitFor({ timeout: 8000 });
+          if ((await cp.locator('[data-testid="cat-mascot"]').getAttribute('data-mode')) !== 'sit') throw new Error('Sit was not remembered after a reload');
+          await closeTip(cp);
+          const x0 = (await catBox(cp)).x;
+          await cp.waitForTimeout(5000);
+          if (Math.abs((await catBox(cp)).x - x0) > 1 || await cp.locator('.cat-mascot[data-walking="true"]').count() !== 0) throw new Error('A sitting cat moved');
+          await cp.locator('.cat-button').click({ button: 'right' });
+          await cp.getByRole('menuitemradio', { name: 'Hidden' }).click();
+          if (await cp.locator('.cat-button').count() !== 0) throw new Error('The cat is still visible in Hidden mode');
+          await cp.getByRole('button', { name: 'Show the cat' }).click();
+          await cp.locator('.cat-button').waitFor({ timeout: 2000 });
+        });
+      }, page);
+
+      await test('dragging moves the cat, the position survives a reload, and it is pulled back inside after a resize', async () => {
+        await withCat({ prefs: JSON.stringify({ mode: 'sit', x: null, bottom: 16 }) }, async (cp) => {
+          const b0 = await catBox(cp);
+          const cx = b0.x + b0.width / 2;
+          const cy = b0.y + b0.height / 2;
+          await cp.mouse.move(cx, cy);
+          await cp.mouse.down();
+          await cp.mouse.move(cx - 100, cy - 20, { steps: 6 });
+          await cp.mouse.move(cx - 200, cy - 40, { steps: 6 });
+          await cp.mouse.up();
+          const b1 = await catBox(cp);
+          if (Math.abs(b1.x - (b0.x - 200)) > 3) throw new Error(`The cat did not follow the drag (${b0.x} -> ${b1.x})`);
+          if (b1.y > b0.y - 30) throw new Error('The cat did not move up with the drag');
+          await cp.reload({ waitUntil: 'domcontentloaded' });
+          await cp.locator('.cat-button').waitFor({ timeout: 8000 });
+          const b2 = await catBox(cp);
+          if (Math.abs(b2.x - b1.x) > 3 || Math.abs(b2.y - b1.y) > 3) throw new Error(`The position was not remembered (${b1.x},${b1.y} -> ${b2.x},${b2.y})`);
+          // Released outside the window: pulled back inside.
+          const c = await catBox(cp);
+          await cp.mouse.move(c.x + 28, c.y + 28);
+          await cp.mouse.down();
+          await cp.mouse.move(1279, c.y + 28, { steps: 8 });
+          await cp.mouse.move(1500, c.y + 28, { steps: 4 });
+          await cp.mouse.up();
+          const b3 = await catBox(cp);
+          if (b3.x + b3.width > 1280) throw new Error(`The cat sits outside the window (${b3.x})`);
+          await cp.setViewportSize({ width: 700, height: 800 });
+          await cp.waitForTimeout(400);
+          const b4 = await catBox(cp);
+          if (b4.x + b4.width > 700 || b4.x < 0) throw new Error(`The cat was not pulled back after a resize (${b4.x})`);
+        });
+      }, page);
+
+      await test('on a phone the cat sits still and the page does not scroll sideways', async () => {
+        await withCat({ prefs: null, width: 390, height: 800 }, async (cp) => {
+          const x0 = (await catBox(cp)).x;
+          await cp.waitForTimeout(4500);
+          const b = await catBox(cp);
+          if (Math.abs(b.x - x0) > 1) throw new Error('The cat moved on a phone');
+          if (b.width > 46) throw new Error(`The phone cat is too big (${b.width})`);
+          const wide = await cp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
+          if (wide) throw new Error('The page scrolls sideways at 390 px');
+        });
+      }, page);
+
+      await test('with reduced motion the cat does not move', async () => {
+        await withCat({ prefs: null, reducedMotion: true }, async (cp) => {
+          await closeTip(cp);
+          const x0 = (await catBox(cp)).x;
+          await cp.waitForTimeout(5000);
+          if (Math.abs((await catBox(cp)).x - x0) > 1 || await cp.locator('.cat-mascot[data-walking="true"]').count() !== 0) throw new Error('The cat moved under reduced motion');
+          const anim = await cp.locator('.cat-sheet').first().evaluate((el) => getComputedStyle(el).animationName);
+          if (anim !== 'none') throw new Error(`The sprite animates under reduced motion (${anim})`);
+        });
+      }, page);
+
+      if (shots) {
+        await test('screenshots of the cat (CAT_SHOTS)', async () => {
+          fs.mkdirSync(shots, { recursive: true });
+          const reactions: Array<[string, Record<string, unknown>]> = [
+            ['celebrate', { type: 'workflow.updated', workflowId: 'w1', status: 'done' }],
+            ['worried', { type: 'workflow.updated', workflowId: 'w1', status: 'failed' }],
+            ['alert', { type: 'inbox.created', itemType: 'blocked' }],
+          ];
+          const variants: Array<[string, { width: number; height: number; mode: 'light' | 'dark' }]> = [
+            ['desktop-dark', { width: 1280, height: 800, mode: 'dark' }],
+            ['desktop-light', { width: 1280, height: 800, mode: 'light' }],
+            ['phone-dark', { width: 390, height: 800, mode: 'dark' }],
+          ];
+          for (const [label, v] of variants) {
+            const phone = v.width < 600;
+            await withCat({ prefs: null, ...v }, async (cp) => {
+              if (!phone) await closeTip(cp);
+              await cp.waitForTimeout(300);
+              await cp.screenshot({ path: `${shots}/${label}-idle.png` });
+              if (!phone) {
+                const b = await catBox(cp);
+                await cp.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+                await cp.waitForTimeout(500);
+                await cp.screenshot({ path: `${shots}/${label}-hover.png` });
+                await cp.mouse.move(10, 10);
+                await cp.locator('.cat-mascot[data-walking="true"]').waitFor({ timeout: 9000 });
+                await cp.waitForTimeout(700);
+                await cp.screenshot({ path: `${shots}/${label}-walking.png` });
+              }
+            });
+            for (const [name, ev] of reactions) {
+              await withCat({ prefs: null, ...v }, async (cp) => {
+                await emitWhenReady(cp, ev);
+                await cp.locator('[data-kind="reaction"]').waitFor({ timeout: 3000 });
+                await cp.waitForTimeout(phone ? 900 : 1100);
+                await cp.screenshot({ path: `${shots}/${label}-${name}.png` });
+              });
+            }
+          }
+        }, page);
+      }
+    }
+
     await test('New Project modal opens and form is usable', async (p) => {
       await goto(p, '/projects');
       const newBtn = p.locator('button').filter({ hasText: /new project/i }).first();

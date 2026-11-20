@@ -78,6 +78,16 @@ The header shows a breadcrumb for the current page. On the right:
 - A theme toggle button cycles through **Light**, **Dark**, and **System**.
 - Your initials open the **account menu**, which shows your name and email, colour theme controls, a shortcut to the keyboard shortcuts sheet (**?**), and **Sign out**.
 
+### The cat companion
+
+A small pixel cat lives at the bottom of the screen. It is a helper, never a requirement: nothing in the portal depends on it.
+
+- **Roaming.** On screens wider than 600 px the cat sits for a few seconds, walks a short way along the bottom, and repeats. It stops where it is while you type in a field or while a dialog is open, and it does not move at all if your system asks for reduced motion. On phones it stays in the corner.
+- **Hover and click.** Pointing at the cat makes it wave and shows a "Chat with Agent" label (the chat itself is not built yet). Clicking it shows a tip; **×** closes the tip, and **Esc** closes any bubble or menu.
+- **Drag.** Drag the cat anywhere on the screen. It remembers the spot in this browser and stays inside the window when you resize it.
+- **Reactions.** For the project you have open, the cat reacts when a session finishes (it hops), fails (it looks worried) or is blocked, and when something new needs you in the Inbox (it looks alert). The bubble has an **Open** link to the session or the Inbox and closes by itself after 8 seconds. It reacts at most once every 20 seconds and not while the browser tab is in the background.
+- **Mode.** Click **⋯** on a bubble, or right-click (or press and hold) the cat, to choose **Roam**, **Sit** or **Hidden**. Hidden leaves a small paw button in the bottom-right corner that brings the cat back. The choice is stored in this browser only.
+
 ### Projects and switching projects
 
 The **Projects** page lists all projects you have access to. Switch projects at any time using the project picker in the rail, or press **g p** to go to the Projects page.

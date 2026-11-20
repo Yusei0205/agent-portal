@@ -1122,6 +1122,25 @@
         "engines"
       ]
     },
+    "cat": {
+      "description": "Cat companion: pixel sprites, roaming brain, drag, reactions to live project events, preferences",
+      "sources": [
+        "web/src/components/CatMascot.jsx",
+        "web/src/components/CatSprite.jsx",
+        "web/src/lib/cat-brain.js",
+        "web/src/lib/cat-mood.js",
+        "web/src/lib/cat-prefs.js",
+        "web/src/lib/cat-sprites.js",
+        "web/src/styles/mascot.css"
+      ],
+      "tests": [
+        "test/cat-companion.test.ts",
+        "test/cat-sprites.test.ts"
+      ],
+      "smokeIds": [
+        "projects"
+      ]
+    },
     "shell": {
       "description": "App shell — rail navigation, command palette, shortcuts, header, breadcrumb, dialogs",
       "sources": [

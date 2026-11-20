@@ -215,18 +215,16 @@
   height: 100%;
   width: calc(100% * var(--cat-n));
 }
-/* Dark themes: a light belly and dark eyes read better than the light-theme values mirrored. */
+/* Dark themes: a lighter fur and a light belly read better than the light-theme values mirrored; the eyes stay light. */
 [data-theme="dark"] .cat-sprite {
-  --cat-fur: color-mix(in srgb, var(--accent) 48%, var(--panel));
+  --cat-fur: color-mix(in srgb, var(--accent) 62%, var(--panel));
   --cat-belly: color-mix(in srgb, var(--ink) 72%, var(--panel));
-  --cat-eye: var(--panel);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .cat-sprite {
-    --cat-fur: color-mix(in srgb, var(--accent) 48%, var(--panel));
+    --cat-fur: color-mix(in srgb, var(--accent) 62%, var(--panel));
     --cat-belly: color-mix(in srgb, var(--ink) 72%, var(--panel));
-    --cat-eye: var(--panel);
-  }
+    }
 }
 @media (prefers-reduced-motion: no-preference) {
   .cat-sheet {
