@@ -216,6 +216,13 @@ export async function startServer(
   await initLearnRepository();
   await initTestingRepository();
 
+  // 6i. Initialise Auto-fix findings and pipeline-runs repositories. Without these calls the lazy getters fall back to
+  //     SQLite even with USE_DYNAMODB=true, where the projects foreign key fails (projects live in DynamoDB).
+  const { initAutofixFindingsRepository } = await import('./repositories/autofix-findings.ts');
+  const { initPipelineRunsRepository } = await import('./repositories/pipeline-runs.ts');
+  await initAutofixFindingsRepository();
+  await initPipelineRunsRepository();
+
   // 7. Register pre-request hook to keep settings snapshot fresh on Lambda
   //     (version check is cheap; full reload only when version changes)
   const { setPreRequestHook } = await import('./http.ts');

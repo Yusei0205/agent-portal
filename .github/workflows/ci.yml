@@ -87,7 +87,7 @@ jobs:
   repo-contracts:
     name: Repository contract tests (DynamoDB Local)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
 
     services:
       # No container health check: the curl check never reported healthy (a bare GET /
@@ -200,4 +200,36 @@ jobs:
           REQUIRE_DYNAMODB: "1"
           DYNAMODB_REGION: ap-southeast-1
         run: npm run test:affected -- --module budget --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (inbox)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module inbox --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (loop-specs)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module loop-specs --backend-only
+        timeout-minutes: 5
+
+      - name: Repository contract tests (autofix)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module autofix --backend-only
+        timeout-minutes: 10
+
+      - name: Repository contract tests (pipelines)
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          REQUIRE_DYNAMODB: "1"
+          DYNAMODB_REGION: ap-southeast-1
+        run: npm run test:affected -- --module pipelines --backend-only
         timeout-minutes: 5

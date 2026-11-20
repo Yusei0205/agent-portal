@@ -1308,7 +1308,8 @@
       ],
       "tests": [
         "test/health.test.ts",
-        "test/startup-ordering.test.ts"
+        "test/startup-ordering.test.ts",
+        "test/startup-repositories.test.ts"
       ],
       "smokeIds": []
     },
