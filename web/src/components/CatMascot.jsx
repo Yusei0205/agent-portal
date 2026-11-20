@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CatSprite } from './CatSprite.jsx';
+import { CatChatPanel } from './CatChatPanel.jsx';
 import { subscribeProject } from '../lib/events.js';
 import { loadCatPrefs, saveCatPrefs } from '../lib/cat-prefs.js';
 import { createReactionGate, isWorking, moodForEvent, pickMotion, roamPaused, trackRunning } from '../lib/cat-mood.js';
@@ -77,7 +78,7 @@ function startX(prefs, width, size) {
   return clampX(x, b);
 }
 
-export function CatMascot({ projectId = null, inboxCount = 0 }) {
+export function CatMascot({ projectId = null, inboxCount = 0, route = null, user = null }) {
   const [prefs, setPrefs] = useState(() => loadCatPrefs());
   const [env, setEnv] = useState(readEnv);
   const size = sizeFor(env.width);
@@ -90,11 +91,16 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
   const [dragging, setDragging] = useState(false);
   const [bubble, setBubble] = useState(null); // { kind: 'tip' | 'reaction', text, href, id }
   const [menuOpen, setMenuOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [notice, setNotice] = useState(null); // a reaction said inside the open panel
   const [running, setRunning] = useState(() => new Set()); // ids of the open project's running sessions, from the live events
   const [anim, setAnim] = useState(null); // { name, id } while a reaction plays
   const [tip, setTip] = useState(() => Math.floor(Math.random() * CAT_TIPS.length));
 
   const bodyRef = useRef(null);
+  const buttonRef = useRef(null);
+  const panelOpenRef = useRef(false);
+  panelOpenRef.current = panelOpen;
   const xRef = useRef(x);
   const brainRef = useRef(null);
   const prefsRef = useRef(prefs);
@@ -166,7 +172,7 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
   }, [env.width, env.height, size, moveTo]);
 
   const working = isWorking(running);
-  const roaming = prefs.mode === 'roam' && roamAllowed(env) && !roamPaused(working) && !dragging && !bubble && !menuOpen;
+  const roaming = prefs.mode === 'roam' && roamAllowed(env) && !roamPaused(working) && !dragging && !bubble && !menuOpen && !panelOpen;
 
   // Roaming: sit a while, walk a short way, repeat. Stops where it is when roaming is no longer allowed.
   useEffect(() => {
@@ -209,7 +215,8 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
     clearTimeout(animTimer.current);
     clearTimeout(bubbleTimer.current);
     setMenuOpen(false);
-    setBubble({ kind: 'reaction', text: r.text, href: r.href, id });
+    if (panelOpenRef.current) setNotice({ text: r.text, href: r.href, id }); // the open panel says it instead of a bubble
+    else setBubble({ kind: 'reaction', text: r.text, href: r.href, id });
     setAnim({ name: r.animation, id });
     animTimer.current = setTimeout(() => setAnim((a) => (a && a.id === id ? null : a)), ANIM_SHOW_MS);
     bubbleTimer.current = setTimeout(() => setBubble((b) => (b && b.id === id ? null : b)), REACTION_SHOW_MS);
@@ -247,7 +254,7 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
   useEffect(() => {
     if (!matches('(min-width: 601px)')) return undefined;
     tipTimer.current = setTimeout(() => {
-      if (prefsRef.current.mode === 'hidden') return;
+      if (prefsRef.current.mode === 'hidden' || panelOpenRef.current) return;
       // Opened by itself, it also leaves by itself (a bubble that stays open keeps the cat from roaming).
       const id = ++seq.current;
       setBubble((b) => b ?? { kind: 'tip', id });
@@ -273,6 +280,7 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
   }, []);
 
   const nextTip = () => {
+    setPanelOpen(false);
     clearTimeout(tipTimer.current);
     clearTimeout(bubbleTimer.current);
     setMenuOpen(false);
@@ -280,7 +288,22 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
     setBubble({ kind: 'tip', id: ++seq.current });
   };
 
+  const openPanel = () => {
+    clearTimeout(tipTimer.current);
+    clearTimeout(bubbleTimer.current);
+    setBubble(null);
+    setMenuOpen(false);
+    setNotice(null);
+    setPanelOpen(true);
+  };
+  // Closing gives focus back to the cat, except when the panel closes to navigate (the page then moves focus to its own content).
+  const closePanel = useCallback((opts) => {
+    setPanelOpen(false);
+    if (opts?.restoreFocus !== false) buttonRef.current?.focus();
+  }, []);
+
   const openMenu = () => {
+    setPanelOpen(false);
     clearTimeout(pressTimer.current);
     clearTimeout(tipTimer.current);
     clearTimeout(bubbleTimer.current);
@@ -292,7 +315,7 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
     if (mode !== 'hidden') lastVisibleMode.current = mode;
     updatePrefs({ mode });
     setMenuOpen(false);
-    if (mode === 'hidden') closeBubble();
+    if (mode === 'hidden') { closeBubble(); setPanelOpen(false); }
   };
 
   // Pointer: a movement under the threshold is a click, anything more is a drag; holding still for half a second opens the menu.
@@ -340,7 +363,7 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
 
   const onClick = () => {
     if (suppressClick.current) { suppressClick.current = false; return; }
-    nextTip();
+    if (panelOpen) closePanel(); else openPanel();
   };
 
   if (prefs.mode === 'hidden') {
@@ -361,11 +384,11 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
 
   const motionName = pickMotion({ reaction: anim ? anim.name : null, walking, hovered: hovered && !dragging, working });
   const hoverCapable = matches('(hover: hover)');
-  const showLabel = hovered && hoverCapable && !bubble && !menuOpen && !dragging && !walking;
+  const showLabel = hovered && hoverCapable && !bubble && !menuOpen && !panelOpen && !dragging && !walking;
   const style = { bottom, '--cat-x': `${x}px`, '--cat-size': `${size}px` };
 
   return (
-    <div className="cat-mascot" data-testid="cat-mascot" data-mode={prefs.mode} data-walking={walking ? 'true' : 'false'} data-working={working ? 'true' : 'false'} style={style}>
+    <div className={`cat-mascot${panelOpen ? ' has-panel' : ''}`} data-testid="cat-mascot" data-mode={prefs.mode} data-walking={walking ? 'true' : 'false'} data-working={working ? 'true' : 'false'} style={style}>
       {bubble && (
         <div className="cat-bubble" role="status" aria-live="polite" data-testid="cat-bubble" data-kind={bubble.kind}>
           <p className="cat-bubble-text">
@@ -379,12 +402,25 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
       )}
       {menuOpen && (
         <div className="cat-menu" role="menu" aria-label="Cat settings" data-testid="cat-menu">
+          <button type="button" role="menuitem" className="cat-menu-item" onClick={nextTip}>
+            <span className="cat-menu-dot cat-menu-dot-tip" aria-hidden="true" />Show a tip
+          </button>
           {MODES.map((m) => (
             <button key={m.id} type="button" role="menuitemradio" aria-checked={prefs.mode === m.id} className="cat-menu-item" onClick={() => chooseMode(m.id)}>
               <span className="cat-menu-dot" aria-hidden="true" />{m.label}
             </button>
           ))}
         </div>
+      )}
+      {panelOpen && (
+        <CatChatPanel
+          route={route ?? { projectId, tab: '', rest: [] }}
+          user={user}
+          roam={prefs.mode === 'roam'}
+          onRoamChange={(on) => { if (on) lastVisibleMode.current = 'roam'; updatePrefs({ mode: on ? 'roam' : 'sit' }); }}
+          onClose={closePanel}
+          notice={notice}
+        />
       )}
       {showLabel && <div className="cat-label" aria-hidden="true">Chat with Agent ✨</div>}
       <div
@@ -395,8 +431,10 @@ export function CatMascot({ projectId = null, inboxCount = 0 }) {
         <button
           type="button"
           className={`cat-button${dragging ? ' is-dragging' : ''}`}
-          aria-label="Show a tip"
-          title="Show a tip"
+          ref={buttonRef}
+          aria-label="Chat with Agent"
+          aria-haspopup="dialog"
+          aria-expanded={panelOpen}
           onClick={onClick}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}

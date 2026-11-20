@@ -7,7 +7,7 @@ import { useOverlayDismiss } from '../lib/useOverlayDismiss.js';
 
 // ── Page catalogue ────────────────────────────────────────────────────────────
 
-function buildNavItems(route, user) {
+export function buildNavItems(route, user) {
   const pid = route.projectId;
   const items = [];
 

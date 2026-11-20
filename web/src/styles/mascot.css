@@ -81,10 +81,10 @@
 .cat-menu {
   position: absolute;
   bottom: calc(var(--cat-size) + 10px);
-  left: clamp(8px, calc(var(--cat-x, 0px) + var(--cat-size, 56px) / 2 - 60px), calc(100% - 128px));
+  left: clamp(8px, calc(var(--cat-x, 0px) + var(--cat-size, 56px) / 2 - 70px), calc(100% - 148px));
   display: flex;
   flex-direction: column;
-  width: 120px;
+  width: 140px;
   padding: 4px;
   background: var(--panel);
   color: var(--ink);
@@ -110,7 +110,92 @@
 .cat-menu-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ink-3); box-sizing: border-box; }
 .cat-menu-item[aria-checked="true"] .cat-menu-dot { background: var(--accent); border-color: var(--accent); }
 
-/* The hover label (decoration in phase A). */
+
+/* The shortcut panel (web/src/components/CatChatPanel.jsx): a non-modal floating card above the cat; a bottom sheet on phones. */
+.cat-panel {
+  --cat-pw: min(340px, calc(100vw - 32px));
+  position: absolute;
+  bottom: calc(var(--cat-size) + 10px);
+  left: clamp(8px, calc(var(--cat-x, 0px) + var(--cat-size, 56px) / 2 - var(--cat-pw) / 2), calc(100vw - var(--cat-pw) - 8px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: var(--cat-pw);
+  max-height: min(70vh, 460px);
+  box-sizing: border-box;
+  padding: 10px 12px 10px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--ink) 18%, transparent);
+  font-size: 0.86rem;
+  line-height: 1.4;
+  pointer-events: auto;
+}
+.cat-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cat-panel-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; color: var(--ink); }
+.cat-panel-title svg { color: var(--accent); }
+.cat-panel-close,
+.cat-panel-send {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.cat-panel-close:hover { color: var(--ink); background: var(--raised); }
+.cat-panel-send { background: var(--accent); color: var(--accent-ink); }
+.cat-panel-send:disabled { background: var(--raised); color: var(--ink-3); cursor: default; }
+.cat-panel-close:focus-visible,
+.cat-panel-send:focus-visible,
+.cat-chip:focus-visible,
+.cat-panel-input:focus-visible,
+.cat-panel-roam input:focus-visible { outline: none; box-shadow: var(--accent-glow); }
+.cat-panel-log { display: flex; flex-direction: column; gap: 6px; min-height: 0; max-height: 28vh; overflow-y: auto; }
+.cat-msg p { margin: 0; padding: 7px 10px; border-radius: 12px; overflow-wrap: anywhere; }
+.cat-msg-cat p { background: var(--raised); color: var(--ink); border-bottom-left-radius: 4px; max-width: 92%; }
+.cat-msg-me { align-self: flex-end; max-width: 85%; }
+.cat-msg-me p { background: var(--accent); color: var(--accent-ink); border-bottom-right-radius: 4px; }
+.cat-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cat-chip {
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.cat-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+.cat-panel-form { display: flex; align-items: center; gap: 6px; }
+.cat-panel-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--ink);
+  font: inherit;
+}
+.cat-panel-input::placeholder { color: var(--ink-3); }
+.cat-panel-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 0.76rem; color: var(--ink-3); }
+.cat-panel-roam { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); cursor: pointer; }
+.cat-panel-roam input { accent-color: var(--accent); margin: 0; }
+.cat-menu-dot-tip { border-radius: 2px; }
+@media (prefers-reduced-motion: no-preference) {
+  .cat-panel { animation: cat-pop 180ms ease-out; }
+}
+
+/* The hover label: it names the click (the shortcut panel). */
 .cat-label {
   position: absolute;
   bottom: calc(var(--cat-size) + 4px);
@@ -193,6 +278,20 @@
 @media (max-width: 600px) {
   .cat-mascot { --cat-bw: calc(100vw - 44px); }
   .cat-mascot-hidden { right: 10px; bottom: 10px; }
+  /* The panel becomes a full-width sheet at the bottom of the screen. */
+  .cat-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 78vh;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    border-width: 1px 0 0;
+    border-radius: 16px 16px 0 0;
+  }
+  .cat-mascot.has-panel .cat-body { opacity: 0; } /* the sheet covers the cat; it stays focusable for the way back */
+  .cat-panel-input { font-size: 16px; } /* no zoom on focus in iOS */
 }
 
 /* Never in print. */

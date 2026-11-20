@@ -1123,10 +1123,12 @@
       ]
     },
     "cat": {
-      "description": "Cat companion: pixel sprites, roaming brain, drag, reactions to live project events, preferences",
+      "description": "Cat companion: calico pixel sprites, roaming brain, drag, reactions and working state from live project events, shortcut panel, preferences",
       "sources": [
         "web/src/components/CatMascot.jsx",
         "web/src/components/CatSprite.jsx",
+        "web/src/components/CatChatPanel.jsx",
+        "web/src/lib/cat-actions.js",
         "web/src/lib/cat-brain.js",
         "web/src/lib/cat-mood.js",
         "web/src/lib/cat-prefs.js",
@@ -1134,6 +1136,7 @@
         "web/src/styles/mascot.css"
       ],
       "tests": [
+        "test/cat-actions.test.ts",
         "test/cat-companion.test.ts",
         "test/cat-sprites.test.ts"
       ],

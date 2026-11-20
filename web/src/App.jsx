@@ -631,7 +631,7 @@ function Shell({ user, onSignOut }) {
         isOpen={shortcutsOpen}
         onClose={() => setShortcutsOpen(false)}
       />
-      <CatMascot projectId={route.projectId} inboxCount={inboxCount} />
+      <CatMascot projectId={route.projectId} inboxCount={inboxCount} route={route} user={user} />
     </div>
   );
 }

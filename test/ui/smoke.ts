@@ -594,18 +594,19 @@ async function main() {
       await assertHeading(p, 'Projects');
     }, page);
 
-    await test('the cat mascot pops up a tip, × closes it, and clicking the cat shows a tip again', async (p) => {
+    await test('the cat mascot pops up a tip, × closes it, and "Show a tip" in the cat menu shows one again', async (p) => {
       await goto(p, '/projects');
       await p.waitForSelector('[data-testid="cat-bubble"]', { timeout: 6000 });
       const first = await p.locator('[data-testid="cat-bubble"]').innerText();
       if (!first.includes('Tip:')) throw new Error(`Unexpected bubble text: ${first}`);
       await p.getByRole('button', { name: 'Close tip' }).click();
       if (await p.locator('[data-testid="cat-bubble"]').count() !== 0) throw new Error('The bubble did not close');
-      await p.getByRole('button', { name: 'Show a tip' }).click();
+      await p.locator('.cat-button').click({ button: 'right' });
+      await p.getByRole('menuitem', { name: 'Show a tip' }).click();
       await p.waitForSelector('[data-testid="cat-bubble"]', { timeout: 2000 });
     }, page);
 
-    await test('on a phone the cat does not pop up a tip by itself; tapping it shows one', async (p) => {
+    await test('on a phone the cat does not pop up a tip by itself; the cat menu shows one', async (p) => {
       await p.setViewportSize({ width: 390, height: 800 });
       try {
         await goto(p, '/projects', 300);
@@ -613,7 +614,8 @@ async function main() {
         await p.locator('[data-testid="cat-mascot"]').waitFor({ timeout: 6000 });
         await p.waitForTimeout(3000);
         if (await p.locator('[data-testid="cat-bubble"]').count() !== 0) throw new Error('The tip bubble opened by itself on a phone');
-        await p.getByRole('button', { name: 'Show a tip' }).click();
+        await p.locator('.cat-button').click({ button: 'right' });
+        await p.getByRole('menuitem', { name: 'Show a tip' }).click();
         await p.waitForSelector('[data-testid="cat-bubble"]', { timeout: 2000 });
         await p.getByRole('button', { name: 'Close tip' }).click();
       } finally {
@@ -807,6 +809,119 @@ async function main() {
         });
       }, page);
 
+      const SIT = JSON.stringify({ mode: 'sit', x: null, bottom: 16 });
+      const openPanel = async (cp: Page) => {
+        await cp.locator('.cat-button').click();
+        await cp.locator('[data-testid="cat-panel"]').waitFor({ timeout: 3000 });
+      };
+      const hashOf = (cp: Page) => cp.evaluate(() => window.location.hash);
+      const waitHash = async (cp: Page, re: RegExp) => {
+        await cp.waitForFunction((src) => new RegExp(src).test(window.location.hash), re.source, { timeout: 4000 });
+      };
+      const focusIsCat = (cp: Page) => cp.evaluate(() => document.activeElement?.classList.contains('cat-button') === true);
+
+      await test('clicking the cat opens a non-modal shortcut panel with a greeting, chips, a roam box and the footer', async () => {
+        await withCat({ prefs: SIT }, async (cp) => {
+          await openPanel(cp);
+          const panel = cp.locator('[data-testid="cat-panel"]');
+          if ((await panel.getAttribute('role')) !== 'dialog') throw new Error('The panel is not a dialog');
+          if ((await panel.getAttribute('aria-modal')) !== null) throw new Error('The panel must not be modal');
+          const text = await panel.innerText();
+          for (const want of ["Meow! I'm your portal assistant. What would you like to do?", 'Shortcuts only for now', 'Allow cat to roam']) {
+            if (!text.includes(want)) throw new Error(`The panel lacks "${want}"`);
+          }
+          for (const chip of ['Start a session', 'What needs me?', 'Auto-fix', 'Pipelines', 'Search knowledge']) {
+            await panel.getByRole('button', { name: chip, exact: true }).waitFor({ timeout: 1000 });
+          }
+          const inputFocused = await cp.evaluate(() => document.activeElement?.classList.contains('cat-panel-input') === true);
+          if (!inputFocused) throw new Error('Focus did not move into the panel');
+          if (await cp.locator('[data-testid="cat-bubble"]').count() !== 0) throw new Error('A tip bubble is open next to the panel');
+          // non-modal: the page behind still answers clicks (a rail link works while the panel is open)
+          if (await cp.evaluate(() => document.querySelector('[aria-modal="true"]') !== null)) throw new Error('A modal dialog is open');
+          const z = await cp.evaluate(() => Number(getComputedStyle(document.querySelector('.cat-mascot')!).zIndex));
+          if (!(z > 0 && z < 200)) throw new Error(`Unexpected z-index ${z}`);
+        });
+      }, page);
+
+      await test('a chip navigates and closes the panel', async () => {
+        await withCat({ prefs: SIT }, async (cp) => {
+          await openPanel(cp);
+          await cp.locator('[data-testid="cat-panel"]').getByRole('button', { name: 'What needs me?', exact: true }).click();
+          await waitHash(cp, /^#\/inbox/);
+          if (await cp.locator('[data-testid="cat-panel"]').count() !== 0) throw new Error('The panel stayed open after navigating');
+          await goto(cp, sessionsHash());
+          await openPanel(cp);
+          await cp.locator('[data-testid="cat-panel"]').getByRole('button', { name: 'Auto-fix', exact: true }).click();
+          await waitHash(cp, /\/setup\/autofix$/);
+        });
+      }, page);
+
+      await test('typing "inbox" opens the Inbox; a question gets the shortcut reply with the chips; Escape closes and focus returns to the cat', async () => {
+        await withCat({ prefs: SIT }, async (cp) => {
+          await openPanel(cp);
+          await cp.locator('.cat-panel-input').fill('what is the weather');
+          await cp.keyboard.press('Enter');
+          await cp.locator('.cat-msg-cat').filter({ hasText: "I can't answer questions yet, but I can take you to:" }).waitFor({ timeout: 2000 });
+          if (await cp.locator('.cat-chip').count() < 5) throw new Error('The chips are missing after the reply');
+          if (!(await hashOf(cp)).includes('/sessions')) throw new Error('A question navigated');
+          await cp.locator('.cat-panel-input').fill('inbox');
+          await cp.keyboard.press('Enter');
+          await waitHash(cp, /^#\/inbox/);
+          await openPanel(cp);
+          await cp.keyboard.press('Escape');
+          await cp.locator('[data-testid="cat-panel"]').waitFor({ state: 'detached', timeout: 2000 });
+          if (!(await focusIsCat(cp))) throw new Error('Focus did not return to the cat after Escape');
+        });
+      }, page);
+
+      await test('the roam checkbox follows the mode and changes it; the menu still has Show a tip', async () => {
+        await withCat({ prefs: null }, async (cp) => {
+          await openPanel(cp);
+          const box = cp.getByLabel('Allow cat to roam');
+          if (!(await box.isChecked())) throw new Error('Roam is the default and the box is not checked');
+          await box.uncheck();
+          if ((await cp.locator('[data-testid="cat-mascot"]').getAttribute('data-mode')) !== 'sit') throw new Error('Unchecking did not set Sit');
+          await box.check();
+          if ((await cp.locator('[data-testid="cat-mascot"]').getAttribute('data-mode')) !== 'roam') throw new Error('Checking did not set Roam');
+          await cp.keyboard.press('Escape');
+          await cp.locator('.cat-button').click({ button: 'right' });
+          await cp.getByRole('menuitem', { name: 'Show a tip' }).waitFor({ timeout: 1000 });
+        });
+      }, page);
+
+      await test('on a phone the panel is a full-width bottom sheet and the page does not scroll sideways', async () => {
+        await withCat({ prefs: null, width: 390, height: 800 }, async (cp) => {
+          await openPanel(cp);
+          await cp.waitForTimeout(400); // the panel's short pop-in
+          const b = await cp.locator('[data-testid="cat-panel"]').boundingBox();
+          if (!b) throw new Error('No panel box');
+          if (b.x > 1 || Math.abs(b.width - 390) > 2) throw new Error(`The sheet is not full width (${b.x}, ${b.width})`);
+          if (Math.abs(b.y + b.height - 800) > 2) throw new Error(`The sheet is not at the bottom (${b.y + b.height})`);
+          if (await cp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error('The page scrolls sideways with the sheet open');
+          await cp.locator('.cat-panel-input').fill('inbox');
+          await cp.keyboard.press('Enter');
+          await waitHash(cp, /^#\/inbox/);
+        });
+      }, page);
+
+      await test('the cat works while a session runs (laptop), keeps still, and a finished session still celebrates', async () => {
+        await withCat({ prefs: null }, async (cp) => {
+          await closeTip(cp);
+          await emitWhenReady(cp, { type: 'workflow.updated', workflowId: 'w1', status: 'running' });
+          await cp.locator('.cat-sprite[data-sprite="working"]').waitFor({ timeout: 2000 });
+          if ((await cp.locator('[data-testid="cat-mascot"]').getAttribute('data-working')) !== 'true') throw new Error('data-working is not set');
+          const x0 = (await catBox(cp)).x;
+          await cp.waitForTimeout(4500);
+          if (Math.abs((await catBox(cp)).x - x0) > 1 || await cp.locator('.cat-mascot[data-walking="true"]').count() !== 0) throw new Error('A working cat roamed');
+          await emitWhenReady(cp, { type: 'workflow.updated', workflowId: 'w2', status: 'running' });
+          await emitWhenReady(cp, { type: 'workflow.updated', workflowId: 'w1', status: 'done' });
+          await cp.locator('.cat-sprite[data-sprite="celebrate"]').waitFor({ timeout: 2000 });
+          await cp.locator('.cat-sprite[data-sprite="working"]').waitFor({ timeout: 6000 }); // w2 still runs after the celebration
+          await emitWhenReady(cp, { type: 'workflow.updated', workflowId: 'w2', status: 'stopped' });
+          await cp.locator('.cat-sprite[data-sprite="idle"]').waitFor({ timeout: 2000 });
+        });
+      }, page);
+
       if (shots) {
         await test('screenshots of the cat (CAT_SHOTS)', async () => {
           fs.mkdirSync(shots, { recursive: true });
@@ -836,6 +951,17 @@ async function main() {
                 await cp.waitForTimeout(700);
                 await cp.screenshot({ path: `${shots}/${label}-walking.png` });
               }
+            });
+            await withCat({ prefs: null, ...v }, async (cp) => {
+              if (!phone) await closeTip(cp);
+              await emitWhenReady(cp, { type: 'workflow.updated', workflowId: 'w1', status: 'running' });
+              await cp.locator('.cat-sprite[data-sprite="working"]').waitFor({ timeout: 2000 });
+              await cp.waitForTimeout(500);
+              await cp.screenshot({ path: `${shots}/${label}-working.png` });
+              await cp.locator('.cat-button').click();
+              await cp.locator('[data-testid="cat-panel"]').waitFor({ timeout: 2000 });
+              await cp.waitForTimeout(400);
+              await cp.screenshot({ path: `${shots}/${label}-panel.png` });
             });
             for (const [name, ev] of reactions) {
               await withCat({ prefs: null, ...v }, async (cp) => {
