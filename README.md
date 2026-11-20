@@ -51,6 +51,7 @@ Bedrock) or through Kiro CLI or OpenAI Codex, and has a simulated Demo mode. The
   scrubbed. CodeCommit pull requests are reviewed by hand (*Run now* with the number) and get one
   summary comment.
 - **Auto-fix** turns failing CI runs (GitHub `workflow_run` webhook), review findings and failed sessions into findings, and lets an agent propose a fix that the server re-verifies and guards (protected paths, size caps, attempt and cost limits) before a draft pull request is opened. It is off by default and set per project under Setup > Auto-fix; by default a person approves every push in the Inbox. See the user guide, section 14.
+- **Pipelines** shows the latest GitHub workflow runs per project (Setup > Pipelines), raises an Inbox alert when a deploy workflow fails and can post it to Slack or Teams; it reuses the Auto-fix webhook with the Workflow runs event. See the user guide, section 15.
 - **Inbox** is one list across projects of everything that needs a person: approvals, questions,
   pending pushes and blocked sessions, with a live count and answers right in the list.
 - **Feedback** (Portal › Feedback): anyone signed in sends feedback with the page they came from and follows its

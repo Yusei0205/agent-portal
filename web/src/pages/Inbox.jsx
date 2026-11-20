@@ -73,6 +73,25 @@ function AutofixHeader({ item }) {
   );
 }
 
+const isPipeline = (item) => item.payload?.kind === 'pipeline';
+
+/** The Deploy failed label of a pipeline Inbox item: workflow, repository@branch, commit, actor and a GitHub link (all text). */
+function PipelineHeader({ item }) {
+  const p = item.payload || {};
+  const url = typeof p.url === 'string' && p.url.startsWith('https://github.com/') ? p.url : '';
+  return (
+    <div className="inbox-pipeline" data-testid="inbox-pipeline">
+      <span className="badge badge-danger">Deploy failed</span>
+      <strong>{String(p.workflow ?? '')}</strong>
+      <span>{String(p.repo ?? '')}@{String(p.branch ?? '')}</span>
+      {p.sha && <code>{String(p.sha).slice(0, 7)}</code>}
+      {p.actor && <span>by {String(p.actor)}</span>}
+      {Number(p.failures) > 1 && <span className="muted">{Number(p.failures)} failures</span>}
+      {url && <a href={url} target="_blank" rel="noreferrer">View run</a>}
+    </div>
+  );
+}
+
 /** The changed file names an auto-fix push question carries (at most 50, and a flag when the list was cut). */
 function ChangedPaths({ payload }) {
   const paths = Array.isArray(payload?.paths) ? payload.paths.filter((x) => typeof x === 'string') : [];
@@ -293,6 +312,7 @@ function GenericItem({ item, onResolved }) {
         </span>
       </div>
       {isAutofix(item) && <AutofixHeader item={item} />}
+      {isPipeline(item) && <PipelineHeader item={item} />}
       {summary && <p className="inbox-item-body">{summary}</p>}
       {resolved ? (
         <div className="inbox-item-resolved-note">

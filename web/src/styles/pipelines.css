@@ -1,0 +1,17 @@
+/* Pipelines tab (project Setup). Status is a tinted pill with a dot (.af-pill), never a coloured edge. Rows stack as cards on phones. */
+.pl-root { min-width: 0; }
+.pl-list, .pl-hist-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; min-width: 0; }
+.pl-row { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; min-width: 0; }
+.pl-main { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.pl-wf { overflow-wrap: anywhere; }
+.pl-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.82rem; min-width: 0; }
+.pl-meta > * { overflow-wrap: anywhere; min-width: 0; }
+.pl-branch { font-weight: 600; }
+.pl-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.pl-history { list-style: none; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 10px; min-width: 0; }
+.pl-hist-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 0.82rem; padding: 4px 0; border-bottom: 1px solid var(--line-2); }
+.pl-hist-row:last-child { border-bottom: 0; }
+@media (min-width: 720px) {
+  .pl-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 2fr) auto; align-items: center; gap: 12px; }
+}
+.inbox-pipeline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 6px 0; min-width: 0; overflow-wrap: anywhere; }

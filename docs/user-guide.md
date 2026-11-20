@@ -16,6 +16,7 @@
 12. [Keyboard shortcuts](#12-keyboard-shortcuts)
 13. [Troubleshooting](#13-troubleshooting)
 14. [Auto-fix](#14-auto-fix)
+15. [Pipelines](#15-pipelines)
 
 ---
 
@@ -1176,3 +1177,34 @@ The default is human approval for every push. Setting `AUTOFIX_ALLOW_UNATTENDED_
 Sections written (all 13 requested): Getting started, Sessions, Delegated sessions, Workspaces/Git connections/Integrations/AWS accounts/Vault, Credentials, Configuration, Code review, Branch scans (folded into section 7), Tests, API access and MCP, Knowledge/Create/Insights/Inbox/Learn, Admin, Keyboard shortcuts, Troubleshooting.
 
 Items left out because they could not be confirmed in the code: the full list of MCP tool names (they are fetched at runtime from `/api/mcp/info` and vary by deployment); exact invite-link flow (Auth.jsx only shows the hint "Ask your admin to create an account or send you an invite link" — no invite page was found); Connections/Integrations/AwsAccounts pages are described briefly as their full form content was not read in detail; the Tests page screenshot feature is partially implemented (state variable exists but rendering was not confirmed in full).
+
+---
+
+## 15. Pipelines
+
+The **Setup > Pipelines** tab shows the state of a project's GitHub Actions workflow runs, and alerts the project when a deploy fails. Every project member can read it; only a project owner or admin can change its settings.
+
+### What it shows
+
+For each GitHub repository of the project, the latest run of every workflow on every alerting branch: a status (Queued, Running, Succeeded, Failed, Timed out, Cancelled, Skipped or Other), the workflow, the branch, the short commit, who started it, when and how long it took, and a **View run** link to GitHub. **History** lists the earlier runs of that workflow and branch. **Show all branches** also lists the other branches (by default only the repository's default branch and your alert branches). The list updates by itself when GitHub reports a run. On a phone each run is a card and the page never scrolls sideways.
+
+### Which runs are deploys
+
+A workflow is a deploy workflow when its name contains "deploy" (any case). To use other names, list the exact workflow names under **Deploy workflows** in the tab's settings; the list then replaces the rule. Alerts apply to the repository's default branch; add more branches under **Alert branches**.
+
+### Alerts and recovery
+
+When a deploy workflow ends `failure` or `timed_out` on an alert branch, the project gets an Inbox item labelled **Deploy failed** (workflow, repository@branch, commit, who started it and a **View run** link). There is one open alert per repository, workflow and branch: further failures refresh it with the latest run and a failure count. The first later success (or a successful re-run of the failed run) closes the alert automatically; no one has to dismiss it.
+
+### Slack and Teams
+
+Optionally post the same alerts, and a "recovered" message, to a chat channel. Paste the channel's webhook URL into **Slack or Teams channel** and press **Save URL**; press **Send test message** to check it. The URL is stored as a secret and is never shown again: the tab shows only its host and last 4 characters. A failed post is shown next to the setting.
+
+- **Slack**: in a Slack app, turn on **Incoming Webhooks**, add a webhook to the channel and paste its `https://hooks.slack.com/...` URL.
+- **Teams**: in the channel create a **Workflows** flow from the template **Post to a channel when a webhook request is received** and paste the flow's URL (an `https://...webhook.office.com/...` or `https://...logic.azure.com/...` address).
+
+Only those hosts are accepted, over https.
+
+### Set-up
+
+Pipelines uses the same GitHub webhook as Auto-fix (see "GitHub webhook" in section 14): payload URL `<portal>/api/hooks/autofix/<projectId>` with the **Workflow runs** event enabled. Until the first run arrives the tab says so and repeats these steps. Only runs received after the webhook is set up are shown; there is no polling and no refresh button.

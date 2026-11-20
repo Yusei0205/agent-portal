@@ -1972,6 +1972,30 @@
         "setup"
       ],
       "note": "UI is the Setup > Auto-fix tab (smoke section 8) and the Inbox auto-fix labels (section 9)."
+    },
+    "pipelines": {
+      "description": "Pipeline monitor: GitHub workflow runs per project, deploy-failure alerts (Inbox, Slack, Teams) and the Pipelines tab",
+      "sources": [
+        "server/pipelines/*",
+        "server/repositories/pipeline-runs*.ts",
+        "server/project-access-routes.ts",
+        "web/src/pages/hub/Pipelines.jsx",
+        "web/src/styles/pipelines.css",
+        "web/src/pages/Inbox.jsx"
+      ],
+      "tests": [
+        "test/pipeline-runs-repo.test.ts",
+        "test/pipelines-chat.test.ts",
+        "test/pipelines-events.test.ts",
+        "test/pipelines-record.test.ts",
+        "test/pipelines-routes.test.ts",
+        "test/pipelines-settings.test.ts"
+      ],
+      "smokeIds": [
+        "setup",
+        "inbox"
+      ],
+      "note": "UI is the Setup > Pipelines tab (smoke section 8) and the Inbox Deploy failed label (section 9)."
     }
   },
   "shared": [

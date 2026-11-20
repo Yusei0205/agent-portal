@@ -12,6 +12,7 @@ import { syncGoal } from '../../lib/repoSync.js';
 import { ProjectChecklists } from './ProjectChecklists.jsx';
 import { GraphExcludes } from './GraphExcludes.jsx';
 import { AutoFix } from './AutoFix.jsx';
+import { Pipelines } from './Pipelines.jsx';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
@@ -1424,6 +1425,7 @@ const TABS = [
   { id: 'pull-requests', label: 'Pull requests' },
   { id: 'checklists', label: 'Checklists' },
   { id: 'autofix', label: 'Auto-fix' },
+  { id: 'pipelines', label: 'Pipelines' },
 ];
 
 /**
@@ -1716,6 +1718,14 @@ export function ProjectHub({ projectId, user, initialTab }) {
             isAdmin={isAdmin}
             currentUserId={currentUserId}
             members={members}
+            requestConfirm={requestConfirm}
+            toast={toast}
+          />
+        )}
+        {activeTab === 'pipelines' && (
+          <Pipelines
+            projectId={projectId}
+            canManage={isAdmin || String(myAccess?.access ?? '') === 'owner'}
             requestConfirm={requestConfirm}
             toast={toast}
           />

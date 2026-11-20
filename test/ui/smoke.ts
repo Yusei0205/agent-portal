@@ -761,6 +761,131 @@ async function main() {
         await p.unroute(detailFilter, detailHandler);
       }
     }, page);
+    // Pipelines tab (mocked API)
+    {
+      const now = new Date().toISOString();
+      const mkRun = (id: number, name: string, branch: string, status: string, url = 'https://github.com/acme/portal/actions/runs/1') => ({
+        project_id: projectId, repo_id: 'r1', repo_full_name: 'acme/portal', run_id: id, run_attempt: 1, run_number: id, workflow_id: id, workflow_name: name,
+        branch, head_sha: 'abcdef1234567890', actor: 'octocat', event: 'push', status, html_url: url, started_at: now, completed_at: now,
+        inbox_alerted_attempt: 0, chat_alerted_attempt: 0, updated_at: now,
+      });
+      const listPath = `/api/projects/${projectId}/pipelines`;
+      const settingsPath = `${listPath}/settings`;
+      const seenAll: boolean[] = [];
+      const listHandler = (route: import('playwright').Route) => {
+        const all = new URL(route.request().url()).searchParams.get('all') === '1';
+        seenAll.push(all);
+        const runs = [mkRun(1, 'Deploy portal', 'main', 'failure')];
+        if (all) runs.push(mkRun(2, 'CI', 'feature/login', 'success', 'javascript:alert(1)'));
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ webhookSeen: true, repos: [{ repoId: 'r1', fullName: 'acme/portal', defaultBranch: 'main', runs }] }) });
+      };
+      const settingsHandler = (route: import('playwright').Route) => route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ settings: { deploy_workflows: [], alert_branches: [] }, chat: { hint: { host: 'hooks.slack.com', last4: 'WXYZ' }, status: { lastFailureAt: null, lastError: null } } }),
+      });
+      const listFilter = (url: URL) => url.pathname === listPath;
+      const settingsFilter = (url: URL) => url.pathname === settingsPath;
+      const openTab = async (p: import('playwright').Page) => {
+        await goto(p, '/projects', 300);
+        await goto(p, `/p/${projectId}/setup/pipelines`, 1200);
+        await p.locator('[role="tab"]', { hasText: 'Pipelines' }).click();
+        await p.waitForSelector('[data-testid="pipelines-tab"]', { timeout: 8000 });
+      };
+      await test('Pipelines tab: a failed Deploy portal run, a GitHub link, and Show all branches (mocked)', async (p) => {
+        await p.route(listFilter, listHandler);
+        await p.route(settingsFilter, settingsHandler);
+        try {
+          await openTab(p);
+          const row = p.locator('[data-testid="pipeline-run"]', { hasText: 'Deploy portal' });
+          await row.waitFor({ timeout: 5000 });
+          await row.getByText('Failed', { exact: true }).waitFor({ timeout: 3000 });
+          const href = await row.getByRole('link', { name: 'View run' }).getAttribute('href');
+          if (!href?.startsWith('https://github.com/')) throw new Error(`Unexpected run link ${href}`);
+          if (await p.getByText('feature/login').count() !== 0) throw new Error('Feature branch shown before Show all branches');
+          await p.getByLabel('Show all branches').check();
+          const feature = p.locator('[data-testid="pipeline-run"]', { hasText: 'feature/login' });
+          await feature.waitFor({ timeout: 5000 });
+          if (!seenAll.includes(true)) throw new Error('The list route was not called with all=1');
+          if (await feature.locator('a[href^="javascript:"]').count() !== 0) throw new Error('A non-GitHub html_url became a link');
+          if (await feature.getByRole('link').count() !== 0) throw new Error('A non-GitHub html_url became a link');
+          if (await p.locator('[data-testid="pipelines-setup-hint"]').count() !== 0) throw new Error('Setup hint shown although the webhook was seen');
+        } finally {
+          await p.unroute(listFilter, listHandler);
+          await p.unroute(settingsFilter, settingsHandler);
+        }
+      }, page);
+      await test('Pipelines tab: webhook not seen and no runs shows the setup hint', async (p) => {
+        const empty = (route: import('playwright').Route) => route.fulfill({
+          status: 200, contentType: 'application/json',
+          body: JSON.stringify({ webhookSeen: false, repos: [{ repoId: 'r1', fullName: 'acme/portal', defaultBranch: 'main', runs: [] }] }),
+        });
+        await p.route(listFilter, empty);
+        await p.route(settingsFilter, settingsHandler);
+        try {
+          await openTab(p);
+          const hint = p.locator('[data-testid="pipelines-setup-hint"]');
+          await hint.waitFor({ timeout: 5000 });
+          const text = await hint.innerText();
+          if (!text.includes('Workflow runs') || !text.includes(`/api/hooks/autofix/${projectId}`)) throw new Error(`Setup hint incomplete: ${text}`);
+        } finally {
+          await p.unroute(listFilter, empty);
+          await p.unroute(settingsFilter, settingsHandler);
+        }
+      }, page);
+      await test('Pipelines tab: a member sees the settings read-only and the chat URL only as a hint', async (p) => {
+        const memberState = async (route: import('playwright').Route) => {
+          const res = await route.fetch();
+          const body = await res.json() as { user?: Record<string, unknown> };
+          if (body.user) body.user = { ...body.user, is_admin: false };
+          await route.fulfill({ status: res.status(), body: JSON.stringify(body), contentType: 'application/json' });
+        };
+        const stateFilter = (url: URL) => url.pathname === '/api/auth/state';
+        // The signed-in user is shown as a plain editor of the project (not an admin, not an owner).
+        const projectState = async (route: import('playwright').Route) => {
+          const res = await route.fetch();
+          const body = await res.json() as { members?: Array<Record<string, unknown>> };
+          body.members = (body.members ?? []).map((m) => ({ ...m, access: 'editor', role: 'editor' }));
+          await route.fulfill({ status: res.status(), body: JSON.stringify(body), contentType: 'application/json' });
+        };
+        const projectFilter = (url: URL) => url.pathname === `/api/projects/${projectId}`;
+        await p.route(projectFilter, projectState);
+        await p.route(listFilter, listHandler);
+        await p.route(settingsFilter, settingsHandler);
+        await p.route(stateFilter, memberState);
+        try {
+          await p.reload(); // the shell loads the signed-in user once, so reload to pick up the mocked state
+          await openTab(p);
+          await p.locator('[data-testid="pipelines-readonly"]').waitFor({ timeout: 5000 });
+          const hint = await p.locator('[data-testid="pipelines-chat-hint"]').innerText();
+          if (!hint.includes('hooks.slack.com') || !hint.includes('WXYZ')) throw new Error(`Chat hint wrong: ${hint}`);
+          if (await p.getByLabel('Chat webhook URL').count() !== 0) throw new Error('A member sees the chat URL field');
+          if (await p.getByRole('button', { name: 'Save settings' }).count() !== 0) throw new Error('A member sees Save settings');
+          if (await p.getByRole('button', { name: 'Add', exact: true }).count() !== 0) throw new Error('A member can add chips');
+        } finally {
+          await p.unroute(stateFilter, memberState);
+          await p.unroute(projectFilter, projectState);
+          await p.unroute(listFilter, listHandler);
+          await p.unroute(settingsFilter, settingsHandler);
+        }
+      }, page);
+      await test('Pipelines tab: no horizontal page scroll at 390 px', async (p) => {
+        await p.route(listFilter, listHandler);
+        await p.route(settingsFilter, settingsHandler);
+        await p.setViewportSize({ width: 390, height: 800 });
+        try {
+          await openTab(p);
+          await p.getByLabel('Show all branches').check();
+          await p.locator('[data-testid="pipeline-run"]', { hasText: 'feature/login' }).waitFor({ timeout: 5000 });
+          const w = await p.evaluate(() => ({ sw: document.scrollingElement!.scrollWidth, iw: window.innerWidth }));
+          if (w.sw > w.iw + 1) throw new Error(`Page scrolls horizontally: scrollWidth ${w.sw} > innerWidth ${w.iw}`);
+          if (process.env.SMOKE_SHOTS) await p.screenshot({ path: `${process.env.SMOKE_SHOTS}/pipelines-390.png`, fullPage: true });
+        } finally {
+          await p.setViewportSize({ width: 1280, height: 800 });
+          await p.unroute(listFilter, listHandler);
+          await p.unroute(settingsFilter, settingsHandler);
+        }
+      }, page);
+    }
     } // end §8 setup
 
     // ── 8b. Repository progress bar ───────────────────────────────────────
@@ -915,6 +1040,30 @@ async function main() {
         await p.getByText('Auto-fix needs a human').waitFor({ timeout: 3000 });
         await p.getByText('attempt limit reached').waitFor({ timeout: 3000 });
         await p.getByText('2 changed files').waitFor({ timeout: 3000 });
+      } finally {
+        await p.unroute(filter, handler);
+      }
+    }, page);
+    await test('Inbox: a pipeline item shows Deploy failed with the workflow, repo@branch and a GitHub-only link', async (p) => {
+      const mk = (id: string, url: string) => ({
+        id, type: 'blocked', project_id: null, project_name: null, workflow_id: null, workflow_goal: null, run_id: null,
+        payload: { kind: 'pipeline', workflow: 'Deploy portal', repo: 'acme/portal', branch: 'main', sha: 'abcdef1', actor: 'octocat', url, failures: 1 },
+        resolved: false, resolved_by: null, resolved_at: null, created_at: new Date().toISOString(), elapsed_ms: 0,
+      });
+      const handler = (route: import('playwright').Route) => route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ items: [mk('pl-smoke-1', 'https://github.com/acme/portal/actions/runs/1'), mk('pl-smoke-2', 'javascript:alert(1)')], total: 2 }),
+      });
+      const filter = (url: URL) => url.pathname === '/api/inbox';
+      await p.route(filter, handler);
+      try {
+        await goto(p, '/projects', 300);
+        await goto(p, '/inbox', 1200);
+        await p.getByText('Deploy failed').first().waitFor({ timeout: 8000 });
+        await p.getByText('Deploy portal').first().waitFor({ timeout: 3000 });
+        await p.getByText('acme/portal@main').first().waitFor({ timeout: 3000 });
+        const links = await p.locator('[data-testid="inbox-pipeline"] a').count();
+        if (links !== 1) throw new Error(`Expected exactly one View run link (GitHub only), got ${links}`);
       } finally {
         await p.unroute(filter, handler);
       }
