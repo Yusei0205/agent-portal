@@ -5,7 +5,7 @@
 import { router, sendJson } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { badRequest } from '../util.ts';
-import { getMemberRow, getProjectRow } from '../project-access.ts';
+import { requireProjectMember, requireProjectOwnerOrAdmin } from '../project-access-routes.ts';
 import { getAutofixPolicy, saveAutofixPolicy, setPaused, removeAutofixClass, getPauseFlags } from './policy.ts';
 import { unattendedPushAllowed } from './delivery.ts';
 import { maybeProcess } from './pipeline.ts';
@@ -19,26 +19,6 @@ import { setSecret } from '../secrets.ts';
 import { getAutofixFindingsRepository, FINDING_STATUSES } from '../repositories/autofix-findings.ts';
 import type { FindingStatus, AutofixFinding } from '../repositories/autofix-findings.ts';
 import { registerAutofixWebhook, webhookSecretName } from './webhook.ts';
-
-/** Any project member (or an admin) may read; non-members see 404. */
-async function requireProjectMember(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
-  if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
-  if (!await getProjectRow(projectId)) { sendJson(res, 404, { error: 'Project not found' }); return false; }
-  if (req.user.is_admin) return true;
-  if (!await getMemberRow(projectId, req.user.id)) { sendJson(res, 404, { error: 'Project not found' }); return false; }
-  return true;
-}
-
-/** Only a portal admin or a project owner may change the policy or pause a project. */
-async function requireProjectOwnerOrAdmin(req: PortalRequest, res: PortalResponse, projectId: string): Promise<boolean> {
-  if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return false; }
-  if (!await getProjectRow(projectId)) { sendJson(res, 404, { error: 'Project not found' }); return false; }
-  if (req.user.is_admin) return true;
-  const member = await getMemberRow(projectId, req.user.id);
-  if (!member) { sendJson(res, 404, { error: 'Project not found' }); return false; }
-  if (String(member.access) !== 'owner') { sendJson(res, 403, { error: 'Project owner or admin access required' }); return false; }
-  return true;
-}
 
 function pausedFlag(body: unknown): boolean {
   const paused = (body as { paused?: unknown } | null)?.paused;

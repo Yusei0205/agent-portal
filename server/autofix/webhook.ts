@@ -11,6 +11,8 @@ import { AUTOFIX_BRANCH_PREFIX, classifyKind, parseGithubEvent } from './github-
 import type { FindingCandidate } from './github-events.ts';
 import { fetchCiEvidence, findProjectGithubRepo, recordFinding } from './intake.ts';
 import { applyCiResult, applyPrClosed } from './pipeline.ts';
+import { parseWorkflowRun } from '../pipelines/events.ts';
+import { recordPipelineRun } from '../pipelines/record.ts';
 
 export const webhookSecretName = (projectId: string): string => `autofix.webhook.${projectId}`;
 
@@ -54,6 +56,14 @@ export function registerAutofixWebhook(): void {
       sendJson(res, 401, { error: 'Invalid signature' }); return;
     }
     const event = String(req.headers['x-github-event'] ?? '');
+    // Pipeline monitor: every workflow_run of a project repository is recorded, whatever Auto-fix's mode (nothing is stored otherwise).
+    let looked: { name: string; repo: Awaited<ReturnType<typeof findProjectGithubRepo>> } | null = null;
+    const wr = parseWorkflowRun(event, req.body);
+    if (wr) {
+      const repo = await findProjectGithubRepo(projectId, wr.repoFullName);
+      looked = { name: wr.repoFullName, repo };
+      if (repo) runInBackground(() => recordPipelineRun(projectId, { id: repo.id, default_branch: repo.default_branch }, wr));
+    }
     const parsed = parseGithubEvent(event, req.body);
     // CI results and PR closings matter only on auto-fix branches; any other branch's are acknowledged and touch nothing.
     if (parsed.type === 'ignore' || (parsed.type !== 'finding' && !parsed.branch.startsWith(AUTOFIX_BRANCH_PREFIX))) {
@@ -61,7 +71,8 @@ export function registerAutofixWebhook(): void {
     }
 
     const fullName = parsed.type === 'finding' ? parsed.candidate.repoFullName : parsed.repoFullName;
-    if (!await findProjectGithubRepo(projectId, fullName)) {
+    const projectRepo = looked && looked.name === fullName ? looked.repo : await findProjectGithubRepo(projectId, fullName);
+    if (!projectRepo) {
       sendJson(res, 404, { error: 'Repository is not part of this project' }); return;
     }
     if (parsed.type === 'finding') {

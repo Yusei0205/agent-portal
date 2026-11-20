@@ -43,6 +43,7 @@ import { registerDocTemplateRoutes } from './doc-templates.ts';
 import { registerReviewRoutes } from './review.ts';
 import { registerLoopSpecRoutes } from './loop-specs.ts';
 import { registerAutofixRoutes } from './autofix/routes.ts';
+import { registerPipelineRoutes } from './pipelines/routes.ts';
 import { registerAutomationRoutes } from './automations/routes.ts';
 import { recoverLocalAutomations, stopLocalAutomationTimers } from './automations/engine.ts';
 import { registerInsightsRoutes } from './insights.ts';
@@ -284,6 +285,7 @@ export async function startServer(
   registerReviewRoutes();
   registerLoopSpecRoutes();
   registerAutofixRoutes();
+  registerPipelineRoutes();
   registerAutomationRoutes();
   registerInsightsRoutes();
   registerUsageRoutes();
