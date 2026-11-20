@@ -99,9 +99,9 @@ async function codexLimits(userId: string): Promise<EngineLimits> {
     const arn = process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN;
     if (!arn) return unavailable('codex', 'The Codex cloud runtime is not configured.');
     const { cloudCodexAuth } = await import('./codex-device.ts');
-    const { invokeAgentCore } = await import('./agent/kiro-agentcore.ts');
+    const { invokeAgentCoreOneShot } = await import('./agent/kiro-agentcore.ts');
     const auth = await cloudCodexAuth(userId);
-    for await (const ev of invokeAgentCore(arn, 'codex-limits-' + randomUUID(), { mode: 'codex-limits', ...auth }, AbortSignal.timeout(45_000))) {
+    for await (const ev of invokeAgentCoreOneShot(arn, 'codex-limits-' + randomUUID(), { mode: 'codex-limits', ...auth }, AbortSignal.timeout(45_000))) {
       const e = ev as unknown as Record<string, any>;
       if (e.type === 'limits') return parseCodexLimits(e.limits);
       if (e.type === 'error') return unavailable('codex', 'The Codex runner could not read the plan limits. Rebuild the Codex runner image if it is older than this feature.');

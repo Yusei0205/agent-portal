@@ -527,6 +527,39 @@ export async function* invokeAgentCore(
 }
 
 /**
+ * A one-shot call (a model list, a plan-limits read, a text generation): one invocation on a session id nobody will use again.
+ * AgentCore keeps such a session's machine, and its memory bill, until the idle timeout (15 minutes), so the session is stopped as
+ * soon as the call ends, whether it finished, failed, or the caller stopped reading early. Stopping is best effort and bounded
+ * (PORTAL_AGENTCORE_STOP_WAIT_MS, default 4 s): a failure to stop never changes the call's result, the platform timeout still
+ * applies. Never use this for a session that holds a workspace or a conversation, or that saves in the background after its answer.
+ * PORTAL_AGENTCORE_KEEP_ONE_SHOT=1 turns the stop off.
+ */
+async function stopOneShotQuietly(runtimeArn: string, sessionId: string): Promise<void> {
+  if (process.env.PORTAL_AGENTCORE_KEEP_ONE_SHOT === '1' || _invokerOverride) return;
+  const wait = Number(process.env.PORTAL_AGENTCORE_STOP_WAIT_MS) || 4_000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      stopAgentCoreSession(runtimeArn, sessionId),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, wait); }),
+    ]);
+  } catch { /* the platform's idle timeout ends it */ } finally { if (timer) clearTimeout(timer); }
+}
+
+export async function* invokeAgentCoreOneShot(
+  runtimeArn: string,
+  sessionId: string,
+  payload: Record<string, unknown>,
+  signal?: AbortSignal,
+): AsyncGenerator<AgentCoreSSEEvent | AgentCoreLoginResultEvent> {
+  try {
+    yield* invokeAgentCore(runtimeArn, sessionId, payload, signal);
+  } finally {
+    await stopOneShotQuietly(runtimeArn, sessionId);
+  }
+}
+
+/**
  * A sender for control invocations (approval answers, cancel) on a run's session.
  * AgentCore routes them to the run's microVM while the run's own invocation is still streaming.
  */
@@ -1203,7 +1236,7 @@ export async function listKiroModelsViaAgentCore(
     token,
   };
   try {
-    for await (const ev of invokeAgentCore(runtimeArn, sessionId, payload, signal)) {
+    for await (const ev of invokeAgentCoreOneShot(runtimeArn, sessionId, payload, signal)) {
       if (ev.type === 'models') return { stdout: String((ev as { stdout?: string }).stdout ?? '') };
       if (ev.type === 'error') return { error: String((ev as { message?: string }).message ?? 'Listing models failed') };
     }

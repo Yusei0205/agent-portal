@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { invokeAgentCore, agentCoreControlSender, runnerApprovals } from './kiro-agentcore.ts';
+import { invokeAgentCore, invokeAgentCoreOneShot, agentCoreControlSender, runnerApprovals } from './kiro-agentcore.ts';
 import { agentCoreSessionId } from './agentcore-session.ts';
 import { ApprovalRelay, isApprovalRequest } from './agentcore-bridge.ts';
 import { snapshotAccess, codexStateAccess } from './runner-snapshot-access.ts';
@@ -121,7 +121,7 @@ export async function listCodexModelsViaAgentCore(userId: string): Promise<Array
   if (!arn) throw new HttpError(503, 'Codex cloud runtime is not configured.');
   const auth = await cloudCodexAuth(userId);
   const signal = AbortSignal.timeout(60_000);
-  for await (const raw of invokeAgentCore(arn, 'codex-models-' + randomUUID(), { mode: 'codex-models', ...auth }, signal)) {
+  for await (const raw of invokeAgentCoreOneShot(arn, 'codex-models-' + randomUUID(), { mode: 'codex-models', ...auth }, signal)) {
     const event = raw as unknown as Record<string, any>;
     if (event.type === 'models' && Array.isArray(event.models)) return event.models.map((m: any) => ({ id: String(m.model), label: String(m.displayName || m.model), ...(m.isDefault ? { default: true as const } : {}) }));
     if (event.type === 'error') throw new HttpError(502, 'The Codex cloud runner could not list models.');
