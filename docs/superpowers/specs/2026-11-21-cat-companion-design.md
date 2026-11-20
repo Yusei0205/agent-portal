@@ -1,6 +1,6 @@
 # Cat companion: a pixel cat that roams, reacts and (later) answers
 
-Date: 2026-11-21. Status: draft; phase A approved to build, phase B is planned only.
+Date: 2026-11-21. Status: phase A and B1 built (cat v2); B2 (a real assistant) is open and needs its own decisions.
 
 ## Intent
 
@@ -14,8 +14,11 @@ things that need them, without ever being in the way.
 
 - **Phase A (built now):** the pixel cat, roaming, drag, hover label, tip bubble kept, mood reactions to live events, a three-way mode
   menu, tests, user guide note.
-- **Phase B (planned, not approved to build):** the chat panel the mockup shows. B1: a panel of shortcuts (no live chat). B2: a real
-  assistant. B2 needs its own decisions (see "Open questions"); build B1 only after the user asks.
+- **Phase B:** the chat panel the mockup shows. **B1 (built, cat v2): a panel of shortcuts, no live chat.** B2: a real assistant, still
+  open; it needs its own decisions (see "Open questions").
+- **Cat v2 (built with B1):** a calico look (white fur, orange and brown patches, pink ears and cheeks, collar with a gold tag; colours are
+  CSS custom properties with light and dark values), a "working" animation (cat at a laptop, 4 frames) while the open project has a
+  running session (tracked from `workflow.updated` events only; roaming pauses, reactions still win), and the B1 panel below.
 
 ## Goals (phase A)
 
@@ -27,8 +30,7 @@ things that need them, without ever being in the way.
   rest where it is and sits while you type) and while no dialog is open. Otherwise it sits.
 - **Drag:** pointer drag anywhere on screen (a movement of 6 px or more is a drag, less is a click); the position is remembered in the browser
   (`portal.cat.prefs`: mode, x as a fraction of the width, distance from the bottom). It stays inside the window after a resize.
-- **Hover (desktop):** the cat waves and a small label "Chat with Agent ✨" appears. In phase A the label is decoration: clicking shows a tip
-  (as today). It becomes the chat opener in phase B.
+- **Hover (desktop):** the cat waves and a small label "Chat with Agent ✨" appears. In phase A the label was decoration (clicking showed a tip); since B1 clicking opens the shortcut panel.
 - **Reactions (current project only):** the cat subscribes to the open project's live event stream and the portal's inbox count:
   - `workflow.updated` with status `done`: celebrate (hop and sparkles), bubble "A session finished." with a link to the session.
   - status `failed`: worried, bubble "A session failed." with a link.
@@ -73,10 +75,17 @@ things that need them, without ever being in the way.
 3. Framer Motion or a canvas engine, as the mockup's conversation suggested. Rejected: a dependency and bundle weight for walking in a line;
    CSS transitions are enough.
 
-## Phase B outline (not approved)
+## Phase B outline
 
-- **B1 shortcuts panel:** clicking the cat opens a small floating panel: "Hi! How can I help you today?" and buttons that navigate or open
-  existing dialogs (Start a session, Check what needs me = Inbox, Open Auto-fix, Open Pipelines, Search knowledge). No model calls.
+- **B1 shortcuts panel (built):** clicking the cat (not dragging) opens a non-modal floating card (role dialog, no aria-modal; Escape or the
+  close button closes it; focus moves to its input and returns to the cat; on a phone a full-width bottom sheet). Greeting "Meow! I'm
+  your portal assistant. What would you like to do?", quick-action chips from the pure `catActions(route)` (Start a session, What needs
+  me? = Inbox, Auto-fix, Pipelines, Search knowledge; outside a project only the Inbox and Projects), an input whose text is matched
+  (`matchCatInput`) against those actions and the command palette's page names and navigates, otherwise the reply "I can't answer
+  questions yet, but I can take you to: ...". An "Allow cat to roam" checkbox is bound to the existing mode pref; footer "Shortcuts only
+  for now". The tip bubble stays for tips (menu item "Show a tip"); the hover label now names a real action. No model calls, no server
+  changes, no new dependency. "Start a session" opens the Sessions page and presses Alt+N for the person (the page owns that dialog).
+  Reactions that arrive while the panel is open are said inside it instead of a bubble.
 - **B2 assistant:** a real chat. Not designed yet.
 
 ## Open questions (for B2, before it is built)
