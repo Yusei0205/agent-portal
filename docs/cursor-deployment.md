@@ -6,12 +6,9 @@ Cursor runs the Cursor CLI (`agent -p --output-format stream-json`). A person si
 - a **Cursor sign-in** ("Sign in with Cursor"): the same browser login `agent login` runs, done by the portal. The person opens a Cursor
   link and approves; the portal polls `POST https://api2.cursor.sh/auth/poll {uuid, verifier}` (404 until approved, then 200 with the
   tokens; `PORTAL_CURSOR_API_URL` / `PORTAL_CURSOR_WEBSITE_URL` override the two hosts). These are the endpoints the CLI itself uses, not
-  a documented API. Signing in again is one click on the credential card. Or an **advanced login token**: the same token, pasted as the
-  contents of `auth.json` (or just its `accessToken`) from the person's own `agent login`. Either way only the
-  access token is stored (encrypted), as `CURSOR_AUTH_TOKEN`; the refresh token is dropped. It is a 60-day session token:
-  the credential card shows the days left, a run says plainly when it has expired, and the person pastes a new one. `auth.json` is
-  `%APPDATA%Cursorauth.json` (Windows), `~/.cursor/auth.json` (macOS) or `~/.config/cursor/auth.json` (Linux). Experimental: check
-  your Cursor terms before using a personal login on a shared server.
+  a documented API. Only the access token is stored (encrypted), as `CURSOR_AUTH_TOKEN`; the refresh token is dropped. It is a 60-day
+  session token: the credential card shows the days left, a run says plainly when it has expired, and "Sign in again" on the card renews
+  it in one click. A token cannot be pasted in. Experimental: check your Cursor terms before using a personal login on a shared server.
 
 Both are stored encrypted like a Kiro key.
 
