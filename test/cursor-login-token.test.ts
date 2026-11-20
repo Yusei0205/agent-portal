@@ -70,7 +70,7 @@ describe('Cursor login credential (made by signing in)', () => {
   /** A signed-in login credential, as "Sign in with Cursor" leaves it (the sign-in flow itself is tested in cursor-login.test.ts). */
   const signedIn = (days: number, n = 0): { id: string; token: string } => {
     const id = generateId();
-    const token = fakeToken(days, n);
+    const token = fakeToken(days * 86400, { n });
     insert('engine_credentials', { id, user_id: userId, engine: 'cursor', name: 'signed in', mode: 'login_token', secret_enc: encrypt(token, config.secretKey),
       extra_config: JSON.stringify({ tokenExpiry: new Date(Date.now() + days * 86400_000).toISOString() }), is_default: 0, last4: token.slice(-4) });
     return { id, token };
