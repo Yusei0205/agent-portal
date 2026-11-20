@@ -372,7 +372,7 @@ before(async () => {
     if (url.pathname === `${api}/myself`)
       return send(200, { accountId: 'acc1', displayName: 'Dev One', emailAddress: 'dev@example.com' });
 
-    if (url.pathname === `${api}/user/assignable/search` || url.pathname === `${api}/user/assignable/multiProjectSearch`) {
+    if (url.pathname === `${api}/user/search` || url.pathname === `${api}/user/assignable/search` || url.pathname === `${api}/user/assignable/multiProjectSearch`) {
       seen.assignable.push(url.pathname.split('/').pop() + '?' + (url.searchParams.get('project') ?? url.searchParams.get('projectKeys')) + '&' + (url.searchParams.get('query') ?? ''));
       return send(200, [
         { accountId: 'u-zed', displayName: 'Zed Z', accountType: 'atlassian', active: true },
@@ -784,6 +784,18 @@ describe('Jira integration', () => {
     assert.equal((await fetchJson(baseUrl, `/api/projects/${pid}/jira/assignees`, { cookie: adminCookie })).status, 200);
     assert.deepEqual(seen.assignable, ['search?RLP&am', 'multiProjectSearch?RLP,PAY&']);
     assert.equal((await fetchJson(baseUrl, `/api/projects/${pid}/jira/assignees?project=OTHER`, { cookie: adminCookie })).status, 400, 'a project outside the allowed list');
+
+    // All projects allowed and none chosen: Jira has no assignable list, so a name searches the site and no name lists no one.
+    const mapping = ((await fetchJson(baseUrl, `/api/projects/${pid}/jira`, { cookie: adminCookie })).body as any).mapping;
+    await fetchJson(baseUrl, `/api/projects/${pid}/jira`, { method: 'PUT', body: { ...mapping, projectKeys: [] }, cookie: adminCookie });
+    seen.assignable.length = 0;
+    assert.deepEqual(((await fetchJson(baseUrl, `/api/projects/${pid}/jira/assignees`, { cookie: adminCookie })).body as any).assignees, []);
+    assert.deepEqual(seen.assignable, [], 'no name and no project: Jira is not asked');
+    const byName = await fetchJson(baseUrl, `/api/projects/${pid}/jira/assignees?q=amy`, { cookie: adminCookie });
+    assert.equal(byName.status, 200);
+    assert.deepEqual((byName.body as any).assignees.map((x: any) => x.name), ['Amy A', 'Zed Z']);
+    assert.deepEqual(seen.assignable, ['search?null&amy'], 'the site-wide user search was used');
+    await fetchJson(baseUrl, `/api/projects/${pid}/jira`, { method: 'PUT', body: mapping, cookie: adminCookie });
 
     assert.equal((await fetchJson(baseUrl, `/api/projects/${pid}/jira/issues?project=RLP&assignee=u-amy`, { cookie: adminCookie })).status, 200);
     assert.equal((await fetchJson(baseUrl, `/api/projects/${pid}/jira/issues?project=RLP&assignee=unassigned`, { cookie: adminCookie })).status, 200);

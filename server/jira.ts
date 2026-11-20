@@ -343,6 +343,7 @@ function issueRow(i: unknown) {
     status: { name: f.status?.name ?? '', category: f.status?.statusCategory?.key ?? '' },
     statusCategory: (f.status?.statusCategory?.key ?? '') as string,
     assignee: (f.assignee?.displayName ?? null) as string | null,
+    assigneeId: (f.assignee?.accountId ?? null) as string | null,
     priority: (f.priority?.name ?? null) as string | null,
     type: (f.issuetype?.name ?? null) as string | null,
     updated: (f.updated ?? '') as string,
@@ -1075,8 +1076,8 @@ export function registerJiraRoutes(): void {
   });
 
   // ---- GET /api/projects/:pid/jira/assignees?project=KEY&q=name ----
-  // People who can be assigned tickets in the project (or, with no project, in the allowed projects): the choices for the ticket
-  // list's assignee filter. At most 50, matched by name when `q` is given. A Jira failure gives an empty list, so the list
+  // People who can be assigned tickets in the project (or, with no project, in the allowed projects; with no allowed list either, anyone
+  // found by name): the choices for the ticket list's person filter. At most 50, matched by name when `q` is given. A Jira failure gives an empty list, so the list
   // still works with its Me / Anyone / Unassigned choices.
   router.get('/api/projects/:pid/jira/assignees', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     const p = await requireProjectAccess(req, res, req.params.pid);
@@ -1093,10 +1094,14 @@ export function registerJiraRoutes(): void {
     } else {
       keys = mapping.projectKeys.slice(0, 10);
     }
-    if (keys.length === 0) { sendJson(res, 200, { assignees: [] }); return; }
-    const qs = new URLSearchParams({ query: (req.query.get('q') ?? '').slice(0, 100), maxResults: '50' });
+    const q = (req.query.get('q') ?? '').trim().slice(0, 100);
+    // With no project to ask about (all projects allowed, none chosen) Jira has no list of assignable people; a name searches the
+    // whole site, and with no name there is nothing to list.
+    if (keys.length === 0 && !q) { sendJson(res, 200, { assignees: [] }); return; }
+    const qs = new URLSearchParams({ query: q, maxResults: '50' });
     let path: string;
-    if (keys.length === 1) { qs.set('project', keys[0]); path = `/user/assignable/search?${qs}`; }
+    if (keys.length === 0) path = `/user/search?${qs}`;
+    else if (keys.length === 1) { qs.set('project', keys[0]); path = `/user/assignable/search?${qs}`; }
     else { qs.set('projectKeys', keys.join(',')); path = `/user/assignable/multiProjectSearch?${qs}`; }
     try {
       const data = (await jira(projectId, path)) as any[];
