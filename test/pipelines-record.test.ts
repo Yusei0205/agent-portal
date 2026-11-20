@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createTestServer, cleanup } from './fixtures.ts';
 import { insert, getDb } from '../server/db.ts';
 import { now } from '../server/util.ts';
-import { getInboxRepository } from '../server/repositories/inbox.ts';
+import { getInboxRepository, setInboxRepository, clearInboxRepository } from '../server/repositories/inbox.ts';
 import { getPipelineRunsRepository } from '../server/repositories/pipeline-runs.ts';
 import { setChatUrl, _setChatFetch, _setChatBackoff } from '../server/pipelines/chat.ts';
 import { recordPipelineRun } from '../server/pipelines/record.ts';
@@ -37,11 +37,6 @@ function ev(over: Partial<WorkflowRunEvent> = {}): WorkflowRunEvent {
 async function items(pid: string) {
   return (await getInboxRepository().listUnresolvedByProjects([pid], { limit: 50 })).items;
 }
-async function allItems(pid: string) {
-  const r = getInboxRepository();
-  return (await r.listUnresolvedByProjects([pid], { limit: 50 })).items.length;
-}
-
 before(async () => { await createTestServer(); });
 after(() => { _setChatFetch(null); _setChatBackoff(null); return cleanup(); });
 beforeEach(() => {
@@ -90,7 +85,7 @@ describe('recordPipelineRun', () => {
   it('racing deliveries of different runs create one Inbox item', async () => {
     const p = mkProject();
     await Promise.all([1, 2, 3].map((n) => recordPipelineRun(p, repo, ev({ runId: 200 + n, runNumber: 20 + n }))));
-    assert.equal(await allItems(p), 1);
+    assert.equal((await items(p)).length, 1);
     const a = await getPipelineRunsRepository().getAlert(p, 'repo1', 7, 'main');
     assert.equal(a?.failures, 3);
     assert.ok(a?.inbox_id);
@@ -167,8 +162,67 @@ describe('recordPipelineRun', () => {
   it('an item resolved by hand, then recovery: no error', async () => {
     const p = mkProject();
     await recordPipelineRun(p, repo, ev());
-    await getInboxRepository().resolveConditional((await items(p))[0].id, `u-${p}`, now());
+    await getInboxRepository().resolveConditional((await items(p))[0].id, null, now());
     await assert.doesNotReject(recordPipelineRun(p, repo, ev({ runId: 101, runNumber: 11, status: 'success' })));
     assert.equal((await getPipelineRunsRepository().getAlert(p, 'repo1', 7, 'main'))?.open, false);
+  });
+
+  it('run 11 succeeds, then a late run 10 timed_out: nothing opens', async () => {
+    const p = mkProject();
+    await recordPipelineRun(p, repo, ev({ runId: 111, runNumber: 11, status: 'success' }));
+    await recordPipelineRun(p, repo, ev({ runId: 110, runNumber: 10, status: 'timed_out' }));
+    assert.equal((await items(p)).length, 0);
+    assert.equal((await getPipelineRunsRepository().getAlert(p, 'repo1', 7, 'main'))?.open, false);
+  });
+
+  it('attempt 2 succeeds, then a late attempt 1 failure: nothing opens', async () => {
+    const p = mkProject();
+    await recordPipelineRun(p, repo, ev({ runAttempt: 2, status: 'success' }));
+    await recordPipelineRun(p, repo, ev({ runAttempt: 1, status: 'failure' }));
+    assert.equal((await items(p)).length, 0);
+    assert.equal((await getPipelineRunsRepository().getAlert(p, 'repo1', 7, 'main'))?.open ?? false, false);
+  });
+
+  it('a duplicate delivery of a successful re-run attempt sends recovered once', async () => {
+    const p = mkProject(); await setChatUrl(p, SLACK, actor);
+    await recordPipelineRun(p, repo, ev());
+    const ok = ev({ runAttempt: 2, status: 'success' });
+    await recordPipelineRun(p, repo, ok);
+    await recordPipelineRun(p, repo, ok);
+    assert.equal(sent.filter((s) => /recovered/.test(s)).length, 1);
+    assert.equal((await items(p)).length, 0);
+  });
+
+  it('an item resolved by hand while the alert is open: the next failure raises a new one', async () => {
+    const p = mkProject();
+    await recordPipelineRun(p, repo, ev());
+    await getInboxRepository().resolveConditional((await items(p))[0].id, null, now());
+    await recordPipelineRun(p, repo, ev({ runId: 101, runNumber: 11 }));
+    assert.equal((await items(p)).length, 1);
+    const a = await getPipelineRunsRepository().getAlert(p, 'repo1', 7, 'main');
+    assert.equal(a?.open, true);
+    assert.equal(a?.failures, 2);
+  });
+
+  it('createInboxItem failing releases the alert so the next failure raises the item', async () => {
+    const p = mkProject();
+    const real = getInboxRepository();
+    let fail = true;
+    setInboxRepository(new Proxy(real, {
+      get(t, k, r) {
+        if (k === 'create') return async (i: never) => { if (fail) throw new Error('boom'); return t.create(i); };
+        const v = Reflect.get(t, k, r);
+        return typeof v === 'function' ? v.bind(t) : v;
+      },
+    }));
+    try {
+      await recordPipelineRun(p, repo, ev());
+      assert.equal((await items(p)).length, 0);
+      assert.equal((await getPipelineRunsRepository().getAlert(p, 'repo1', 7, 'main'))?.open, false);
+      fail = false;
+      await recordPipelineRun(p, repo, ev({ runId: 101, runNumber: 11 }));
+      assert.equal((await items(p)).length, 1);
+      assert.equal((await getPipelineRunsRepository().getAlert(p, 'repo1', 7, 'main'))?.open, true);
+    } finally { setInboxRepository(real); void clearInboxRepository; }
   });
 });
