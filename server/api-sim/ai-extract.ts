@@ -18,6 +18,32 @@ export interface Section { id: number; level: number; title: string; body: strin
 
 /** Cuts the text at its headings (not those inside code fences). Text before the first heading is section 0. */
 export function splitSections(markdown: string): Section[] {
+  const sections = splitAtHeadings(markdown);
+  return sections.length <= 1 ? splitIntoParts(sections) : sections;
+}
+
+/**
+ * A document with no headings (a PDF set in one size, or Word text with no heading styles) is one long section, and the reader
+ * would hand the model only the start of it. It is cut into parts at paragraph breaks instead, so the outline step can say which
+ * parts describe which API.
+ */
+const PART_CHARS = 6_000;
+function splitIntoParts(sections: Section[]): Section[] {
+  if (sections.length !== 1 || sections[0].level !== 0 || sections[0].body.length <= PART_CHARS * 1.5) return sections;
+  const parts: Section[] = [];
+  let cur: string[] = [];
+  let len = 0;
+  const push = (): void => { if (cur.length) { parts.push({ id: parts.length, level: 1, title: `Part ${parts.length + 1}`, body: cur.join('\n\n') }); cur = []; len = 0; } };
+  for (const para of sections[0].body.split(/\n{2,}/)) {
+    if (len + para.length > PART_CHARS && cur.length) push();
+    cur.push(para);
+    len += para.length + 2;
+  }
+  push();
+  return parts;
+}
+
+function splitAtHeadings(markdown: string): Section[] {
   const sections: Section[] = [];
   let cur: { level: number; title: string; lines: string[] } = { level: 0, title: '(start of document)', lines: [] };
   let fenced = false;
@@ -407,7 +433,7 @@ const API_WRAPPER_CHARS = 600;
 export async function extractApis(markdown: string, call: ModelCall, onProgress?: (p: Progress) => void | Promise<void>, limits: ExtractionLimits = {}): Promise<ExtractionResult> {
   const sections = splitSections(compactMarkdown(markdown));
   const result: ExtractionResult = { drafts: [], baseUrls: [], notes: [], errors: [] };
-  if (sections.length === 0) { result.errors.push({ api: '(document)', message: 'The document has no text to read.' }); return result; }
+  if (sections.length === 0) { result.errors.push({ api: '(document)', message: 'The document has no text to read (a scanned PDF is a picture of text, and has none).' }); return result; }
 
   await onProgress?.({ phase: 'outline', done: 0, total: 1 });
   let outline: Outline | null = null;
