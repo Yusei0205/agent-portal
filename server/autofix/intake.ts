@@ -19,11 +19,16 @@ export function _setGithubFetch(fn: FetchFn | null): void { githubFetch = fn; }
 
 const LOG_TAIL_BYTES = 64 * 1024;
 
+/** The one rule for "is a GitHub repository": not CodeCommit, and its remote parses as a github.com owner/repo. */
+export function isGithubRepo(r: Pick<GitRepoRecord, 'provider' | 'url'>): boolean {
+  return r.provider !== 'codecommit' && !!parseGitHubOwnerRepo(r.url ?? '');
+}
+
 /** The project's GitHub repository whose remote is `fullName` (owner/name, case-insensitive), or null. CodeCommit never matches. */
 export async function findProjectGithubRepo(projectId: string, fullName: string): Promise<GitRepoRecord | null> {
   const want = fullName.toLowerCase();
   for (const r of await getGitReposRepository().listByProject(projectId)) {
-    if (r.provider === 'codecommit') continue;
+    if (!isGithubRepo(r)) continue;
     const slug = parseGitHubOwnerRepo(r.url ?? '');
     if (slug && `${slug.owner}/${slug.repo}`.toLowerCase() === want) return r;
   }

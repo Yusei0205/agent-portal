@@ -158,4 +158,29 @@ describe('pipelines routes', () => {
     assert.equal((await api('/chat', owner, 'PUT', { url: null })).status, 200);
     assert.equal(((await api('/settings', member)).body as { chat: { hint: unknown } }).chat.hint, null);
   });
+
+  it('one GitHub rule: a git-provider repo with a github.com URL is listed; CodeCommit never is', async () => {
+    const mk = (id: string, name: string, url: string, provider: string) => getGitReposRepository().create({
+      id, project_id: projectId, name, url, provider, status: 'ready', default_branch: 'main', identity: null, last_synced_at: null,
+      last_error: null, created_at: new Date().toISOString(), connection_id: null,
+    });
+    await mk('repo-pr-git', 'gitprov', 'https://github.com/acme/gitprov.git', 'git');
+    await mk('repo-pr-ccgh', 'ccgh', 'https://github.com/acme/ccgh.git', 'codecommit');
+    try {
+      assert.equal(await deliver(payload({ repo: 'acme/gitprov', runId: 900, runNumber: 9, conclusion: 'success' })), 202);
+      const b = (await api('', member)).body as { repos: { repoId: string; fullName: string; runs: unknown[] }[] };
+      const git = b.repos.find((r) => r.repoId === 'repo-pr-git');
+      assert.ok(git, 'git-provider GitHub repo is listed');
+      assert.equal(git.fullName, 'acme/gitprov');
+      assert.equal(git.runs.length, 1);
+      assert.equal(b.repos.some((r) => r.repoId === 'repo-pr-cc' || r.repoId === 'repo-pr-ccgh'), false);
+      const h = await api('/history?repoId=repo-pr-git&workflowId=77&branch=main', member);
+      assert.equal(h.status, 200);
+      assert.equal((h.body as { runs: unknown[] }).runs.length, 1);
+      assert.equal((await api('/history?repoId=repo-pr-ccgh&workflowId=77&branch=main', member)).status, 404);
+    } finally {
+      await getGitReposRepository().delete('repo-pr-git', projectId);
+      await getGitReposRepository().delete('repo-pr-ccgh', projectId);
+    }
+  });
 });

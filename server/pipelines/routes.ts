@@ -8,6 +8,7 @@ import type { PortalRequest, PortalResponse } from '../http.ts';
 import { badRequest } from '../util.ts';
 import { requireProjectMember, requireProjectOwnerOrAdmin } from '../project-access-routes.ts';
 import { parseGitHubOwnerRepo } from '../review.ts';
+import { isGithubRepo } from '../autofix/intake.ts';
 import { getPipelineRunsRepository } from '../repositories/pipeline-runs.ts';
 import { getGitReposRepository } from '../repositories/git-repos.ts';
 import { getPipelineSettings, savePipelineSettings, isAlertingBranch } from './settings.ts';
@@ -25,7 +26,7 @@ export function registerPipelineRoutes(): void {
     ]);
     const repos = [];
     for (const r of repoRows) {
-      if (r.provider !== 'github') continue;
+      if (!isGithubRepo(r)) continue;
       const runs = stored.filter((x) => x.repo_id === r.id && (all || isAlertingBranch(settings, x.branch, r.default_branch)));
       const slug = parseGitHubOwnerRepo(r.url ?? '');
       repos.push({ repoId: r.id, fullName: slug ? `${slug.owner}/${slug.repo}` : r.name, defaultBranch: r.default_branch, runs });
@@ -37,7 +38,7 @@ export function registerPipelineRoutes(): void {
     const projectId = req.params.id;
     if (!await requireProjectMember(req, res, projectId)) return;
     const repoId = req.query.get('repoId') ?? '';
-    const repo = repoId ? (await getGitReposRepository().listByProject(projectId)).find((r) => r.id === repoId && r.provider === 'github') : undefined;
+    const repo = repoId ? (await getGitReposRepository().listByProject(projectId)).find((r) => r.id === repoId && isGithubRepo(r)) : undefined;
     if (!repo) { sendJson(res, 404, { error: 'Repository not found' }); return; }
     const wf = req.query.get('workflowId') ?? '';
     const workflowId = /^\d{1,15}$/.test(wf) ? Number(wf) : NaN;
