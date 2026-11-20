@@ -126,8 +126,9 @@ async function waitFor(cond: () => boolean | Promise<boolean>, ms = 3000): Promi
 
 before(async () => {
   process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN = ARN;
-  // Most tests here exercise the unattended path; the default (a person approves every push) has its own tests below.
-  process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = '1';
+  // The suite default is the portal default: AUTOFIX_ALLOW_UNATTENDED_PUSH unset (a person approves every push). Tests that exercise
+  // the unattended 'go' path call allowUnattended().
+  delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH;
   ({ baseUrl } = await createTestServer());
   const r = await fetchJson(baseUrl, '/api/auth/setup', {
     method: 'POST', body: { email: `afd-${Date.now()}@example.com`, name: 'Admin', password: 'password1234', provider: 'demo' },
@@ -137,7 +138,11 @@ before(async () => {
 });
 after(async () => { delete process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN; delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH; await cleanup(); });
 
+/** Opt this test in to unattended pushes (the portal operator's flag); reset to the default before every test. */
+function allowUnattended(): void { process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = '1'; }
+
 beforeEach(() => {
+  delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH;
   finalizeCalls = [];
   ghCalls = [];
   labelStatus = 200;
@@ -237,6 +242,7 @@ describe('createPullRequest draft and labels', () => {
 });
 
 describe('a review fix: a PR stacked on the reviewed branch', () => {
+  beforeEach(allowUnattended); // these exercise the unattended 'go' path (the default has its own tests)
   it("pushes only the autofix/ branch and opens the PR against the reviewed PR's head branch", async () => {
     const s = await makeFix({ source: 'review_finding', kind: 'review', branch: 'feature/login' });
     _setSessionPrDeps({ listBranches: async () => ['main', 'feature/login'] });
@@ -280,6 +286,7 @@ describe('a review fix: a PR stacked on the reviewed branch', () => {
 });
 
 describe('an auto-fix push goes only to an autofix/ branch', () => {
+  beforeEach(allowUnattended); // these exercise the unattended 'go' path (the default has its own tests)
   const refused = (s: Fix) => prEvents(s).filter((e) => e.state === 'failed' && /not an auto-fix branch/.test(String(e.error)));
   const prCreated = () => ghCalls.some((c) => c.method === 'POST' && /\/pulls$/.test(c.url));
 
@@ -316,6 +323,7 @@ describe('an auto-fix push goes only to an autofix/ branch', () => {
 });
 
 describe('the gate in the session PR flow', () => {
+  beforeEach(allowUnattended); // these exercise the unattended 'go' path (the default has its own tests)
   it('a diff touching .github/workflows/ci.yml is blocked: nothing is pushed, the finding is needs_human, audit and blocked item', async () => {
     const s = await makeFix();
     await handleRepoChanges(ctxOf(s), [{ ...clean, paths: [...clean.paths!, { path: '.github/workflows/ci.yml', added: 1, removed: 1 }] }]);
@@ -474,20 +482,19 @@ describe('the gate in the session PR flow', () => {
         assert.equal((await finding(s)).status, 'pr_open');
         assert.equal(finalizeCalls.length, 1);
       }
-    } finally { process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = '1'; }
+    } finally { delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH; }
   });
 
   it('with AUTOFIX_ALLOW_UNATTENDED_PUSH=1 the gate goes ahead', async () => {
+    delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH;
     const { autofixGate, unattendedPushAllowed } = await import('../server/autofix/delivery.ts');
+    assert.equal(unattendedPushAllowed(), false, 'the default');
+    const t = await makeFix();
+    assert.equal(await autofixGate(ctxOf(t), clean), 'ask');
+    allowUnattended();
     assert.equal(unattendedPushAllowed(), true);
     const s = await makeFix();
     assert.equal(await autofixGate(ctxOf(s), clean), 'go');
-    delete process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH;
-    try {
-      assert.equal(unattendedPushAllowed(), false);
-      const t = await makeFix();
-      assert.equal(await autofixGate(ctxOf(t), clean), 'ask');
-    } finally { process.env.AUTOFIX_ALLOW_UNATTENDED_PUSH = '1'; }
   });
 
   it("writes the audit entry autofix.pr.opened with the PR number and repository when the PR is opened", async () => {
@@ -685,7 +692,43 @@ describe('the gate in the session PR flow', () => {
   });
 });
 
+describe('the default (AUTOFIX_ALLOW_UNATTENDED_PUSH unset): the gate asks a person and pushes nothing', () => {
+  it('a review fix with a clean diff asks (nothing pushed, no PR)', async () => {
+    const s = await makeFix({ source: 'review_finding', kind: 'review', branch: 'feature/login' });
+    _setSessionPrDeps({ listBranches: async () => ['main', 'feature/login'] });
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls.length, 0);
+    assert.equal(ghCalls.filter((c) => c.method === 'POST' && /\/pulls$/.test(c.url)).length, 0);
+    assert.deepEqual(states(s), ['asked']);
+    assert.equal(inbox(s)[0].payload.kind, 'autofix');
+    assert.equal((await finding(s)).status, 'fixing');
+  });
+
+  it('a retry after red CI on an open PR asks instead of pushing to its branch', async () => {
+    const s = await makeFix();
+    const prBranch = 'autofix/tests-abcdef01';
+    await repo().transition(s.findingId, ['fixing'], {
+      status: 'fixing', pr_branch: prBranch, pr_number: 42, pr_url: 'https://github.com/acme/shop/pull/42', pr_head_sha: 'f'.repeat(40), attempts: 1,
+    });
+    _setSessionPrDeps({ listBranches: async () => ['main', prBranch] });
+    pullState = 'open';
+    await handleRepoChanges(ctxOf(s), [clean]);
+    assert.equal(finalizeCalls.length, 0);
+    assert.deepEqual(states(s), ['asked']);
+    assert.equal((await finding(s)).status, 'fixing');
+  });
+
+  it('the gate answers ask for a clean diff and still blocks a protected path', async () => {
+    const { autofixGate } = await import('../server/autofix/delivery.ts');
+    assert.equal(await autofixGate(ctxOf(await makeFix()), clean), 'ask');
+    const blockedFix = await makeFix();
+    const outcome = await autofixGate(ctxOf(blockedFix), { ...clean, paths: [...clean.paths!, { path: '.github/workflows/ci.yml', added: 1, removed: 1 }] });
+    assert.equal(outcome, 'block');
+  });
+});
+
 describe('guardrails at and after the push', () => {
+  beforeEach(allowUnattended); // these exercise the unattended 'go' path (the default has its own tests)
   const prPosts = () => ghCalls.filter((c) => c.method === 'POST' && /\/pulls$/.test(c.url));
 
   it('the finalize request carries the protected paths as denyPaths (a deps fix may touch the lockfiles)', async () => {
@@ -938,6 +981,7 @@ describe('no way around the gate', () => {
   });
 
   it('a duplicate change judged go while the first push failed opens no ordinary PR', async () => {
+    allowUnattended();
     pushReply = (p) => [{ type: 'repo-pushed', repo: p.repo, branch: p.branch, error: 'remote: something broke' }];
     const s = await makeFix();
     await Promise.all([handleRepoChanges(ctxOf(s), [clean]), handleRepoChanges(ctxOf(s), [clean])]);
@@ -948,6 +992,7 @@ describe('no way around the gate', () => {
 });
 
 describe("the run's in-memory check result", () => {
+  beforeEach(allowUnattended); // these exercise the unattended 'go' path (the default has its own tests)
   it('goes ahead on the engine\'s passing check although the stored check-result event is not written yet (DynamoDB lag)', async () => {
     const s = await makeFix({ checkOk: null });
     await handleRepoChanges({ ...ctxOf(s), check: { ok: true } }, [clean]);
