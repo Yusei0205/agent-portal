@@ -32,11 +32,15 @@ function runInBackground(work: () => Promise<void>): void {
   pending.add(p);
 }
 
+/** The largest webhook body read (1 MiB). */
+export const WEBHOOK_BODY_MAX = 1_048_576;
+
 export function registerAutofixWebhook(): void {
   // A raw route: GitHub cannot send the browser header, so the signature is the proof and the body is read here.
   router.rawPost('/api/hooks/autofix/:projectId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
     try {
-      const body = await readWebhookBody(req);
+      // GitHub pull_request and workflow_run payloads can be well over the 64 KB default; 1 MiB bounds them.
+      const body = await readWebhookBody(req, WEBHOOK_BODY_MAX);
       req.rawBody = body.raw;
       req.body = body.json;
     } catch {

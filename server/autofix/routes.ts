@@ -10,6 +10,9 @@ import { getAutofixPolicy, saveAutofixPolicy, setPaused, removeAutofixClass, get
 import { unattendedPushAllowed } from './delivery.ts';
 import { maybeProcess } from './pipeline.ts';
 import { getAuditRepository } from '../repositories/audit.ts';
+import { getGitReposRepository } from '../repositories/git-repos.ts';
+import { githubPullRequestState } from '../pull-requests.ts';
+import type { Repository } from '../repos.ts';
 import type { AutofixPolicy } from './policy.ts';
 import { newWebhookSecret } from '../loop-triggers.ts';
 import { setSecret } from '../secrets.ts';
@@ -74,6 +77,14 @@ async function auditFinding(req: PortalRequest, action: string, f: AutofixFindin
 /** Statuses a person may dismiss from: everything that is not already finished. */
 const DISMISSABLE: FindingStatus[] = ['new', 'triaged', 'fixing', 'pr_open', 'suppressed', 'needs_human'];
 const RETRYABLE: FindingStatus[] = ['needs_human', 'new', 'suppressed'];
+
+/** Whether the finding's PR is open on the host; no PR number, no repository or an unreadable state count as not open. */
+async function prStillOpen(f: AutofixFinding): Promise<boolean> {
+  if (f.pr_number == null || !f.repo_id) return false;
+  const rec = await getGitReposRepository().getById(f.repo_id).catch(() => null);
+  if (!rec) return false;
+  return (await githubPullRequestState(rec as unknown as Repository, f.pr_number).catch(() => null)) === 'open';
+}
 
 export function registerAutofixRoutes(): void {
   registerAutofixWebhook();
@@ -162,7 +173,11 @@ export function registerAutofixRoutes(): void {
     if (!await requireProjectOwnerOrAdmin(req, res, req.params.id)) return;
     const f = await loadFinding(req, res);
     if (!f) return;
-    if (!await getAutofixFindingsRepository().transition(f.id, RETRYABLE, { status: 'new', attempts: 0, cooldown_until: null })) {
+    // A needs_human finding may still name the branch of a PR a person since closed (or one whose state cannot be read): a retry must
+    // not push to it, so it starts a fresh branch and PR instead. pr_number and pr_url stay for history.
+    let clearPr = {};
+    if (f.status === 'needs_human' && f.pr_branch && !(await prStillOpen(f))) clearPr = { pr_branch: null, pr_head_sha: null };
+    if (!await getAutofixFindingsRepository().transition(f.id, RETRYABLE, { status: 'new', attempts: 0, cooldown_until: null, ...clearPr })) {
       sendJson(res, 409, { error: `A ${f.status} finding cannot be retried` }); return;
     }
     await auditFinding(req, 'autofix.finding.retry', f);

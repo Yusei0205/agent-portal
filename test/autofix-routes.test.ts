@@ -181,4 +181,35 @@ describe('autofix finding actions', () => {
       assert.equal((await act(f.id, 'retry', adminCookie)).status, 409, from);
     }
   });
+
+  it('retrying a needs_human finding whose PR is not open (closed, or unreadable) clears pr_branch and pr_head_sha; an open PR keeps them', async () => {
+    const { _setPullRequestClients } = await import('../server/pull-requests.ts');
+    const { getGitReposRepository } = await import('../server/repositories/git-repos.ts');
+    const repoId = `repo-ar-${Date.now()}`;
+    await getGitReposRepository().create({
+      id: repoId, project_id: projectId, name: 'shop', url: 'https://github.com/acme/shop.git', provider: 'github', status: 'ready',
+      default_branch: 'main', identity: null, last_synced_at: null, last_error: null, created_at: new Date().toISOString(), connection_id: null,
+    });
+    const repo = getAutofixFindingsRepository();
+    let state: string | null = 'closed';
+    _setPullRequestClients({
+      credentials: async () => ({ kind: 'github' as const, token: 't' }),
+      fetch: (async () => (state === null ? new Response('{}', { status: 500 }) : new Response(JSON.stringify({ state }), { status: 200 }))) as typeof fetch,
+    });
+    try {
+      for (const [s, keep] of [['closed', false], [null, false], ['open', true]] as const) {
+        state = s;
+        const { finding: f } = await repo.upsertByFingerprint({
+          project_id: projectId, source: 'ci_failed', kind: 'lint', fingerprint: `rpr-${s}`, severity: 'low', evidence: 'e', repo_id: repoId, branch: 'main', commit_sha: null,
+        });
+        await repo.transition(f.id, ['new'], { status: 'needs_human', pr_branch: 'autofix/lint-1', pr_number: 9, pr_url: 'https://github.com/acme/shop/pull/9', pr_head_sha: 'a'.repeat(40) });
+        assert.equal((await act(f.id, 'retry', adminCookie)).status, 200);
+        await _drainPipelineForTest();
+        const got = (await repo.getById(f.id))!;
+        assert.equal(got.pr_branch, keep ? 'autofix/lint-1' : null, String(s));
+        assert.equal(got.pr_head_sha, keep ? 'a'.repeat(40) : null, String(s));
+        assert.equal(got.pr_number, 9, 'the PR number stays for history');
+      }
+    } finally { _setPullRequestClients(); }
+  });
 });

@@ -155,6 +155,19 @@ describe('autofix webhook', () => {
     assert.equal((await findings()).length, 0);
   });
 
+  it('a 200 KB signed payload is accepted; a 2 MB one is refused with 413', async () => {
+    const withPad = (n: number) => {
+      const p = JSON.parse(fx('workflow_run_failed_main')) as Record<string, unknown>;
+      p.padding = 'x'.repeat(n);
+      return JSON.stringify(p);
+    };
+    assert.equal(await deliver(withPad(200 * 1024)), 202);
+    assert.equal((await findings()).length, 1);
+    const big = withPad(2 * 1024 * 1024);
+    const status = await deliver(big).catch(() => 413);
+    assert.equal(status, 413);
+  });
+
   it('CodeCommit repos never produce findings', async () => {
     await getGitReposRepository().create({
       id: 'repo-cc', project_id: projectId, name: 'cc', url: 'https://git-codecommit.us-east-1.amazonaws.com/v1/repos/acme-cc', provider: 'codecommit', status: 'ready',
