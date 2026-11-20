@@ -147,6 +147,9 @@ async function attempt(target: { url: string; kind: ChatKind }, text: string): P
   }
 }
 
+/** True on AWS Lambda (the portal's request Lambda), where a webhook request must answer quickly. */
+function onLambda(): boolean { return Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME); }
+
 /** A 4xx other than 408 and 429 will not get better by retrying. */
 function isPermanent(error: string): boolean {
   const m = /^HTTP (\d+)$/.exec(error);
@@ -158,7 +161,9 @@ function isPermanent(error: string): boolean {
 async function deliver(projectId: string, target: { url: string; kind: ChatKind }, text: string): Promise<boolean> {
   try {
     let error: string | null = 'network error';
-    for (let i = 0; i < 3; i++) {
+    // On Lambda the work runs inside the webhook request (GitHub gives up after 10 s): one try, no backoff sleeps.
+    const tries = onLambda() ? 1 : 3;
+    for (let i = 0; i < tries; i++) {
       if (i > 0 && backoff[i - 1] > 0) await new Promise((r) => setTimeout(r, backoff[i - 1]));
       error = await attempt(target, text);
       if (error === null || isPermanent(error)) break;
@@ -173,7 +178,7 @@ async function deliver(projectId: string, target: { url: string; kind: ChatKind 
 }
 
 /**
- * Posts static text (the plain test message, no dynamic fields) to the project's chat webhook. 3 tries; never throws.
+ * Posts static text (the plain test message, no dynamic fields) to the project's chat webhook. 3 tries (1 on Lambda); never throws.
  * Do NOT pass run data here: use notifyRunChat, which escapes for the target kind.
  */
 export async function sendChat(projectId: string, text: string): Promise<boolean> {

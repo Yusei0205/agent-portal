@@ -107,6 +107,19 @@ describe('sendChat', () => {
     assert.ok(st.lastFailureAt);
     assert.equal(st.lastError, 'HTTP 500');
   });
+  it('on Lambda tries once (no backoff sleeps) so the webhook answers within GitHub\'s timeout', async () => {
+    await setChatUrl('s4l', SLACK, actor);
+    const calls = fake([500]);
+    const saved = process.env.AWS_LAMBDA_FUNCTION_NAME;
+    process.env.AWS_LAMBDA_FUNCTION_NAME = 'portal-test';
+    try {
+      assert.equal(await sendChat('s4l', 'x'), false);
+    } finally {
+      if (saved === undefined) delete process.env.AWS_LAMBDA_FUNCTION_NAME; else process.env.AWS_LAMBDA_FUNCTION_NAME = saved;
+    }
+    assert.equal(calls.length, 1);
+    assert.equal((await chatStatus('s4l')).lastError, 'HTTP 500');
+  });
   it('error text never contains the URL, even when fetch throws one', async () => {
     await setChatUrl('s5', SLACK, actor);
     fake([new Error(`connect failed ${SLACK}`)]);
