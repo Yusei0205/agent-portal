@@ -680,6 +680,76 @@ async function main() {
       const tabTexts = await p.locator('.tab-btn, [role="tab"]').allTextContents();
       if (tabTexts.length === 0) throw new Error('No tabs found on Setup page');
     }, page);
+    await test('Setup page has an Auto-fix tab with counters and the off notice', async (p) => {
+      await goto(p, `/p/${projectId}/setup/autofix`, 1200);
+      await p.locator('[role="tab"]', { hasText: 'Auto-fix' }).click();
+      await p.waitForSelector('[data-testid="autofix-tab"]', { timeout: 8000 });
+      await p.waitForSelector('.af-counts .af-count', { timeout: 4000 });
+      await p.getByText('Auto-fix is off for this project').waitFor({ timeout: 4000 });
+    }, page);
+    await test('Auto-fix tab: policy form, the Draft PR notice, the webhook panel and no horizontal scroll', async (p) => {
+      await p.setViewportSize({ width: 390, height: 800 });
+      try {
+        await goto(p, `/p/${projectId}/setup/autofix`, 1200);
+        await p.locator('[role="tab"]', { hasText: 'Auto-fix' }).click();
+        await p.waitForSelector('[data-testid="autofix-policy-form"]', { timeout: 8000 });
+        if (await p.locator('[data-testid="autofix-draftpr-notice"]').count() !== 0) throw new Error('Draft PR notice shown before Draft PR is chosen');
+        await p.locator('.af-mode', { hasText: 'Draft PR' }).click();
+        await p.waitForSelector('[data-testid="autofix-draftpr-notice"]', { timeout: 3000 });
+        const text = await p.locator('[data-testid="autofix-draftpr-notice"]').innerText();
+        if (!text.includes('AUTOFIX_ALLOW_UNATTENDED_PUSH=1')) throw new Error('Notice does not name AUTOFIX_ALLOW_UNATTENDED_PUSH=1');
+        await p.getByText('Supported glob syntax').waitFor({ timeout: 3000 });
+        await p.getByRole('button', { name: 'Rotate secret' }).waitFor({ timeout: 3000 });
+        // Saving without a verify command shows the server message inline.
+        await p.getByRole('button', { name: 'Save policy' }).click();
+        await p.waitForSelector('[data-testid="autofix-policy-error"]', { timeout: 5000 });
+        const err = await p.locator('[data-testid="autofix-policy-error"]').innerText();
+        if (!/verify command/i.test(err)) throw new Error(`Unexpected save error: ${err}`);
+        const overflow = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        if (overflow > 1) throw new Error(`Page scrolls horizontally by ${overflow}px at 390px width`);
+        if (process.env.SMOKE_SHOTS) await p.screenshot({ path: `${process.env.SMOKE_SHOTS}/autofix-390.png`, fullPage: true });
+      } finally {
+        await p.setViewportSize({ width: 1280, height: 800 });
+      }
+    }, page);
+    await test('Auto-fix tab: findings list actions and detail drawer at phone width (mocked findings)', async (p) => {
+      const mk = (id: string, status: string, extra: Record<string, unknown> = {}) => ({
+        id, project_id: projectId, source: 'ci_failed', kind: 'lint', fingerprint: id, severity: 'low', status, repo_id: null, branch: 'main',
+        commit_sha: 'abcdef1234567890', workflow_id: null, fix_branch: null, pr_number: null, pr_url: null, attempts: 1, occurrences: 3,
+        cost_usd: 0, cooldown_until: null, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), ...extra,
+      });
+      const listFilter = (url: URL) => url.pathname === `/api/projects/${projectId}/autofix/findings`;
+      const listHandler = (route: import('playwright').Route) => route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ findings: [mk('f1', 'needs_human'), mk('f2', 'pr_open', { pr_number: 7, pr_url: 'javascript:alert(1)' }), mk('f3', 'resolved')], counts: { new: 0, triaged: 0, fixing: 0, pr_open: 1, resolved: 1, dismissed: 0, suppressed: 0, needs_human: 1 } }),
+      });
+      const detailFilter = (url: URL) => url.pathname === `/api/projects/${projectId}/autofix/findings/f1`;
+      const detailHandler = (route: import('playwright').Route) => route.fulfill({
+        status: 200, contentType: 'application/json', body: JSON.stringify({ finding: mk('f1', 'needs_human', { evidence: '<img src=x onerror=alert(1)> lint failed' }) }),
+      });
+      await p.route(listFilter, listHandler);
+      await p.route(detailFilter, detailHandler);
+      await p.setViewportSize({ width: 390, height: 800 });
+      try {
+        await goto(p, '/projects', 300);
+        await goto(p, `/p/${projectId}/setup/autofix`, 1200);
+        await p.locator('[role="tab"]', { hasText: 'Auto-fix' }).click();
+        await p.waitForSelector('tr[data-finding-id="f1"]', { timeout: 8000 });
+        const row = p.locator('tr[data-finding-id="f1"]');
+        for (const name of ['Dismiss', 'Never fix this kind', 'Retry']) await row.getByRole('button', { name }).waitFor({ timeout: 3000 });
+        if (await p.locator('tr[data-finding-id="f3"]').getByRole('button', { name: 'Dismiss' }).count() !== 0) throw new Error('Resolved finding offers Dismiss');
+        if (await p.locator('tr[data-finding-id="f2"] a[href^="javascript:"]').count() !== 0) throw new Error('A non-http pr_url became a link');
+        await row.getByRole('button', { name: 'Details' }).click();
+        await p.getByText('<img src=x onerror=alert(1)> lint failed').waitFor({ timeout: 3000 });
+        const overflow = await p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        if (overflow > 1) throw new Error(`Page scrolls horizontally by ${overflow}px at 390px width`);
+        if (process.env.SMOKE_SHOTS) await p.locator('[data-testid="autofix-tab"]').screenshot({ path: `${process.env.SMOKE_SHOTS}/autofix-findings-390.png` });
+      } finally {
+        await p.setViewportSize({ width: 1280, height: 800 });
+        await p.unroute(listFilter, listHandler);
+        await p.unroute(detailFilter, detailHandler);
+      }
+    }, page);
     } // end §8 setup
 
     // ── 8b. Repository progress bar ───────────────────────────────────────
@@ -812,6 +882,31 @@ async function main() {
       // Clean up route handlers
       await p.unroute(inboxListFilter, inboxListHandler);
       await p.unroute(inboxResolveFilter, inboxResolveHandler);
+    }, page);
+    await test('Inbox: auto-fix items show their labels, kind, reason and changed paths', async (p) => {
+      const mk = (id: string, type: string, payload: Record<string, unknown>) => ({
+        id, type, project_id: null, project_name: null, workflow_id: null, workflow_goal: null, run_id: null, payload,
+        resolved: false, resolved_by: null, resolved_at: null, created_at: new Date().toISOString(), elapsed_ms: 0,
+      });
+      const handler = (route: import('playwright').Route) => route.fulfill({
+        status: 200, contentType: 'application/json',
+        body: JSON.stringify({ items: [
+          mk('af-smoke-push', 'push', { kind: 'autofix', findingKind: 'lint', title: 'Open an auto-fix pull request for shop?', body: 'Unattended push is disabled on this portal; approve to push.', paths: ['src/a.ts', 'src/b.ts'], pathsTruncated: false }),
+          mk('af-smoke-blocked', 'blocked', { kind: 'autofix', findingKind: 'tests', reason: 'attempt limit reached' }),
+        ], total: 2 }),
+      });
+      const filter = (url: URL) => url.pathname === '/api/inbox';
+      await p.route(filter, handler);
+      try {
+        await goto(p, '/projects', 300);
+        await goto(p, '/inbox', 1200);
+        await p.getByText('Auto-fix PR ready').waitFor({ timeout: 8000 });
+        await p.getByText('Auto-fix needs a human').waitFor({ timeout: 3000 });
+        await p.getByText('attempt limit reached').waitFor({ timeout: 3000 });
+        await p.getByText('2 changed files').waitFor({ timeout: 3000 });
+      } finally {
+        await p.unroute(filter, handler);
+      }
     }, page);
     } // end §9 inbox
 

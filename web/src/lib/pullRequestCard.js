@@ -84,6 +84,10 @@ export function describePullRequest(event, ctx = {}) {
         return out('warn', `No pull request for ${repo}`,
           `Pull requests on ${ev.provider ?? 'this host'} are not supported yet. The branch ${branch} was pushed.`);
       }
+      if (code === 'protected-path') {
+        // An auto-fix change that touches a protected path: a person decides (the finding is in Needs attention); no retry button.
+        return out('danger', `Auto-fix blocked for ${repo}`, ev.error ?? 'The change touches a protected path, so no pull request was opened.');
+      }
       if (code === 'no-workspace') {
         return out('danger', `Nothing pushed for ${repo}`, "The session's saved files could not be restored, so nothing was pushed.");
       }

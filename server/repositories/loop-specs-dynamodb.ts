@@ -192,6 +192,16 @@ export class DynamoDbLoopSpecsRepository implements LoopSpecsRepository {
     return item ? itemToRun(item) : null;
   }
 
+  async finishRun(run: Pick<LoopRunRecord, 'id' | 'spec_id' | 'started_at'>, status: string, finishedAt: string): Promise<void> {
+    await this.client.send(new UpdateItemCommand({
+      TableName: table(), Key: { PK: av(runPk(run.spec_id)), SK: av(runSk(run.started_at, run.id)) },
+      UpdateExpression: 'SET #s = :s, finished_at = :f',
+      ConditionExpression: 'attribute_exists(PK)',
+      ExpressionAttributeNames: { '#s': 'status' },
+      ExpressionAttributeValues: { ':s': av(status), ':f': av(finishedAt) },
+    }));
+  }
+
   async listRunsBySpec(specId: string, limit: number): Promise<LoopRunRecord[]> {
     const items: Array<Record<string, AttributeValue>> = [];
     let lastKey: Record<string, AttributeValue> | undefined;

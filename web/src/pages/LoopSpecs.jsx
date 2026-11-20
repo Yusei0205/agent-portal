@@ -365,6 +365,8 @@ function SpecRow({ spec, projectId, onRunNow, onDelete }) {
     }
   };
 
+  const managedByAutofix = spec.id === 'builtin-autofix-ci' || (spec.trigger_config && typeof spec.trigger_config === 'object' && spec.trigger_config.finding_kind !== undefined);
+
   return (
     <li style={{ borderBottom: '1px solid var(--line)', padding: '12px 0' }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
@@ -389,6 +391,9 @@ function SpecRow({ spec, projectId, onRunNow, onDelete }) {
         </div>
 
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+          {managedByAutofix ? (
+            <span className="badge" title="Auto-fix starts this spec for a finding; it cannot be run by hand">Managed by Auto-fix</span>
+          ) : (
           <button
             type="button"
             className="btn btn-primary btn-sm"
@@ -399,6 +404,7 @@ function SpecRow({ spec, projectId, onRunNow, onDelete }) {
           >
             {running ? '▶ Running…' : '▶ Run now'}
           </button>
+          )}
 
           <button
             type="button"

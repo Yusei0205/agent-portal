@@ -41,6 +41,23 @@ describe('kiro-run payload: finalizeCheck', () => {
   });
 });
 
+describe('kiro-run payload: checkedReport', () => {
+  it('keeps true, drops false and absent, rejects anything else', () => {
+    const get = (extra: Record<string, unknown>) => {
+      const v = validatePayload(run(extra));
+      assert.ok(v.ok, JSON.stringify(v));
+      return (v.payload as { checkedReport?: boolean }).checkedReport;
+    };
+    assert.equal(get({ checkedReport: true }), true);
+    assert.equal(get({ checkedReport: false }), undefined);
+    assert.equal(get({}), undefined);
+    for (const bad of ['yes', 1, null]) {
+      const v = validatePayload(run({ checkedReport: bad }));
+      assert.ok(!v.ok && /checkedReport/.test(v.error), JSON.stringify(v));
+    }
+  });
+});
+
 describe('Kiro runner: changes and finalize on its folder layout', () => {
   let root: string;
   let remote: string;
@@ -83,6 +100,20 @@ describe('Kiro runner: changes and finalize on its folder layout', () => {
     events.length = 0;
     await reportRepoChanges([...spec('edited'), ...spec('clean')], workDir, emit);
     assert.deepEqual(events, [{ type: 'repo-changes', repo: 'edited', base: 'main', commits: 0, files: 1 }]);
+  });
+
+  it('reportRepoChanges with checked (an auto-fix run) adds the changed file list', async () => {
+    events.length = 0;
+    // The checked report fetches the base from the run's https URL for the repository; here that URL stands for the local test remote.
+    const URL_HOOK = Symbol.for('agent-portal.test.remoteUrl');
+    (globalThis as Record<symbol, unknown>)[URL_HOOK] = () => remote;
+    try {
+      await reportRepoChanges([...spec('edited'), ...spec('clean')], workDir, emit, { checked: true });
+    } finally { delete (globalThis as Record<symbol, unknown>)[URL_HOOK]; }
+    assert.equal(events.length, 1);
+    const { paths, ...rest } = events[0] as Record<string, unknown>;
+    assert.deepEqual(rest, { type: 'repo-changes', repo: 'edited', base: 'main', commits: 0, files: 1 });
+    assert.ok(Array.isArray(paths) && paths.length === 1, 'the changed file list (Task 9 auto-fix guardrails)');
   });
 
   it('runFinalize pushes a new branch from the warm work folder; main does not move', async () => {

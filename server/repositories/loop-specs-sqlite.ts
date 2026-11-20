@@ -88,6 +88,10 @@ export class SqliteLoopSpecsRepository implements LoopSpecsRepository {
     return row ? toRun(row) : null;
   }
 
+  async finishRun(run: Pick<LoopRunRecord, 'id' | 'spec_id' | 'started_at'>, status: string, finishedAt: string): Promise<void> {
+    dbRun('UPDATE p10_loop_runs SET status = ?, finished_at = ? WHERE id = ?', status, finishedAt, run.id);
+  }
+
   async listRunsBySpec(specId: string, limit: number): Promise<LoopRunRecord[]> {
     const rows = all<Row>('SELECT * FROM p10_loop_runs WHERE spec_id = ? ORDER BY started_at DESC LIMIT ?', specId, limit);
     return rows.map(toRun);

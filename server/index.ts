@@ -42,6 +42,7 @@ import { registerPresentationRoutes } from './presentations.ts';
 import { registerDocTemplateRoutes } from './doc-templates.ts';
 import { registerReviewRoutes } from './review.ts';
 import { registerLoopSpecRoutes } from './loop-specs.ts';
+import { registerAutofixRoutes } from './autofix/routes.ts';
 import { registerAutomationRoutes } from './automations/routes.ts';
 import { recoverLocalAutomations, stopLocalAutomationTimers } from './automations/engine.ts';
 import { registerInsightsRoutes } from './insights.ts';
@@ -89,6 +90,8 @@ import { registerSessionContextRoutes } from './session-context.ts';
 import { registerJiraRoutes } from './jira.ts';
 import { registerBrowserLiveRoutes, handleBrowserLiveUpgrade } from './browser-live.ts';
 import { shutdownAllBrowsers } from './agent/browser-manager.ts';
+import { registerSessionIntake } from './autofix/session-intake.ts';
+import { registerFixPipeline, reconcileStuck } from './autofix/pipeline.ts';
 import './review-lifecycle.ts'; // Register review lifecycle hook (wires run stats → review row)
 import { isServableStoragePath } from './storage-path.ts';
 
@@ -280,6 +283,7 @@ export async function startServer(
   registerDocTemplateRoutes();
   registerReviewRoutes();
   registerLoopSpecRoutes();
+  registerAutofixRoutes();
   registerAutomationRoutes();
   registerInsightsRoutes();
   registerUsageRoutes();
@@ -321,6 +325,10 @@ export async function startServer(
   registerKiroSettingsRoutes();
   registerEngineModelRoutes();
   registerSessionContextRoutes();
+  registerSessionIntake();
+  registerFixPipeline();
+  // Repair auto-fix findings a crash or a lost run left in triaged/fixing (in the background; it never rejects).
+  void reconcileStuck();
   registerJiraRoutes();
   registerBrowserLiveRoutes();
 

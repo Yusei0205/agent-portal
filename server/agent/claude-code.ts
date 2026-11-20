@@ -232,7 +232,7 @@ ${REVIEW_SYSTEM_APPEND}`;
   const summary = res.text || 'Run complete.';
   emit('run-complete', { result: summary, cost_usd: costUsd });
   // Spend is recorded and the run is done: now the pull request step (never fails the run).
-  await submitRepoChanges(run, wf?.created_by ?? null, res.repoChanges);
+  await submitRepoChanges(run, wf?.created_by ?? null, res.repoChanges, undefined, res.check);
   return summary;
 }
 

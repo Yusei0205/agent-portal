@@ -11,6 +11,7 @@ import { NewSessionDialog, ModelPicker } from '../sessions/NewSessionDialog.jsx'
 import { syncGoal } from '../../lib/repoSync.js';
 import { ProjectChecklists } from './ProjectChecklists.jsx';
 import { GraphExcludes } from './GraphExcludes.jsx';
+import { AutoFix } from './AutoFix.jsx';
 
 // ── Status badge ──────────────────────────────────────────────────────────────
 
@@ -1422,6 +1423,7 @@ const TABS = [
   { id: 'permissions', label: 'Permissions' },
   { id: 'pull-requests', label: 'Pull requests' },
   { id: 'checklists', label: 'Checklists' },
+  { id: 'autofix', label: 'Auto-fix' },
 ];
 
 /**
@@ -1707,6 +1709,17 @@ export function ProjectHub({ projectId, user, initialTab }) {
           <PullRequestsTab projectId={projectId} canEdit={canEditPr} toast={toast} />
         )}
         {activeTab === 'checklists' && <ProjectChecklists projectId={projectId} canEdit={canEditPr} />}
+        {activeTab === 'autofix' && (
+          <AutoFix
+            projectId={projectId}
+            canManage={isAdmin || String(myAccess?.access ?? '') === 'owner'}
+            isAdmin={isAdmin}
+            currentUserId={currentUserId}
+            members={members}
+            requestConfirm={requestConfirm}
+            toast={toast}
+          />
+        )}
       </div>
       <ConfirmDialog state={confirmState} />
       <ToastShelf toasts={toasts} onRemove={removeToast} />

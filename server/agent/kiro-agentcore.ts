@@ -55,6 +55,8 @@ import type { RunContext } from './types.ts';
 import { getSettings } from '../settings.ts';
 import { ApprovalRelay, isApprovalRequest, type ControlSender } from './agentcore-bridge.ts';
 import { recordHostTimeLimit } from './host-limit.ts';
+import { repoChangeOf } from './runner-finalize.ts';
+import type { RepoChanges } from './runner-finalize.ts';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -98,7 +100,7 @@ export type AgentCoreSSEEvent =
   | { type: 'tool'; name: string; agentId?: string; agent?: string }
   | { type: 'subagent-started' | 'subagent-finished' | 'subagent-failed'; id: string; name: string; description?: string; summary?: string; status?: string; parentId?: string; durationMs?: number }
   | { type: 'check-result'; ok: boolean; ranAt: string; steps: unknown[] }
-  | { type: 'repo-changes'; repo: string; base: string; commits: number; files: number }
+  | { type: 'repo-changes'; repo: string; base: string; commits: number; files: number; paths?: unknown }
   | { type: 'browser-session'; browserId: string; sessionId: string; width: number; height: number }
   | { type: 'browser-waiting'; state: string; message?: string }
   | { type: 'browser-navigate'; url: string }
@@ -702,6 +704,8 @@ export interface AgentCoreRunOpts {
 interface RepoChangesHooks {
   /** Value of `finalizeCheck` for this run. */
   flag: (run: RunContext['run']) => Promise<boolean>;
+  /** Value of `checkedReport` for this run (auto-fix sessions only; see claude-agentcore.ts checkedReportFor). */
+  checked: (run: RunContext['run']) => Promise<boolean>;
   handle: (ctx: import('../session-pr.ts').SessionPrContext, changes: import('../session-pr.ts').RepoChange[]) => Promise<void>;
 }
 
@@ -712,7 +716,11 @@ const defaultRepoChangesHooks: RepoChangesHooks = {
     const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
     const { getSessionsRepository } = await import('../repositories/sessions.ts');
     const w = await getSessionsRepository().getWorkflowById(run.workflowId);
-    return finalizeRunPayloadFlag(run.projectId, Boolean(String(w?.jira_key ?? '').trim()));
+    return finalizeRunPayloadFlag(run.projectId, Boolean(String(w?.jira_key ?? '').trim()), run.workflowId);
+  },
+  checked: async (run) => {
+    const { checkedReportFor } = await import('./claude-agentcore.ts');
+    return checkedReportFor(run.workflowId);
   },
   handle: async (ctx, changes) => {
     const { handleRepoChanges } = await import('../session-pr.ts');
@@ -759,13 +767,16 @@ export async function runKiroViaAgentCore(
     // Record why first: the abort below reaches the run as an error that would otherwise read as "Cancelled".
     void recordHostTimeLimit(ctx, opts.runId, timeoutMs).finally(() => ac.abort(new Error('AgentCore run timed out')));
   }, timeoutMs);
-  const repoChanges: Array<{ repo: string; base: string; commits: number; files: number }> = [];
+  const repoChanges: RepoChanges[] = [];
+  // The run's own check result for the PR gate (the stored check-result event may not be written yet on DynamoDB).
+  let lastCheck: { ok: boolean } | null | undefined = opts.checks?.length ? null : undefined;
 
   try {
     const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
     const finalizeCheck = opts.repos?.length && ctx.run?.workflowId
       ? await repoChangesHooks.flag(ctx.run).catch(() => false)
       : false;
+    const checkedReport = finalizeCheck ? await repoChangesHooks.checked(ctx.run).catch(() => false) : false;
     const payload: Record<string, unknown> = {
       mode: 'kiro-run',
       runId: opts.runId,
@@ -786,6 +797,7 @@ export async function runKiroViaAgentCore(
       ...(opts.agent ? { agent: opts.agent } : {}),
       ...(snapshot ? { snapshot } : {}),
       ...(finalizeCheck ? { finalizeCheck: true } : {}),
+      ...(checkedReport ? { checkedReport: true } : {}),
       // Same rule as the local Kiro engine: trusted runs allow what kiro-cli asks about,
       // untrusted runs ask a person (relayed below).
       policy: { trusted: ctx.run.trusted },
@@ -881,14 +893,15 @@ export async function runKiroViaAgentCore(
 
         case 'check-result': {
           const chk = ev as { type: 'check-result'; ok?: boolean; ranAt?: string; steps?: unknown[] };
+          lastCheck = { ok: Boolean(chk.ok) };
           emit('check-result', { ok: Boolean(chk.ok), ranAt: String(chk.ranAt ?? ''), steps: Array.isArray(chk.steps) ? chk.steps : [] });
           break;
         }
 
         case 'repo-changes': {
-          const rc = ev as { type: 'repo-changes'; repo?: unknown; base?: unknown; commits?: unknown; files?: unknown };
+          const rc = ev as { type: 'repo-changes'; repo?: unknown; base?: unknown; commits?: unknown; files?: unknown; paths?: unknown };
           if (typeof rc.repo === 'string' && typeof rc.base === 'string') {
-            repoChanges.push({ repo: rc.repo, base: rc.base, commits: Number(rc.commits) || 0, files: Number(rc.files) || 0 });
+            repoChanges.push(repoChangeOf(rc));
           }
           break;
         }
@@ -975,7 +988,8 @@ export async function runKiroViaAgentCore(
   if (repoChanges.length && ctx.run?.workflowId && ctx.run.projectId) {
     try {
       await repoChangesHooks.handle(
-        { workflowId: ctx.run.workflowId, runId: opts.runId, projectId: ctx.run.projectId, userId: ctx.run.credentialOwnerId ?? null, engine: 'kiro' },
+        { workflowId: ctx.run.workflowId, runId: opts.runId, projectId: ctx.run.projectId, userId: ctx.run.credentialOwnerId ?? null, engine: 'kiro',
+          ...(lastCheck !== undefined ? { check: lastCheck } : {}) },
         repoChanges,
       );
     } catch { /* handleRepoChanges reports its own problems as events */ }

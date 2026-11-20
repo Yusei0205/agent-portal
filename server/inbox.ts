@@ -336,7 +336,7 @@ export function registerInboxRoutes(): void {
       if (wid && rid) {
         const sp = await import('./session-pr.ts');
         if (response === 'approve') {
-          void sp.createPullRequestForSession(wid, rid, { approvedBy: String(req.user.id) })
+          void sp.createPullRequestForSession(wid, rid, { approvedBy: String(req.user.id), via: 'approval' })
             .catch((e: unknown) => console.error('[session-pr] approved pull request failed:', e));
         } else {
           await sp.declinePullRequestForSession(wid, rid).catch(() => undefined);

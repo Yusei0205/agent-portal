@@ -63,6 +63,8 @@ export interface KiroRunPayload {
   snapshot?: unknown;
   /** true = at the end of the run, report which cloned repositories have changes (read-only; nothing is committed or pushed). */
   finalizeCheck?: boolean;
+  /** true = build that report in a runner-private repository with the changed file list (auto-fix sessions only). */
+  checkedReport?: boolean;
   /**
    * Trust level of the run, as in the portal's local Kiro engine: trusted runs allow what
    * kiro-cli asks about; untrusted runs ask a person. Absent: trusted (the spike behaviour,
@@ -196,6 +198,9 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
   if (obj.finalizeCheck !== undefined && typeof obj.finalizeCheck !== 'boolean') {
     return err('"finalizeCheck" must be a boolean');
   }
+  if (obj.checkedReport !== undefined && typeof obj.checkedReport !== 'boolean') {
+    return err('"checkedReport" must be a boolean');
+  }
 
   const t = obj.token;
   if (typeof t !== 'object' || t === null || Array.isArray(t)) {
@@ -259,6 +264,7 @@ function validateKiroRun(obj: Record<string, unknown>): ValidationResult {
       ...(Array.isArray(obj.checks) && obj.checks.length <= 8 ? { checks: obj.checks as unknown[] } : {}),
       ...(obj.snapshot ? { snapshot: obj.snapshot } : {}),
       ...(obj.finalizeCheck === true ? { finalizeCheck: true } : {}),
+      ...(obj.checkedReport === true ? { checkedReport: true } : {}),
       token: {
         accessToken: tok.accessToken as string,
         expiresAt: tok.expiresAt as string,

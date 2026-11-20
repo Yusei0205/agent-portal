@@ -1924,6 +1924,54 @@
         "test/cursor-provider.test.ts"
       ],
       "smokeIds": []
+    },
+    "autofix": {
+      "description": "Auto-fix: findings from failing CI, review findings and failed sessions; per-project policy, guardrails, fix pipeline, push gate and Inbox delivery",
+      "sources": [
+        "server/autofix/delivery.ts",
+        "server/autofix/fingerprint.ts",
+        "server/autofix/github-events.ts",
+        "server/autofix/guardrails.ts",
+        "server/autofix/intake.ts",
+        "server/autofix/pipeline.ts",
+        "server/autofix/policy.ts",
+        "server/autofix/review-source.ts",
+        "server/autofix/routes.ts",
+        "server/autofix/scrub.ts",
+        "server/autofix/session-intake.ts",
+        "server/autofix/triage.ts",
+        "server/autofix/webhook.ts",
+        "server/repositories/autofix-findings-dynamodb.ts",
+        "server/repositories/autofix-findings-sqlite.ts",
+        "server/repositories/autofix-findings.ts",
+        "server/agent/runner-finalize.ts",
+        "server/agent/runner-finalize-run.ts",
+        "codex-runner/src/service.ts",
+        "web/src/pages/hub/AutoFix.jsx",
+        "web/src/styles/autofix.css"
+      ],
+      "tests": [
+        "test/autofix-delivery.test.ts",
+        "test/autofix-findings-repo.test.ts",
+        "test/autofix-fingerprint.test.ts",
+        "test/autofix-github-events.test.ts",
+        "test/autofix-guardrails.test.ts",
+        "test/autofix-hooks.test.ts",
+        "test/autofix-loop.test.ts",
+        "test/autofix-pipeline.test.ts",
+        "test/autofix-policy.test.ts",
+        "test/autofix-routes.test.ts",
+        "test/autofix-schema.test.ts",
+        "test/autofix-sources.test.ts",
+        "test/autofix-triage.test.ts",
+        "test/autofix-webhook.test.ts",
+        "test/runner-finalize.test.ts",
+        "test/kiro-runner-finalize.test.ts"
+      ],
+      "smokeIds": [
+        "setup"
+      ],
+      "note": "UI is the Setup > Auto-fix tab (smoke section 8) and the Inbox auto-fix labels (section 9)."
     }
   },
   "shared": [

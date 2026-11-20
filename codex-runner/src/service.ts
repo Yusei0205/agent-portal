@@ -221,7 +221,8 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
             return waiting.outcome;
           },
         };
-        if (repos.length) {
+        // The portal turns the PR tool off for auto-fix sessions (`prTool: false`): their delivery goes through its diff gate only.
+        if (repos.length && body.prTool !== false) {
           prTool = await openCodexPrTool(ctx, repos.map(r => r.name), request => send({ type: 'pull-request-request', ...request }));
           // This loopback tool enforces portal policy and exact-call approvals itself.
           // A second native MCP prompt cannot be answered by the portal's shell approval handler.
@@ -238,7 +239,7 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
         if (controller.signal.aborted) throw new DOMException('Run cancelled', 'AbortError');
         if (body.checks) send({ type: 'check-result', ...await runCheckSteps(validateCheckSteps(body.checks), workDir) });
         emitRunnerFiles(workDir, send);
-        if (body.finalizeCheck) await reportRepoChanges(body.repos, workDir, send);
+        if (body.finalizeCheck) await reportRepoChanges(body.repos, workDir, send, { checked: body.checkedReport === true });
         await flushWorkspace(snapshot, workDir);
         const stateSaved = await (options.saveState ?? saveCodexState)(home, stateSnapshot);
         if (stateSnapshot && !stateSaved) throw new Error('Codex conversation state was not saved');

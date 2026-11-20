@@ -841,7 +841,7 @@ export async function runInvocation(
 
   // Pull requests: say which cloned repositories changed (read-only; nothing is committed or pushed here).
   if (payload.finalizeCheck && payload.repos?.length) {
-    try { await reportRepoChanges(payload.repos, workDir, emit); } catch { /* best effort */ }
+    try { await reportRepoChanges(payload.repos, workDir, emit, { checked: payload.checkedReport === true }); } catch { /* best effort */ }
   }
 
   // Send back the files the agent wrote (documents, images, spreadsheets...), within size limits.

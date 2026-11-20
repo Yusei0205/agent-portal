@@ -75,6 +75,8 @@ export interface LoopSpecsRepository {
   /** Last run for a spec (by started_at DESC). */
   getLastRunBySpec(specId: string): Promise<LoopRunRecord | null>;
   listRunsBySpec(specId: string, limit: number): Promise<LoopRunRecord[]>;
+  /** Mark a run finished with this status (for a run whose session never started). */
+  finishRun(run: Pick<LoopRunRecord, 'id' | 'spec_id' | 'started_at'>, status: string, finishedAt: string): Promise<void>;
 }
 
 let _instance: LoopSpecsRepository | null = null;

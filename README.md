@@ -50,6 +50,7 @@ Bedrock) or through Kiro CLI or OpenAI Codex, and has a simulated Demo mode. The
   same file, line and text on a pull request, at most 20 per pull request, with secret values
   scrubbed. CodeCommit pull requests are reviewed by hand (*Run now* with the number) and get one
   summary comment.
+- **Auto-fix** turns failing CI runs (GitHub `workflow_run` webhook), review findings and failed sessions into findings, and lets an agent propose a fix that the server re-verifies and guards (protected paths, size caps, attempt and cost limits) before a draft pull request is opened. It is off by default and set per project under Setup > Auto-fix; by default a person approves every push in the Inbox. See the user guide, section 14.
 - **Inbox** is one list across projects of everything that needs a person: approvals, questions,
   pending pushes and blocked sessions, with a live count and answers right in the list.
 - **Feedback** (Portal › Feedback): anyone signed in sends feedback with the page they came from and follows its

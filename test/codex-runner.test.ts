@@ -140,6 +140,17 @@ describe('Codex AgentCore runner HTTP contract', () => {
     assert.match(completed.text, /publication queued/);
     assert.ok(output.indexOf(request) < output.indexOf(completed));
   });
+  it('does not open the portal PR tool when the portal says prTool: false (auto-fix sessions)', async () => {
+    const repo = path.join(root, 'work', 'repos', 'shop');
+    await fs.mkdir(repo, { recursive: true });
+    execFileSync('git', ['init'], { cwd: repo, windowsHide: true, stdio: 'ignore' });
+    const output = await events(await post({ ...payload('REQUEST_PORTAL_PR'), trusted: true, prTool: false,
+      threadId: 'existing-thread', repos: [{ name: 'shop', url: 'https://github.com/example/shop', branch: 'main' }] }));
+    assert.equal(output.some(e => e.type === 'pull-request-request'), false);
+    const completed = output.find(e => e.type === 'result');
+    assert.equal(completed.exitCode, 0);
+    assert.match(completed.text, /No portal_pr tool/);
+  });
   it('binds approvals to the exact command and accepts only the matching answer', async () => {
     let asked = false;
     const output = await events(await post(payload('ASK_PERMISSION')), async event => {

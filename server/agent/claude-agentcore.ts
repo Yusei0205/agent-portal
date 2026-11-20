@@ -24,6 +24,7 @@ import { agentCoreSessionId } from './agentcore-session.ts';
 import { waitForRepoPrep } from './repo-prep.ts';
 import { recordHostTimeLimit } from './host-limit.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
+import { repoChangeOf } from './runner-finalize.ts';
 
 export interface ClaudeAgentCoreOpts {
   runtimeArn: string;
@@ -72,15 +73,32 @@ export interface ClaudeAgentCoreResult {
   stopReason: string;
   /** Repositories the runner reported as changed (only when the payload asked with finalizeCheck). */
   repoChanges?: import('../session-pr.ts').RepoChange[];
+  /** The run's check result when the payload carried checks (null: none arrived); handed to the PR gate with the changes. */
+  check?: { ok: boolean } | null;
 }
 
 /** Whether to ask the runner to report changed repositories (the pull request step). Never throws. */
-export async function finalizeCheckFor(projectId: string, hasTicket: boolean): Promise<boolean> {
+export async function finalizeCheckFor(projectId: string, hasTicket: boolean, workflowId?: string | null): Promise<boolean> {
   try {
     const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
-    return await finalizeRunPayloadFlag(projectId, hasTicket);
+    return await finalizeRunPayloadFlag(projectId, hasTicket, workflowId);
   } catch (e) {
     console.warn('[claude-agentcore] finalizeCheck flag skipped:', e);
+    return false;
+  }
+}
+
+/**
+ * Whether the runner builds the change report the checked way (`checkedReport`: a runner-private repository, with the changed file
+ * list for the auto-fix gate): only for an auto-fix session. Ordinary sessions keep the report they always had. Never throws.
+ */
+export async function checkedReportFor(workflowId?: string | null): Promise<boolean> {
+  if (!workflowId) return false;
+  try {
+    const { isAutofixWorkflow } = await import('../autofix/delivery.ts');
+    return await isAutofixWorkflow(workflowId);
+  } catch (e) {
+    console.warn('[claude-agentcore] checkedReport flag skipped:', e);
     return false;
   }
 }
@@ -95,6 +113,7 @@ export async function submitRepoChanges(
   userId: string | null,
   changes: import('../session-pr.ts').RepoChange[] | undefined,
   waitMs = 30_000,
+  check?: { ok: boolean } | null,
 ): Promise<void> {
   const projectId = run.projectId;
   if (!changes?.length || !projectId) return;
@@ -103,7 +122,7 @@ export async function submitRepoChanges(
     const job = Promise.resolve()
       .then(() => handleRepoChanges({
         workflowId: run.workflowId, runId: run.runId, projectId,
-        userId: run.credentialOwnerId ?? userId, engine: 'claude-code',
+        userId: run.credentialOwnerId ?? userId, engine: 'claude-code', ...(check !== undefined ? { check } : {}),
       }, changes))
       .catch((e: unknown) => { console.warn(`[claude-agentcore] pull request step failed for run ${run.runId}:`, e); });
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -137,6 +156,8 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   const sessionId = ctx.run?.workflowId ? agentCoreSessionId(ctx.run.workflowId, 'claude-code') : randomUUID();
   if (ctx.run?.workflowId && opts.repos?.length) await waitForRepoPrep(ctx.run.workflowId);
   const parts: string[] = [];
+  // The run's own check result for the PR gate (the stored check-result event may not be written yet on DynamoDB).
+  let lastCheck: { ok: boolean } | null | undefined = opts.checks?.length ? null : undefined;
   const out: ClaudeAgentCoreResult = {
     text: '', costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, stopReason: 'end_turn',
   };
@@ -156,9 +177,11 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   }, timeoutMs);
 
   let finalizeCheck = false;
+  let checkedReport = false;
   if (opts.repos?.length && ctx.run?.workflowId && ctx.run.projectId) {
     const wf = await getSessionsRepository().getWorkflowById(ctx.run.workflowId).catch(() => null);
-    finalizeCheck = await finalizeCheckFor(ctx.run.projectId, Boolean(wf?.jira_key));
+    finalizeCheck = await finalizeCheckFor(ctx.run.projectId, Boolean(wf?.jira_key), ctx.run.workflowId);
+    checkedReport = finalizeCheck && await checkedReportFor(ctx.run.workflowId);
   }
   const changes: import('../session-pr.ts').RepoChange[] = [];
   const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
@@ -182,6 +205,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     ...(opts.agent && opts.agents?.[opts.agent] ? { agent: opts.agent } : {}),
     ...(snapshot ? { snapshot } : {}),
     ...(finalizeCheck ? { finalizeCheck: true } : {}),
+    ...(checkedReport ? { checkedReport: true } : {}),
     maxMinutes: Math.floor(timeoutMs / 60_000),
     ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),
     ...(opts.effort ? { effort: opts.effort } : {}),
@@ -225,6 +249,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
           emit('tool-end', { toolCallId: '', toolName: String(ev.name ?? 'Tool'), status: 'completed', output: String(ev.output ?? '') });
           break;
         case 'check-result':
+          lastCheck = { ok: Boolean(ev.ok) };
           emit('check-result', { ok: Boolean(ev.ok), ranAt: String(ev.ranAt ?? ''), steps: Array.isArray(ev.steps) ? ev.steps : [] });
           break;
         case 'browser-session':
@@ -249,7 +274,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
         }
         case 'repo-changes':
           // Not a run event: handed to the pull request step once the run has finished.
-          changes.push({ repo: String(ev.repo ?? ''), base: String(ev.base ?? ''), commits: Number(ev.commits) || 0, files: Number(ev.files) || 0 });
+          changes.push(repoChangeOf(ev));
           break;
         case 'file':
           await receiver?.handle(ev);
@@ -282,5 +307,6 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
   emit('status', { state: 'idle' });
   out.text = parts.join('\n').trim();
   if (changes.length) out.repoChanges = changes;
+  if (lastCheck !== undefined) out.check = lastCheck;
   return out;
 }

@@ -96,6 +96,20 @@ function runContract(label: string, makeRepo: () => Promise<LoopSpecsRepository>
       const runs = await repo.listRunsBySpec(specId, 10);
       assert.ok(runs.length >= 1);
     });
+
+    test('finishRun -- sets the status and finished_at of that run only', async () => {
+      const pid = `lp7-${sfx}`;
+      if (isSqlite) insertProject(pid);
+      const specId = generateId();
+      await repo.createSpec({ id: specId, project_id: pid, name: `fin-${sfx}`, description: null, trigger_type: 'manual', trigger_config: '{}', goal_template: 'g', rules: null, stop_config: '{}', max_iterations: 1, enabled: 1, is_builtin: 0, created_at: now() });
+      const a = await repo.createRun({ id: generateId(), spec_id: specId, status: 'running', iteration: 0, last_workflow_id: null, started_at: '2026-11-01T00:00:00.000Z', finished_at: null });
+      const b = await repo.createRun({ id: generateId(), spec_id: specId, status: 'running', iteration: 0, last_workflow_id: null, started_at: '2026-11-02T00:00:00.000Z', finished_at: null });
+      await repo.finishRun(a, 'failed', '2026-11-01T00:01:00.000Z');
+      const got = await repo.getRunById(a.id);
+      assert.equal(got!.status, 'failed');
+      assert.equal(got!.finished_at, '2026-11-01T00:01:00.000Z');
+      assert.equal((await repo.getRunById(b.id))!.status, 'running');
+    });
   });
 }
 

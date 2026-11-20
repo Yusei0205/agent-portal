@@ -72,6 +72,8 @@ Settings. Only project admins can change it.
   created.
 - `protected_paths`: globs agents may never edit. Defaults: `.github/workflows/**`, `infra/**`,
   secret and env files, lockfiles (unless the class is deps), the auto-fix config itself.
+- `run_as` and `engine`: the user the unattended sessions run as (the admin who enabled auto-fix; it
+  must still be a project editor or owner) and the engine to use.
 - `limits`: max open auto-fix PRs per project, max attempts per fingerprint (default 2), max cost
   per finding and per day, cooldown after a failed attempt.
 
@@ -161,25 +163,50 @@ policy and a filterable finding list; a project counter of open, resolved and di
 
 ## 10. Corrections after reading the code (2026-11-17)
 
-Reading the code while writing the plan showed that some parts the spec calls "existing" are not in
-the code yet. Loop specs are stored and can be run by hand, but nothing dispatches the `github`,
-`cron`, `interval` or `jira` triggers. There is no webhook route, no server-run verification
-pipeline and no branch-push or PR-creation step for sessions. The README describes more than the
-code does. A and B therefore build these pieces themselves, as part of the auto-fix modules:
+This section was checked against `origin/main_v3` at `eac382e`. An earlier version of it was written
+against an old snapshot and wrongly said that triggers, webhooks and PR creation did not exist.
 
-- **Webhook intake** is new: a raw-body route (`router.rawPost`) that checks the GitHub HMAC signature.
-- **Dispatch** is direct. The pipeline starts the seeded session itself; there is no general trigger
-  dispatcher. The seeded specs use `trigger_type = 'webhook'` with
+**Already in the code, and reused:**
+- `server/loop-triggers.ts`: cron, interval and signed-webhook triggers, `fireLoopSpec` with its safety
+  rules (runs as the person who set it up, never "trust all tools", max per hour, one session of a
+  spec at a time), and the webhook helpers.
+- Loop sessions with stop rules and `checks` (shell checks run by the runner after each iteration,
+  validated and blocked from deploys), in `server/workflows/loop.ts` and `server/agent/runner-checks.ts`.
+- The session PR flow (`server/session-pr.ts`, `server/pull-requests.ts`): push a branch, open the PR,
+  start a draft review, ask in the Inbox (`push`) when there is no ticket.
+- `server/agent/guard.ts` blocks agents from editing protected config files.
+- Interruption recovery (`server/workflows/recovery.ts`): a cut-off turn is continued automatically,
+  at most twice in a row.
+
+**Still missing, so A and B build them:**
+- GitHub event handling. The signed webhook only fires a spec with generic variables; nothing parses
+  `workflow_run`, `check_suite` or `pull_request`, dedupes, or tracks attempts. The `github` and `jira`
+  trigger types are stored but never dispatched.
+- A findings store, the autonomy policy, triage and the kill switch.
+- A pre-push gate on the changed file list. `RepoChange` carries only counts today, and the runner does
+  the push, so the file list must come from `detectChanges` (a runner change that needs a redeploy).
+- A `draft` flag and labels in `createPullRequest`.
+
+**Where this changes the design:**
+- **Dispatch** is direct: the pipeline calls `fireLoopSpec` with new overrides (`runAs`, `checks`,
+  `repoIds`, `engine`). The seeded specs use `trigger_type = 'webhook'` and
   `trigger_config = {"finding_kind": ...}`. A new `finding` trigger type would need a rebuild of the
-  `p10_loop_specs` table (a SQLite CHECK constraint), and nothing needs it yet.
-- **Verification and delivery** are new server modules (`verify.ts`, `delivery.ts`).
-- **Table name.** `findings` and `p10_findings` already hold code-review findings, so the new table
-  is `autofix_findings`.
-- **Inbox types** are limited by a CHECK constraint, so auto-fix items reuse `review-ready` ("PR
-  ready") and `blocked` ("needs a human") with `payload.kind = 'autofix'`.
-- **Run hook.** `setRunLifecycleHook` holds one function, which `review-lifecycle.ts` already uses,
-  so it becomes a list of hooks.
-- **Reproduce command.** v1 uses the per-project `verify.command` only. Deriving the command from the
-  failing CI job is deferred.
+  `p10_loop_specs` table (a SQLite CHECK constraint), and nothing needs it.
+- **Verification** is the loop's `checks`, run by the runner where the code is. Reproduce-first is
+  weaker than the spec: the portal cannot run a baseline in an AgentCore microVM, so the goal tells the
+  agent to run the check first and report "cannot reproduce". Deriving the command from the failing CI
+  job is deferred; v1 uses one `verify.command` per project.
+- **Propose mode** is the existing `push` Inbox approval. **Draft-PR mode** skips that question when
+  the diff gate passes.
+- **Concurrency:** auto-fix sessions of one spec run one at a time and at most 3 an hour (the existing
+  `fireLoopSpec` rules). Other findings wait as `new`.
+- **Unattended approvals:** a fix session never runs with "trust all tools", so a tool that needs
+  approval waits in the Inbox. That is acceptable for v1 and is a known limit.
+- **Table name:** `autofix_findings` (`findings` and `p10_findings` hold code-review findings).
+- **Inbox types** are fixed by a CHECK constraint, so auto-fix items reuse `push` and `blocked` with
+  `payload.kind = 'autofix'`.
+- **Run hook:** `setRunLifecycleHook` still holds one function (used by `review-lifecycle.ts`), so it
+  becomes a list. `session_failed` intake skips failures that recovery is still continuing.
+- **Advisory judge:** not in the code; PRs carry no judge verdict in v1.
 - **Numeric defaults** the spec left open: 3 open PRs, 2 attempts, $2 per finding, $10 per day, 60
   minute cooldown, 10 files, 300 lines.

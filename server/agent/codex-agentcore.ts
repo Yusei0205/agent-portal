@@ -14,6 +14,7 @@ import { withSkillsGuidance } from './skills-guidance.ts';
 import type { CodexTurnResult } from './codex-session.ts';
 import { getCodexConfigFiles } from '../user-config.ts';
 import { parseCodexPrRequest, type CodexPrRequest } from './codex-pr-tool.ts';
+import { repoChangeOf } from './runner-finalize.ts';
 
 const allowedEvents = new Set(['assistant-text', 'tool-start', 'tool-end', 'tool-blocked', 'status', 'context-usage', 'subagent-started', 'subagent-finished', 'subagent-failed']);
 const finiteTokenCount = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : 0;
@@ -38,17 +39,24 @@ export async function runCodexViaAgentCore(
   const changes: Array<{ repo: string; base: string; commits: number; files: number }> = [];
   const requestedPrs = new Map<string, CodexPrRequest>();
   let finalizeCheck = false;
+  // An auto-fix session delivers only through the PR gate (server/autofix/delivery.ts): no PR tool for the agent.
+  const autofix = ctx.run.workflowId
+    ? await import('../autofix/delivery.ts').then((d) => d.isAutofixWorkflow(ctx.run.workflowId)).catch(() => false)
+    : false;
+  // The run's own check result, handed to the PR gate (the stored event may not be written yet on DynamoDB).
+  let lastCheck: { ok: boolean } | null | undefined = ctx.run.runnerChecks?.length ? null : undefined;
   if (ctx.run.projectId && ctx.run.runnerRepos?.length) {
     const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
     const workflow = await getSessionsRepository().getWorkflowById(ctx.run.workflowId);
-    finalizeCheck = await finalizeRunPayloadFlag(ctx.run.projectId, Boolean(workflow?.jira_key)).catch(() => false);
+    finalizeCheck = await finalizeRunPayloadFlag(ctx.run.projectId, Boolean(workflow?.jira_key), ctx.run.workflowId).catch(() => false);
   }
   const payload = { mode: 'codex-run', runId: ctx.run.runId, workflowId: ctx.run.workflowId, prompt: withSkillsGuidance(prompt, Boolean(ctx.run.runnerRepos?.length)), ...auth,
     codexConfig: await getCodexConfigFiles(ctx.run.credentialOwnerId), leadAgent: ctx.run.leadAgent,
     trusted: ctx.run.trusted, rules: toPolicyRules(ctx.run.permissions.rules), approvals: runnerApprovals(),
     model: ctx.run.model, threadId: ctx.run.engineSessionId, repos: ctx.run.runnerRepos,
     mcpServers: ctx.run.runnerMcpServers, inputFiles: ctx.run.runnerInputFiles, checks: ctx.run.runnerChecks,
-    snapshot: workspace, stateSnapshot: state, finalizeCheck };
+    snapshot: workspace, stateSnapshot: state, finalizeCheck, ...(autofix ? { prTool: false } : {}),
+    ...(autofix && finalizeCheck ? { checkedReport: true } : {}) };
   let result: CodexTurnResult | null = null;
   let latest = usageFrom({});
   let failure: string | null = null;
@@ -68,6 +76,7 @@ export async function runCodexViaAgentCore(
       }
       if (isApprovalRequest(event)) { approvals.handle(event); continue; }
       if (event.type === 'pull-request-request') {
+        if (autofix) { ctx.emit('status', { text: 'Pull request requests are ignored in auto-fix sessions; the portal delivers the fix.' }); continue; }
         const request = parseCodexPrRequest({ repo: event.repo, base: event.base }, (ctx.run.runnerRepos ?? []).map(r => r.name));
         requestedPrs.set(request.repo, request);
         ctx.emit('status', { text: `PR publication queued for ${request.repo} against ${request.base}.` });
@@ -76,8 +85,8 @@ export async function runCodexViaAgentCore(
       if (event.type === 'portal-event' && allowedEvents.has(event.eventType) && event.payload && typeof event.payload === 'object') ctx.emit(event.eventType, event.payload);
       else if (event.type === 'status' && typeof event.text === 'string') ctx.emit('status', { text: event.text });
       else if (event.type === 'file') await files.handle(event);
-      else if (event.type === 'check-result') ctx.emit('check-result', { ok: event.ok === true, ranAt: event.ranAt, steps: event.steps });
-      else if (event.type === 'repo-changes' && typeof event.repo === 'string') changes.push({ repo: event.repo, base: String(event.base || ''), commits: Number(event.commits) || 0, files: Number(event.files) || 0 });
+      else if (event.type === 'check-result') { lastCheck = { ok: event.ok === true }; ctx.emit('check-result', { ok: event.ok === true, ranAt: event.ranAt, steps: event.steps }); }
+      else if (event.type === 'repo-changes' && typeof event.repo === 'string') changes.push({ ...repoChangeOf(event), repo: event.repo, base: String(event.base || '') });
       else if (event.type === 'usage') latest = usageFrom(event);
       else if (event.type === 'error') failure = String(event.message || 'Codex runner failed');
       else if (event.type === 'result') {
@@ -100,7 +109,8 @@ export async function runCodexViaAgentCore(
     if (changes.length && ctx.run.projectId) {
       const { handleRepoChanges } = await import('../session-pr.ts');
       await handleRepoChanges({ workflowId: ctx.run.workflowId, runId: ctx.run.runId, projectId: ctx.run.projectId,
-        userId: ctx.run.credentialOwnerId, engine: 'codex' }, changes.filter(c => !requestedPrs.has(c.repo))).catch(() => {});
+        userId: ctx.run.credentialOwnerId, engine: 'codex', ...(lastCheck !== undefined ? { check: lastCheck } : {}) },
+        changes.filter(c => !requestedPrs.has(c.repo))).catch(() => {});
     }
     if (ctx.run.projectId && requestedPrs.size) {
       const { createRequestedSessionPullRequest } = await import('../session-pr.ts');

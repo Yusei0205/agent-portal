@@ -5,6 +5,8 @@
  *   - the session has a ticket and the project's "open pull requests" setting is on: go ahead
  *   - no ticket: ask in the Inbox (type "push"); approving calls createPullRequestForSession, declining writes `declined`
  *   - setting off: write `available` so the session card offers a button
+ * An auto-fix session (server/autofix/delivery.ts) is decided by its gate first: blocked, asked (propose mode, or a diff that cannot
+ * go ahead alone) or pushed as a draft PR at once (draft_pr mode with a clean diff), whatever the project setting.
  * Going ahead means: choose a branch name, ask the runner (finalize mode, same AgentCore session) to commit and push,
  * create the pull request on the host, then start a draft review. Every step is written to the session as a
  * `pull-request` event (the latest one per repository is what the card shows).
@@ -19,9 +21,10 @@ import type { WorkflowRecord } from './repositories/sessions.ts';
 import { getGitReposRepository } from './repositories/git-repos.ts';
 import { getMembership } from './project-access.ts';
 import { getPullRequestSettings } from './project-settings-pr.ts';
-import { createPullRequest, githubPullRequestState, PullRequestError, scrubSecrets } from './pull-requests.ts';
+import { createPullRequest, deleteRemoteBranch, githubPullRequestState, PullRequestError, scrubSecrets } from './pull-requests.ts';
 import { createReview, ReviewCreateError } from './review.ts';
 import { createInboxItem } from './inbox.ts';
+import { getAutofixFindingsRepository } from './repositories/autofix-findings.ts';
 import { listRemoteBranches, _getCloneEnv } from './repos.ts';
 import type { Repository } from './repos.ts';
 import { invokeAgentCore } from './agent/kiro-agentcore.ts';
@@ -30,19 +33,31 @@ import { snapshotAccess } from './agent/runner-snapshot-access.ts';
 import { buildRunnerRepos } from './agent/runner-repo-specs.ts';
 import { runtimeFor } from './agent/repo-prep.ts';
 import { branchNameFor, classifyPushError, isProtectedBranch } from './agent/runner-finalize.ts';
+import type { DiffFile } from './autofix/guardrails.ts';
+import type { AutofixPrOutcome, AutofixPrPlan } from './autofix/delivery.ts';
+import { AUTOFIX_BRANCH_PREFIX } from './autofix/github-events.ts';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export interface RepoChange { repo: string; base: string; commits: number; files: number }
+/**
+ * `paths` (per-file line counts from the runner's detectChanges) is sent only by runners built with it; when it is missing the
+ * changed file list is unknown (the auto-fix gate then asks a person instead of pushing).
+ */
+export interface RepoChange { repo: string; base: string; commits: number; files: number; paths?: DiffFile[] }
 
 export interface SessionPrContext {
   workflowId: string; runId: string; projectId: string; userId: string | null;
   engine: 'claude-code' | 'kiro' | 'codex' | 'cursor';
+  /**
+   * The run's own check result as the engine saw it in the runner's stream (null: the run had checks but none arrived). The auto-fix
+   * gate prefers it to the stored check-result event, which on DynamoDB may not be written yet when the changes arrive.
+   */
+  check?: { ok: boolean } | null;
 }
 
 type PrState =
   | 'asked' | 'declined' | 'available' | 'pushing' | 'pushed' | 'opened' | 'review-started' | 'review-failed' | 'failed';
-type ErrorCode = 'no-permission' | 'unsupported' | 'failed' | 'no-workspace';
+type ErrorCode = 'no-permission' | 'unsupported' | 'failed' | 'no-workspace' | 'protected-path';
 
 interface PrEvent {
   repo: string; repoId: string; provider?: string; state: PrState;
@@ -68,9 +83,12 @@ interface Deps {
   listBranches: (repo: Repository) => Promise<string[]>;
   /** Replaces handleRepoChanges (tests of the callers only). */
   onRepoChanges?: (ctx: SessionPrContext, changes: RepoChange[]) => Promise<void>;
+  /** Chooses a new branch name (tests replace it to check that an auto-fix push refuses a name outside autofix/). */
+  branchNameFor: typeof branchNameFor;
 }
 const defaultDeps: Deps = {
   listBranches: async (repo) => listRemoteBranches(repo, await _getCloneEnv(repo)),
+  branchNameFor,
 };
 let deps: Deps = { ...defaultDeps };
 
@@ -210,13 +228,44 @@ export async function handleRepoChanges(ctx: SessionPrContext, changes: RepoChan
   }
 }
 
+const MAX_PAYLOAD_PATHS = 50;
+const MAX_PAYLOAD_PATH_CHARS = 300;
+/**
+ * Control characters (C0, DEL, C1) and bidirectional or zero-width marks: a file name is shown to the approver as it is, so these
+ * (a newline, U+202E RIGHT-TO-LEFT OVERRIDE) could make one path look like another. Each is shown as `?`.
+ */
+const UNSAFE_PATH_CHARS = /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+/** The changed file names for an Inbox question (names only, at most 50); nothing when the runner did not report them. */
+export function changedPathsPayload(change: RepoChange): { paths?: string[]; pathsTruncated?: boolean } {
+  if (!Array.isArray(change.paths)) return {};
+  const names = change.paths
+    .filter((p) => p && typeof p.path === 'string')
+    .map((p) => p.path.slice(0, MAX_PAYLOAD_PATH_CHARS).replace(UNSAFE_PATH_CHARS, '?'));
+  return { paths: names.slice(0, MAX_PAYLOAD_PATHS), pathsTruncated: names.length > MAX_PAYLOAD_PATHS };
+}
+
 async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<void> {
   const w = await getSessionsRepository().getWorkflowById(ctx.workflowId);
   if (!w) return;
   // Visual workflows choose their publication stage explicitly. Intermediate turns
   // must not open unrelated push approvals or publish before that stage.
   if (w.kind === 'automation') return;
+  // An auto-fix session is decided by its gate before the project's setting is read; any other session goes on unchanged.
+  // Fix sessions attach one repository today; with several, each change would be gated (and could block the finding) on its own.
+  const { autofixGate, askReason, activeFinding, autofixPushRefusal } = await import('./autofix/delivery.ts');
+  const gate = await autofixGate(ctx, change);
+  if (gate === 'block' || gate === 'wait') return;
+  // An auto-fix session that is not its finding's active fix session (finding no longer fixing, mode off, an earlier session of a
+  // retried finding, a delegated child) never takes the ordinary (unchecked) flow.
+  const refusal = gate === null ? await autofixPushRefusal(ctx.workflowId) : null;
   const resolved = (await resolveRepos(w)).find((r) => r.runnerName === change.repo);
+  if (refusal) {
+    await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, {
+      repo: change.repo, repoId: resolved ? String(resolved.record.id) : '', state: 'failed', base: change.base,
+      commits: change.commits, files: change.files, error: refusal, errorCode: 'failed',
+    });
+    return;
+  }
   if (!resolved) {
     await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, {
       repo: change.repo, repoId: '', state: 'failed', base: change.base, commits: change.commits, files: change.files,
@@ -234,6 +283,32 @@ async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<voi
     const base: PrEvent = {
       repo: change.repo, repoId, provider: String(resolved.record.provider ?? '') || undefined, state: 'available', base: change.base, commits: change.commits, files: change.files,
     };
+    // Judged before the lock: a duplicate change waiting here may find the finding moved on (a failed push sent it back to 'new').
+    if ((gate === 'go' || gate === 'ask') && !(await activeFinding(ctx.workflowId))) return;
+    if (gate === 'go') {
+      await runPullRequest(ctx.runId, w, resolved, base, { userId: ctx.userId }, 'gate');
+      return;
+    }
+    if (gate === 'ask') {
+      const finding = await getAutofixFindingsRepository().getByWorkflowId(ctx.workflowId);
+      const why = await askReason(ctx, change);
+      const inboxId = await createInboxItem({
+        type: 'push', projectId: ctx.projectId, workflowId: ctx.workflowId, runId: ctx.runId,
+        payload: {
+          kind: 'autofix', findingId: finding?.id ?? null, findingKind: finding?.kind ?? null,
+          title: `Open an auto-fix pull request for ${change.repo}?`,
+          body: `The auto-fix session changed ${change.files} files in ${change.commits} commit(s) in ${change.repo} and its checks pass. ${why} Approve to push a new branch and open a draft pull request.`,
+          // A review fix's PR is stacked on the reviewed branch (see AutofixPrPlan.base); otherwise the repository's default branch, never
+          // a base the runner reported (it can come from the session repository, which the agent controls).
+          repo: change.repo, repoId,
+          base: finding?.source === 'review_finding' && finding.branch ? finding.branch : String(resolved.record.default_branch || change.base),
+          commits: change.commits, files: change.files,
+          ...changedPathsPayload(change),
+        },
+      });
+      await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, { ...base, state: 'asked', inboxId });
+      return;
+    }
     const settings = getPullRequestSettings(ctx.projectId);
     const ticket = ticketOf(w);
 
@@ -253,7 +328,7 @@ async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<voi
       await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, { ...base, state: 'asked', inboxId });
       return;
     }
-    await runPullRequest(ctx.runId, w, resolved, base, { userId: ctx.userId });
+    await runPullRequest(ctx.runId, w, resolved, base, { userId: ctx.userId }, 'other');
   });
 }
 
@@ -270,6 +345,8 @@ export async function declinePullRequestForSession(workflowId: string, repoId: s
   await writeEvent(runId, String(w.project_id), workflowId, {
     repo: prior?.repo ?? '', repoId, provider: prior?.provider, state: 'declined', base: prior?.base, commits: prior?.commits, files: prior?.files,
   });
+  const { onAutofixPullRequestDeclined } = await import('./autofix/delivery.ts');
+  await onAutofixPullRequestDeclined(workflowId);
 }
 
 /**
@@ -277,7 +354,8 @@ export async function declinePullRequestForSession(workflowId: string, repoId: s
  * to retry after a failure. Does nothing when a pull request is already open. Never throws.
  */
 export async function createPullRequestForSession(
-  workflowId: string, repoId: string, opts: { approvedBy?: string; base?: string; runId?: string } = {},
+  workflowId: string, repoId: string,
+  opts: { approvedBy?: string; base?: string; runId?: string; via?: 'approval' } = {},
 ): Promise<void> {
   try {
     const w = await getSessionsRepository().getWorkflowById(workflowId);
@@ -302,7 +380,7 @@ export async function createPullRequestForSession(
           error: 'The requested PR base branch does not exist on the repository remote.', errorCode: 'failed' });
         return;
       }
-      await runPullRequest(runId, w, resolved, base, { userId: opts.approvedBy ?? null });
+      await runPullRequest(runId, w, resolved, base, { userId: opts.approvedBy ?? null }, opts.via ?? 'other');
     });
   } catch (e) {
     console.error('[session-pr] createPullRequestForSession failed:', errText(e));
@@ -315,6 +393,15 @@ export async function createRequestedSessionPullRequest(ctx: SessionPrContext, r
   if (!w || String(w.project_id) !== ctx.projectId) throw new Error('Session project does not match');
   const resolved = (await resolveRepos(w)).find(r => r.runnerName === request.repo);
   if (!resolved) throw new Error('Repository is not attached to this session');
+  // An auto-fix session delivers only through its gate: the agent cannot open a PR itself.
+  const { autofixSessionOf } = await import('./autofix/delivery.ts');
+  if (await autofixSessionOf(ctx.workflowId)) {
+    await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, {
+      repo: request.repo, repoId: String(resolved.record.id), state: 'failed', base: request.base,
+      error: 'An auto-fix session cannot open a pull request itself; the portal delivers the fix after its checks.', errorCode: 'failed',
+    });
+    return;
+  }
   await createPullRequestForSession(ctx.workflowId, String(resolved.record.id), {
     approvedBy: ctx.userId ?? undefined, base: request.base, runId: ctx.runId,
   });
@@ -322,50 +409,121 @@ export async function createRequestedSessionPullRequest(ctx: SessionPrContext, r
 
 // ── The work ──────────────────────────────────────────────────────────────────
 
+/**
+ * `via`: 'gate' (the auto-fix gate said go), 'approval' (an Inbox approval) or 'other' (ticket flow, the session's button, a tool).
+ * An active auto-fix session's PR is made only via the gate or an approval; any other way is refused (defence in depth).
+ */
 async function runPullRequest(
-  runId: string, w: WorkflowRecord, r: Resolved, start: PrEvent, who: { userId: string | null },
+  runId: string, w: WorkflowRecord, r: Resolved, start: PrEvent, who: { userId: string | null }, via: 'gate' | 'approval' | 'other',
 ): Promise<void> {
+  // An auto-fix session's PR: its own branch name, title and body, a draft with the autofix label, and the finding is told the outcome.
+  const { autofixPrPlan, afterAutofixPullRequest, autofixPushRefusal } = await import('./autofix/delivery.ts');
+  const plan = await autofixPrPlan(String(w.id), runId);
+  if (!plan) {
+    // Not an ACTIVE fix session: an auto-fix session in any other state (or a child of one) is refused, whatever `via` is (an Inbox
+    // approval given after the finding left 'fixing' included). Only ordinary sessions go on.
+    const refusal = await autofixPushRefusal(String(w.id));
+    if (refusal) {
+      await writeEvent(runId, String(w.project_id), String(w.id), { ...start, state: 'failed', errorCode: 'failed', error: refusal });
+      return;
+    }
+  }
+  if (plan && via === 'other') {
+    await writeEvent(runId, String(w.project_id), String(w.id), {
+      ...start, state: 'failed', errorCode: 'failed',
+      error: 'This auto-fix session is still being delivered through its checks; approve its Inbox question instead.',
+    });
+    return;
+  }
+  const outcome = await runPullRequestSteps(runId, w, r, start, who, plan);
+  if (plan) await afterAutofixPullRequest(plan.findingId, String(w.id), outcome);
+}
+
+/** Why an auto-fix retry may not push to its PR's branch: the PR is closed (or none is recorded), or its state cannot be read. */
+async function retryPrProblem(repo: Repository, pr: { number: number } | undefined): Promise<string | null> {
+  if (!pr) return 'the fix PR was closed';
+  const state = await githubPullRequestState(repo, pr.number);
+  if (state === 'open') return null;
+  return state === 'closed' ? 'the fix PR was closed' : 'the state of the fix PR could not be read';
+}
+
+async function runPullRequestSteps(
+  runId: string, w: WorkflowRecord, r: Resolved, start: PrEvent, who: { userId: string | null }, plan: AutofixPrPlan | null,
+): Promise<AutofixPrOutcome> {
   const projectId = String(w.project_id);
   const workflowId = String(w.id);
   const repo = r.record;
   const emitEv = (patch: Partial<PrEvent>): Promise<void> => writeEvent(runId, projectId, workflowId, { ...start, ...patch });
   const ticket = ticketOf(w);
-  const title = prTitle(w);
+  const title = plan ? plan.title : prTitle(w);
   const settings = getPullRequestSettings(projectId);
-  const baseBranch = start.base || repo.default_branch || 'main';
+  // A review fix is stacked on the reviewed PR's branch: its plan names the base (see AutofixPrPlan.base). Any other auto-fix PR goes
+  // to the repository's default branch, never a base the runner reported (the session repository is the agent's).
+  const baseBranch = plan
+    ? plan.base || repo.default_branch || start.base || 'main'
+    : start.base || repo.default_branch || 'main';
   const engine = (String(w.engine) === 'kiro' ? 'kiro' : String(w.engine) === 'codex' ? 'codex' : String(w.engine) === 'cursor' ? 'cursor' : 'claude-code') as 'kiro' | 'claude-code' | 'codex' | 'cursor';
 
   // An older Inbox approval must not push while a newer turn is changing the same files.
   const latest = await getSessionsRepository().getLatestRun(workflowId);
   if (latest && ['pending', 'running'].includes(String(latest.status)) && String(latest.id) !== runId) {
     await emitEv({ state: 'failed', error: 'The session is still working. Wait for its current turn to finish, then retry creating the PR.', errorCode: 'failed' });
-    return;
+    return { kind: 'skipped' };
   }
 
   let branch = start.branch ?? '';
+  let pushedSha: string | undefined;
   if (!branch) {
-    // 1. Choose the branch name among the names the remote already has.
-    let taken: string[] = [];
-    try { taken = await deps.listBranches(repo); } catch { /* the runner and the host still refuse a clash */ }
-    branch = branchNameFor({
-      ticketKey: ticket?.key ?? null,
-      title: ticket?.summary || firstLine(String(w.goal ?? ''), 200) || 'changes',
-      taken,
-    });
+    if (plan?.reuseBranch) {
+      // 1a. An auto-fix retry after red CI: the commit goes on top of the open PR's branch (a fast-forward push), so that PR is updated.
+      // Only while that PR is open: a PR a person closed (or one whose state cannot be read) is never reopened or replaced.
+      const reason = await retryPrProblem(repo, plan.existingPr);
+      if (reason) {
+        await emitEv({ state: 'failed', branch: undefined, error: `Nothing was pushed: ${reason}.`, errorCode: 'failed' });
+        return { kind: 'needs-human', reason };
+      }
+      branch = plan.reuseBranch;
+    } else {
+      // 1. Choose the branch name among the names the remote already has.
+      let taken: string[] = [];
+      try { taken = await deps.listBranches(repo); } catch { /* the runner and the host still refuse a clash */ }
+      branch = deps.branchNameFor({
+        ticketKey: ticket?.key ?? null,
+        title: ticket?.summary || firstLine(String(w.goal ?? ''), 200) || 'changes',
+        taken,
+        ...(plan ? { stem: plan.branchStem } : {}),
+      });
+    }
+    // An auto-fix push goes only to an autofix/ branch: never the reviewed PR's own branch, nor any other a person works on.
+    if (plan && !branch.startsWith(AUTOFIX_BRANCH_PREFIX)) {
+      await emitEv({ state: 'failed', branch: undefined, error: `The branch ${branch} is not an auto-fix branch, so nothing was pushed.`, errorCode: 'failed' });
+      return { kind: 'not-opened', error: `the branch ${branch} is not an auto-fix branch` };
+    }
     // Second enforcement of the protected list (the runner checks it again before pushing).
     if (isProtectedBranch(branch, settings.protectedBranches, repo.default_branch)) {
       await emitEv({
         state: 'failed', branch: undefined,
         error: `The branch name ${branch} is protected, so nothing was pushed.`, errorCode: 'failed',
       });
-      return;
+      return { kind: 'not-opened', error: `the branch name ${branch} is protected` };
     }
 
     // 2. Ask the runner to commit and push.
     const rt = runtimeFor(engine);
     if (!rt) {
       await emitEv({ state: 'failed', error: 'No cloud runtime is configured to push from.', errorCode: 'failed' });
-      return;
+      return { kind: 'not-opened', error: 'no cloud runtime is configured to push from' };
+    }
+    // An auto-fix push pins the base: the runner refuses a fetched base that is not the commit read here from the host.
+    let baseSha: string | null = null;
+    if (plan) {
+      const { branchHeadSha } = await import('./pull-requests.ts');
+      baseSha = await branchHeadSha(repo, baseBranch);
+      if (!baseSha) {
+        const error = `The tip of the base branch ${baseBranch} could not be read from the host, so nothing was pushed.`;
+        await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'failed' });
+        return { kind: 'not-opened', error };
+      }
     }
     await emitEv({ state: 'pushing', branch });
     const snapshot = await snapshotAccess(workflowId);
@@ -374,6 +532,9 @@ async function runPullRequest(
       message: title, protectedBranches: settings.protectedBranches,
       defaultBranch: repo.default_branch || baseBranch, identity: IDENTITY, env: r.env,
       ...(snapshot ? { snapshot } : {}),
+      // An auto-fix push: the runner commits, checks and pushes it from a private repository, fetching the base from and pushing to
+      // this URL (never the session repository's own remote configuration), and refuses it when a protected path changed.
+      ...(plan ? { denyPaths: plan.denyPaths, remoteUrl: String(repo.url ?? ''), baseSha } : {}),
     };
     let pushed = false;
     let pushError = '';
@@ -386,15 +547,26 @@ async function runPullRequest(
             pushError = scrubSecrets(String(ev.error));
             // The runner names the kind of failure itself; only an older runner leaves it to the wording.
             const c = ev.errorCode;
-            if (c === 'no-permission' || c === 'no-workspace' || c === 'failed') pushCode = c;
+            if (c === 'no-permission' || c === 'no-workspace' || c === 'failed' || c === 'protected-path') pushCode = c;
           }
-          else if (ev.sha) pushed = true;
+          else if (ev.sha) { pushed = true; pushedSha = String(ev.sha); }
         } else if (ev.type === 'error') {
           pushError = pushError || scrubSecrets(String(ev.message ?? 'The push failed'));
         }
       }
     } catch (e) {
       pushError = pushError || errText(e);
+    }
+    if (!pushed && plan && pushCode === 'protected-path') {
+      const error = (pushError || 'The runner refused the push: a protected path changed.').slice(0, 500);
+      await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'protected-path' });
+      return { kind: 'blocked', reason: error, violations: [], repo: String(repo.name ?? '') };
+    }
+    if (!pushed && plan && /Unknown field: "(denyPaths|remoteUrl|baseSha)"/.test(pushError)) {
+      // A runner older than the auto-fix guardrails: fail closed rather than push without the check.
+      const error = 'The runner is older than the portal and cannot check protected paths before a push; redeploy the runners. Nothing was pushed.';
+      await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'failed' });
+      return { kind: 'not-opened', error };
     }
     if (!pushed) {
       const code: ErrorCode = pushCode ?? classifyPushError(pushError);
@@ -404,28 +576,68 @@ async function runPullRequest(
           ? "The session's saved files could not be restored, so nothing was pushed."
           : (pushError || 'The push did not complete.').slice(0, 500);
       await emitEv({ state: 'failed', branch: undefined, error, errorCode: code });
-      return;
+      return { kind: 'push-failed', error };
     }
     await emitEv({ state: 'pushed', branch });
   }
 
   // 3. Protected check again for a retry that reuses a pushed branch, then the pull request.
+  if (plan && !branch.startsWith(AUTOFIX_BRANCH_PREFIX)) {
+    await emitEv({ state: 'failed', branch, error: `The branch ${branch} is not an auto-fix branch.`, errorCode: 'failed' });
+    return { kind: 'not-opened', error: `the branch ${branch} is not an auto-fix branch` };
+  }
   if (isProtectedBranch(branch, settings.protectedBranches, repo.default_branch)) {
     await emitEv({ state: 'failed', branch, error: `The branch ${branch} is protected.`, errorCode: 'failed' });
-    return;
+    return { kind: 'not-opened', error: `the branch ${branch} is protected`, branch };
+  }
+  if (plan) {
+    // The server's own check of what was pushed (the runner shares its machine with the agent): the file list from the host.
+    const { verifyPushedBranch } = await import('./autofix/delivery.ts');
+    const verdict = await verifyPushedBranch(plan.findingId, repo, baseBranch, branch);
+    if (!verdict.ok && plan.reuseBranch && plan.existingPr && verdict.violations.length === 0) {
+      // A retry pushed to an open PR's branch and the check could not be completed (host error, truncation, rate limit, size): the
+      // branch carries the PR's earlier checked commits, so it is kept (deleting it would close the PR); a person decides.
+      const error = `${verdict.reason}. The branch ${branch} was kept; the pull request was not marked updated.`.slice(0, 500);
+      await emitEv({ state: 'failed', branch, error, errorCode: 'failed' });
+      return { kind: 'needs-human', reason: verdict.reason.slice(0, 300) };
+    }
+    if (!verdict.ok) {
+      const deleted = await deleteRemoteBranch(repo, branch).catch(() => false);
+      const error = `${verdict.reason}. ${deleted ? `The branch ${branch} was deleted` : `Delete the branch ${branch}`}; no pull request was opened.`.slice(0, 500);
+      await emitEv({ state: 'failed', branch: undefined, error, errorCode: 'protected-path' });
+      return { kind: 'blocked', reason: verdict.reason, violations: verdict.violations, repo: String(repo.name ?? ''), branch };
+    }
+  }
+  if (plan?.reuseBranch) {
+    // The retry's push updated the open PR: nothing more to open, and its review was started when it was opened. A PR closed while
+    // the push ran is not replaced.
+    const reason = await retryPrProblem(repo, plan.existingPr);
+    if (reason || !plan.existingPr) {
+      await emitEv({ state: 'failed', branch, error: `The branch ${branch} was pushed, but ${reason ?? 'the fix PR was closed'}; no pull request was opened.`, errorCode: 'failed' });
+      return { kind: 'needs-human', reason: reason ?? 'the fix PR was closed' };
+    }
+    const { number, url } = plan.existingPr;
+    await emitEv({ state: 'opened', branch, number, url, title });
+    return { kind: 'opened', number, url, branch, repo: String(repo.name ?? ''), ...(pushedSha ? { sha: pushedSha } : {}) };
   }
   let created: { number: number; url: string };
   try {
-    created = await createPullRequest({ repo, base: baseBranch, head: branch, title, body: await prBody(w) });
+    created = await createPullRequest({
+      repo, base: baseBranch, head: branch, title, body: plan ? plan.body : await prBody(w),
+      ...(plan ? { draft: plan.draft, labels: plan.labels } : {}),
+    });
   } catch (e) {
     const code: ErrorCode = e instanceof PullRequestError ? e.code : 'failed';
     const error = code === 'unsupported'
       ? `Pull requests on ${repo.provider} are not supported yet. The branch ${branch} was pushed.`
       : `The branch ${branch} was pushed, but the pull request could not be opened: ${errText(e)}`;
     await emitEv({ state: 'failed', branch, error, errorCode: code });
-    return;
+    return { kind: 'not-opened', error, branch };
   }
   await emitEv({ state: 'opened', branch, number: created.number, url: created.url, title });
+  const opened: AutofixPrOutcome = {
+    kind: 'opened', number: created.number, url: created.url, branch, repo: String(repo.name ?? ''), ...(pushedSha ? { sha: pushedSha } : {}),
+  };
 
   // 4. A draft review of the new pull request. The pull request stays when this fails.
   try {
@@ -449,13 +661,20 @@ async function runPullRequest(
     const error = e instanceof ReviewCreateError ? e.message : errText(e);
     await emitEv({ state: 'review-failed', branch, number: created.number, url: created.url, title, error });
   }
+  return opened;
 }
 
 // ── Flag for the run payload ──────────────────────────────────────────────────
 
-/** Value of `finalizeCheck` in a run payload: ask the runner to report changed repositories. */
-export async function finalizeRunPayloadFlag(projectId: string, hasTicket: boolean): Promise<boolean> {
-  return hasTicket || getPullRequestSettings(projectId).openPullRequests;
+/**
+ * Value of `finalizeCheck` in a run payload: ask the runner to report changed repositories. An auto-fix session (`workflowId`) always
+ * asks, since its delivery does not depend on the project's setting.
+ */
+export async function finalizeRunPayloadFlag(projectId: string, hasTicket: boolean, workflowId?: string | null): Promise<boolean> {
+  if (hasTicket || getPullRequestSettings(projectId).openPullRequests) return true;
+  if (!workflowId) return false;
+  const { isAutofixWorkflow } = await import('./autofix/delivery.ts');
+  return isAutofixWorkflow(workflowId).catch(() => false);
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -480,6 +699,16 @@ export function registerSessionPullRequestRoutes(): void {
     const prior = await sessionPullRequestStatus(workflowId, repoId);
     if (prior && OPENED_STATES.includes(prior.state) && await stillOpen(prior, rec as unknown as Repository)) {
       sendJson(res, 409, { error: 'A pull request is already open for this repository in this session.' });
+      return;
+    }
+    const { autofixSessionInfo, autofixPushRefusal } = await import('./autofix/delivery.ts');
+    const af = await autofixSessionInfo(workflowId);
+    if (af && !af.delegated && af.finding?.workflow_id === workflowId && af.finding.status === 'fixing') {
+      sendJson(res, 409, { error: 'This auto-fix session is being delivered through its checks. Use its Inbox question to approve the pull request.' });
+      return;
+    }
+    if (af) {
+      sendJson(res, 409, { error: (await autofixPushRefusal(workflowId)) ?? 'This is an auto-fix session; nothing was pushed.' });
       return;
     }
     void createPullRequestForSession(workflowId, repoId, { approvedBy: String(req.user.id) });

@@ -17,7 +17,7 @@ import path from 'node:path';
 import { one, all, run as dbRun } from './db.ts';
 import type { Row } from './db.ts';
 import { now } from './util.ts';
-import { setRunLifecycleHook } from './agent/runner.ts';
+import { addRunLifecycleHook } from './agent/runner.ts';
 import { processReviewReport, triggerAutoPost, getPrCommentMode } from './review.ts';
 import { config } from './config.ts';
 
@@ -269,6 +269,12 @@ ${assistantText.slice(0, 3900)}`,
       return;
     }
 
+    // The review is done with its findings stored: auto-fix may take the medium and worse ones (only when the project's auto-fix is
+    // on; see autofix/review-source.ts). In the background, and it never throws into the review flow.
+    import('./autofix/review-source.ts')
+      .then((m) => m.emitReviewFindings(review.id))
+      .catch((e) => console.error('[review] auto-fix intake failed:', e instanceof Error ? e.message : e));
+
     // Fire auto-post if the review was set to auto-post, or if the global
     // prCommentMode is 'automatic' (F10).
     const shouldAutoPost = review.post_mode === 'auto' || getPrCommentMode() === 'automatic';
@@ -281,7 +287,7 @@ ${assistantText.slice(0, 3900)}`,
 const NO_REPORT_NOTE = "The reviewer's reply did not contain a readable findings report, so this review is not counted as clean. Open the run for its full output and start a new review.";
 
 // Register hook when this module is imported
-setRunLifecycleHook(async (workflowId, runId, event) => {
+addRunLifecycleHook(async (workflowId, runId, event) => {
   await handleReviewLifecycle(workflowId, runId, event);
   await handleArtifactLifecycle(workflowId, event);
 });

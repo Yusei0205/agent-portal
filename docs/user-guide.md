@@ -15,6 +15,7 @@
 11. [Users](#11-users)
 12. [Keyboard shortcuts](#12-keyboard-shortcuts)
 13. [Troubleshooting](#13-troubleshooting)
+14. [Auto-fix](#14-auto-fix)
 
 ---
 
@@ -1074,6 +1075,99 @@ Press **?** anywhere (outside a text field) to open the shortcuts sheet. All sho
 **Cause**: Wrong email or password, or the account is disabled.
 
 **Fix**: Double-check your credentials. If you have forgotten your password, ask an admin to reset it.
+
+---
+
+## 14. Auto-fix
+
+### What it is
+
+Auto-fix finds problems on its own and asks an agent to fix them, with a person in control of what ships. Three sources create **findings**: a failed GitHub Actions run, a code-review finding (opt-in) and a failed portal session. For each finding the portal starts a fix session on a branch named `autofix/<kind>-<id>`, the server (not the agent) re-checks the result, and the outcome is a draft pull request or an Inbox question. Nothing is merged by Auto-fix.
+
+Safety model: Auto-fix is off until a project admin turns it on; checks, protected paths, size limits, attempt and cost limits are enforced by the server and not by the agent's prompt; and by default **a person approves every push** in the Inbox (see "Unattended push: security prerequisites").
+
+### Turn it on
+
+1. Open the project, **Setup > Auto-fix**. Only a project owner or admin can change the policy.
+2. Set the **verify command** (for example `npm test`). Auto-fix refuses to leave `off` without one. The fix session must make it pass, and the portal runs it as the check after each iteration.
+3. Choose the **classes** (kinds of finding to fix): `lint`, `tests`, `types`, `build` are on by default. The kind of a CI finding comes from the failed **workflow's name** (words such as lint, type, build or test), so a workflow named just "CI" has kind `other`, which is suppressed until you add `other` to the classes (or name the workflows after what they check). `review` (review findings) and `session` (failed sessions) are optional and off by default. Anything not listed is suppressed and not fixed.
+4. Choose the **mode**: `propose` (the diff waits for your approval in the Inbox, nothing is pushed until you approve) or `draft_pr` (opens a draft PR when the checks pass; see below for what "unattended" means here).
+5. Choose the **engine** and the **run-as user**: the unattended sessions run as that user, who must still be a project editor or owner (a non-member admin is refused). It is set to you when you first enable.
+6. Optionally edit branches, protected paths and limits, then save. The form shows the server's error if a value is refused.
+7. Set up the GitHub webhook (next section). Without it, CI failures are not seen.
+
+Start with `propose`. Break a test on a branch, watch the finding appear, approve the Inbox item, look at the draft PR, and only then consider `draft_pr`.
+
+### GitHub webhook
+
+In the GitHub repository: **Settings > Webhooks > Add webhook**.
+
+- **Payload URL**: `<portal>/api/hooks/autofix/<projectId>`
+- **Content type**: `application/json`
+- **Secret**: on the Auto-fix tab press **Rotate secret**. The secret is shown once; copy it into GitHub. Rotating again invalidates the old one.
+- **Events**: select individual events: **Workflow runs** and **Pull requests**.
+
+Requests with a missing or wrong signature are rejected. Only GitHub repositories are supported.
+
+### Finding lifecycle
+
+| Status | Meaning |
+|---|---|
+| New | Seen, waiting to be checked against the policy (also while a limit or cooldown holds it back) |
+| Triaged | Allowed by the policy, about to get a fix session |
+| Fixing | A fix session is running, or its change is waiting for an Inbox approval |
+| PR open | A draft PR (or an approved push) exists; CI on the fix branch is being watched |
+| Resolved | CI on the fix branch went green, or the PR was merged |
+| Dismissed | A person dismissed it, or the fix PR was closed without merging (a cooldown applies) |
+| Suppressed | The policy does not allow it (class off, branch not eligible, mode off) |
+| Needs a person | Auto-fix gave up or cannot continue; see the reason on the finding |
+
+Repeats of the same failure (same repository, branch family and error) increase the occurrence count and never start a second run. A person can **Dismiss**, mark a kind **Never fix** (removes it from the classes) or **Retry** a finding that is new, suppressed or needs a person.
+
+### Inbox items
+
+- **Auto-fix PR ready**: the fix passed the server's checks and a person must approve the push. The item shows the changed paths. Approving pushes the branch and opens the draft PR with the `autofix` label.
+- **Auto-fix needs a human**: Auto-fix stopped and says why (cannot reproduce, a guardrail refused the change, attempts used up, and so on).
+
+By default every push is approved by a person, in both modes. An approval given after the finding has left the fixing state (the session was cancelled, the finding went to a person, the policy was turned off) pushes nothing: the item says so, and the finding can be retried on the Auto-fix tab. A session started by Auto-fix, an earlier session of a retried finding or a session delegated from one never uses the ordinary push, and its **Create PR** button answers 409.
+
+### Guardrails
+
+- **Protected paths**: globs agents may never change. Supported syntax is `*`, `**` and `?` only; braces and brackets are refused. Matching is case-insensitive and path segments with control characters are refused. Always protected: `.github/workflows/**`, `infra/**`, `**/.env*`, `**/*.pem`, `package-lock.json` and the lockfile in sub-folders. The defaults cannot be removed.
+- **Size caps**: 10 changed files and 300 changed lines by default. Exceeding them does not refuse the fix: in `draft_pr` mode it downgrades to asking a person in the Inbox. Only a protected-path hit blocks the push.
+- **Attempts and cooldown**: 2 attempts per finding by default; the cooldown (60 minutes by default) applies after a failed session or push and after a dismissed PR, not between red-CI retries.
+- **Open-PR cap**: at most 3 open auto-fix PRs per project by default.
+- **Cost caps**: $2 per finding and $10 per day by default.
+- **Kill switch**: **Pause** on the Auto-fix tab stops new fix sessions for the project; an admin can pause the whole portal (`POST /api/autofix/pause`).
+- Fix sessions: the built-in fixer specs allow at most 12 sessions an hour, portal-wide, and one auto-fix session runs at a time across all projects; other findings wait.
+
+### Retry on red CI
+
+When CI on the fix branch fails, the portal starts one retry session per red CI result on the same branch, which sees the previous diff and the new failure. There is no cooldown between retries. This repeats up to the attempt cap, then the finding goes to a person. A green run resolves the finding; a PR closed without merging dismisses it and applies the cooldown.
+
+### Review findings and failed sessions
+
+Review findings are opt-in. Put `review` in the classes and add the pull request's branch pattern under extra branches. The fix session clones the repository and works against the default branch first, then starts from the reviewed commit; the fix is a **stacked PR** whose base is the reviewed branch, not the default branch. A failed portal session is recorded as a finding too (kind `session`), but with the default classes it is suppressed. Add `session` to the classes to have failed sessions sent to a person; a failed session is never retried automatically.
+
+### Unattended push: security prerequisites
+
+The default is human approval for every push. Setting `AUTOFIX_ALLOW_UNATTENDED_PUSH=1` on the portal server lets `draft_pr` mode push and open the PR without asking. Set it only when **all** of these are true:
+
+1. The runner images (agent-runner, kiro-runner, codex-runner) are rebuilt and redeployed with the hardened finalize code. Until then old runners reject the new request fields and Auto-fix pushes nothing. Runs of auto-fix sessions carry a new `checkedReport` field: an old runner rejects them (fails closed), while ordinary sessions are unaffected and keep their usual end-of-run change report.
+2. The credentialed git commands run where the agent cannot read them: as a separate user or outside the microVM, or after all agent processes are killed. Today the agent and the runner share a user and a microVM, so a process the agent leaves behind can read the push token from `/proc`.
+3. A repository ruleset restricts pushes to `.github/workflows/**`, `infra/**` and tags, or the token lacks the `workflows` scope. Push-triggered workflows run with secrets at push time.
+4. You accept the residual risk: some server-side checks (the GitHub compare after the push) run after the push.
+5. Know what is still open (see `docs/superpowers/notes/2026-11-17-autofix-open-items.md`): the `/proc` exposure above is structural; the ordinary session push still has a pre-existing token leak through an agent-set `pushurl`, and other git calls in the runner (`runner-repos.ts`, `runner-files.ts`, `runner-inspect.ts`, `runner.ts`) run with the token in the agent's repository. Do not enable unattended push until you accept these.
+
+### Known limits
+
+- Review findings have no category, so their kind is always `review`.
+- The change report is computed against the default branch, so a large stacked fix may ask a person or be blocked.
+- A fix whose base branch changed a protected file since the fork is refused with "rebase on the base branch".
+- GitHub only. CodeCommit and other hosts end in "needs a person".
+- DynamoDB mode: the built-in specs are not seeded, so Auto-fix does nothing there.
+- The changed paths are shown on the Inbox item; they are not stored on the finding.
+- A run that is lost (not failed) does not raise a finding.
 
 ---
 
