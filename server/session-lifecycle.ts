@@ -31,6 +31,8 @@ import { sweepLostRuns } from './workflows/driver.ts';
 import { sessionSignIn } from './session-sign-in.ts';
 import { getSessionLimits } from './engine-limits.ts';
 import { sweepAgentCoreIdle } from './agentcore-idle.ts';
+import { sweepEvaluations } from './agentcore-eval.ts';
+import { sweepMemoryWrites } from './agentcore-memory.ts';
 import { presignLiveViewUrl, setAutomationStream } from './browser-live-view.ts';
 import { liveBrowserSession, closeSessionBrowser } from './browser-session.ts';
 
@@ -93,6 +95,10 @@ export async function checkIdleSessions(): Promise<void> {
   await sweepLostRuns();
   // A runner's AgentCore sessions can be stopped sooner than the portal's own idle time (Portal > AgentCore).
   await sweepAgentCoreIdle().catch((e) => console.error('[idle-stop] AgentCore idle pass failed:', e));
+  // Score a share of finished sessions (off until an admin sets a percentage on the AgentCore page).
+  await sweepEvaluations().catch((e) => console.error('[idle-stop] evaluation pass failed:', e));
+  // Send the last exchange of quiet sessions to project memory (only projects that turned it on).
+  await sweepMemoryWrites().catch((e) => console.error('[idle-stop] memory pass failed:', e));
   try {
     const timeoutMinutes = getIdleTimeoutMinutes();
     const cutoff = new Date(Date.now() - timeoutMinutes * 60_000).toISOString();
