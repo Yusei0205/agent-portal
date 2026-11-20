@@ -35,6 +35,12 @@ function runInBackground(work: () => Promise<void>): Promise<void> {
   return p;
 }
 
+/**
+ * How long the response waits for the pipeline monitor's work (store, Inbox alert, chat post) before it ends. On Lambda the process may
+ * freeze once the response is sent, so a short wait loses chat posts; 8 s stays inside GitHub's 10 s webhook timeout.
+ */
+const PIPELINE_DRAIN_MS = 8000;
+
 /** The largest webhook body read (1 MiB). */
 export const WEBHOOK_BODY_MAX = 1_048_576;
 
@@ -65,7 +71,7 @@ export function registerAutofixWebhook(): void {
       registerBackgroundWrite(runInBackground(async () => {
         const repo = await findProjectGithubRepo(projectId, wr.repoFullName);
         if (repo) await recordPipelineRun(projectId, { id: repo.id, default_branch: repo.default_branch }, wr);
-      }));
+      }), { waitMs: PIPELINE_DRAIN_MS });
     }
     const parsed = parseGithubEvent(event, req.body);
     // CI results and PR closings matter only on auto-fix branches; any other branch's are acknowledged and touch nothing.

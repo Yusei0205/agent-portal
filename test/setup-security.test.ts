@@ -204,6 +204,8 @@ describe('Item 5 — tracked write settles before client receives the response e
   let baseUrl: string;
   let adminCookie: string;
   let drainFlag = false;
+  let longFlag = false;
+  let defaultFlag = false;
 
   before(async () => {
     const ts = await createTestServer();
@@ -220,6 +222,18 @@ describe('Item 5 — tracked write settles before client receives the response e
         }, 100);
       });
       registerBackgroundWrite(write);
+      sendJson(res, 200, { ok: true });
+    }));
+
+    // A 1.2 s tracked write: with a longer drain budget the response waits for it; without one the 500 ms default applies.
+    router.get('/api/test-drain-long', requireAuth(async (_req, res) => {
+      longFlag = false;
+      registerBackgroundWrite(new Promise<void>((resolve) => setTimeout(() => { longFlag = true; resolve(); }, 1200)), { waitMs: 8000 });
+      sendJson(res, 200, { ok: true });
+    }));
+    router.get('/api/test-drain-default', requireAuth(async (_req, res) => {
+      defaultFlag = false;
+      registerBackgroundWrite(new Promise<void>((resolve) => setTimeout(() => { defaultFlag = true; resolve(); }, 1200)));
       sendJson(res, 200, { ok: true });
     }));
 
@@ -255,6 +269,18 @@ describe('Item 5 — tracked write settles before client receives the response e
       true,
       'background write flag must be set before the response reaches the client',
     );
+  });
+
+  it('a write registered with waitMs: 8000 (1.2 s) still completes before the response', async () => {
+    const r = await fetchJson(baseUrl, '/api/test-drain-long', { cookie: adminCookie });
+    assert.equal(r.status, 200);
+    assert.equal(longFlag, true, 'the longer drain budget must hold the response until the write settles');
+  });
+
+  it('without waitMs the 500 ms default still applies (a 1.2 s write is not waited for)', async () => {
+    const r = await fetchJson(baseUrl, '/api/test-drain-default', { cookie: adminCookie });
+    assert.equal(r.status, 200);
+    assert.equal(defaultFlag, false, 'the default drain must not wait 1.2 s');
   });
 
   it('SSE route still streams correctly when the drain wrapper is active', async () => {

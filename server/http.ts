@@ -89,11 +89,22 @@ export function setPreRequestHook(fn: () => Promise<void>): void {
  * Tracked per-request when called inside a request handler; falls back to the
  * global set otherwise.  Idempotent — the promise is removed once it settles.
  */
-export function registerBackgroundWrite(p: Promise<unknown>): void {
+export function registerBackgroundWrite(p: Promise<unknown>, opts: { waitMs?: number } = {}): void {
   const store = _requestWriteStorage.getStore() ?? _pendingWrites;
   const settled = p.finally(() => store.delete(settled));
   store.add(settled);
+  // A route may ask the response to wait longer than the default for its writes (for example a webhook whose work must finish before
+  // Lambda freezes the process). The longest request wins, capped below GitHub's 10 s webhook timeout.
+  if (opts.waitMs !== undefined && store !== _pendingWrites) {
+    const ms = Math.min(MAX_DRAIN_MS, Math.max(DEFAULT_DRAIN_MS, Math.floor(opts.waitMs)));
+    _drainBudget.set(store, Math.max(_drainBudget.get(store) ?? DEFAULT_DRAIN_MS, ms));
+  }
 }
+
+/** How long a response waits for its registered writes by default, and at most when a route asks for longer. */
+const DEFAULT_DRAIN_MS = 500;
+const MAX_DRAIN_MS = 9000;
+const _drainBudget = new WeakMap<Set<Promise<unknown>>, number>();
 
 /**
  * Wait for all registered background writes (global fallback set only), up to `timeoutMs`.
@@ -113,9 +124,10 @@ export async function drainBackgroundWrites(timeoutMs = 500): Promise<void> {
  * Drain the per-request write set (from AsyncLocalStorage).
  * Called from the wrapped res.end before the response body is sent.
  */
-async function _drainRequestWrites(timeoutMs = 500): Promise<void> {
+async function _drainRequestWrites(): Promise<void> {
   const store = _requestWriteStorage.getStore();
   if (!store || store.size === 0) return;
+  const timeoutMs = _drainBudget.get(store) ?? DEFAULT_DRAIN_MS;
   const pending = [...store];
   await Promise.race([
     Promise.allSettled(pending),
@@ -555,7 +567,7 @@ export function createRequestHandler(): (
         res.end = (...args: Parameters<typeof origEnd>) => {
           if (endCalled) return origEnd(...args);
           endCalled = true;
-          void _drainRequestWrites(500).then(
+          void _drainRequestWrites().then(
             () => origEnd(...args),
             () => origEnd(...args),
           );
