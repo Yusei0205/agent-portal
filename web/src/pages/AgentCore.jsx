@@ -39,21 +39,32 @@ export function hints(data) {
   return out;
 }
 
-function Bars({ points, metric, label }) {
-  const values = points.map((p) => Number(p[metric] || 0));
-  const max = Math.max(...values, 0);
-  const W = 100 / Math.max(values.length, 1);
+/** One bar per step, scaled to the busiest step. Each bar shows its amount above and its date (or hour) below; hover gives the split. */
+function Bars({ points, hourly, rates, label }) {
+  const max = Math.max(...points.map((p) => Number(p.estCostUsd || 0)), 0);
+  const dense = points.length > 14;
+  const when = (t) => {
+    const d = new Date(t);
+    return hourly
+      ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+      : d.toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  };
   return (
-    <svg className="us-bars" viewBox="0 0 100 32" preserveAspectRatio="none" role="img" aria-label={label}>
-      {values.map((v, i) => {
-        const h = max > 0 ? Math.max(v > 0 ? 2 : 0, (v / max) * 30) : 0;
+    <div className="ac-chart" role="img" aria-label={label}>
+      {points.map((p, i) => {
+        const v = Number(p.estCostUsd || 0);
+        const pct = max > 0 ? Math.max(v > 0 ? 3 : 0, (v / max) * 100) : 0;
+        const mem = Number(p.gbHours || 0) * Number(rates?.gbHour || 0);
+        const cpu = Number(p.vcpuHours || 0) * Number(rates?.vcpuHour || 0);
         return (
-          <rect key={points[i].t} x={i * W + W * 0.12} width={W * 0.76} y={32 - h} height={h} rx="0.6" fill="var(--accent)" opacity={v > 0 ? 0.9 : 0.15}>
-            <title>{`${new Date(points[i].t).toLocaleString()}: ${fmtUsd(v)}`}</title>
-          </rect>
+          <div className="ac-col" key={p.t} title={`${when(p.t)}: ${fmtUsd(v)} (memory ${fmtUsd(mem)}, CPU ${fmtUsd(cpu)})`}>
+            <span className="ac-val">{dense && i % 2 ? '' : (v > 0 ? fmtUsd(v) : '')}</span>
+            <div className="ac-track"><div className="ac-bar" style={{ height: `${pct}%`, opacity: v > 0 ? 0.9 : 0.15 }} /></div>
+            <span className="ac-lbl">{dense && i % 2 ? '' : when(p.t)}</span>
+          </div>
         );
       })}
-    </svg>
+    </div>
   );
 }
 
@@ -382,7 +393,7 @@ export function AgentCore({ projects }) {
 
           <section className="us-panel" aria-label="Estimated cost over time">
             <div className="us-panel-head"><strong>Estimated cost over time</strong><span className="muted">{period === '24h' ? 'per hour' : 'per day'}</span></div>
-            <Bars points={data.timeline} metric="estCostUsd" label={`Estimated cost per ${period === '24h' ? 'hour' : 'day'}`} />
+            <Bars points={data.timeline} hourly={period === '24h'} rates={data.rates} label={`Estimated cost per ${period === '24h' ? 'hour' : 'day'}`} />
           </section>
 
           <section className="us-panel" aria-label="AgentCore runtimes">
