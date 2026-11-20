@@ -1,17 +1,23 @@
 /**
  * The cat's pixel art, drawn in code: 16x16 character grids, one per animation frame.
- *   .  transparent   o outline   f fur   b belly   a accent   e eye   k blush
- * The frames are composed by a tiny painter (so a pose is a few lines, not 256 hand-typed characters) and exported as plain string
+ *   .  transparent   o outline   f fur (white)   b belly (shaded white)   a accent (sparkles, marks)   e eye   k blush (cheeks)
+ *   r pink (ears, nose)   p orange patch   n brown patch   c collar   g tag (gold)
+ * The cat is a calico: white fur with an orange patch on the left of the face and body and a brown patch on the right; patches only
+ * ever replace fur or belly pixels, so the outline, eyes and face stay readable. The frames are composed by a tiny painter (so a pose is a few lines, not 256 hand-typed characters) and exported as plain string
  * grids; the component renders them as crisp SVG rects coloured from theme tokens. No image files.
  */
 export const SPRITE_SIZE = 16;
-export const PALETTE_KEYS = { o: 'outline', f: 'fur', b: 'belly', a: 'accent', e: 'eye', k: 'blush' };
+export const PALETTE_KEYS = {
+  o: 'outline', f: 'fur', b: 'belly', a: 'accent', e: 'eye', k: 'blush', r: 'pink', p: 'orange', n: 'brown', c: 'collar', g: 'tag',
+};
 
 function canvas() {
   const g = Array.from({ length: SPRITE_SIZE }, () => Array(SPRITE_SIZE).fill('.'));
   const put = (x, y, c) => { if (x >= 0 && x < SPRITE_SIZE && y >= 0 && y < SPRITE_SIZE && c !== ' ') g[y][x] = c; };
   const row = (x0, y, s) => { for (let i = 0; i < s.length; i++) put(x0 + i, y, s[i]); };
-  return { put, row, done: () => g.map((r) => r.join('')) };
+  // Colours a pixel only where there is white fur or belly (the calico patches), never over an outline, an eye or the background.
+  const tint = (pts, ch) => { for (const [x, y] of pts) if (g[y]?.[x] === 'f' || g[y]?.[x] === 'b') g[y][x] = ch; };
+  return { put, row, tint, done: () => g.map((r) => r.join('')) };
 }
 
 /** A sitting cat seen from the front; dy lifts it (hops), the options pick the face and the arms. */
@@ -20,7 +26,7 @@ function front({ dy = 2, eyes = 'open', ears = 'up', tail = 0, armsR = 0, armsL 
   const r = (y, x, s) => c.row(x, y + dy, s);
   if (ears === 'up') {
     c.put(4, dy, 'o'); c.put(11, dy, 'o');
-    r(1, 3, 'oao'); r(1, 10, 'oao');
+    r(1, 3, 'oro'); r(1, 10, 'oro');
   } else {
     r(1, 3, 'ofo'); r(1, 10, 'ofo'); // drooping ears
   }
@@ -30,8 +36,8 @@ function front({ dy = 2, eyes = 'open', ears = 'up', tail = 0, armsR = 0, armsL 
   else if (eyes === 'blink') { r(3, 3, solid); r(4, 3, solid); r(5, 3, 'ofoffffofo'); }
   else if (eyes === 'wide') { r(3, 3, solid); r(4, 3, 'ofeeffeefo'); r(5, 3, 'ofeeffeefo'); }
   else { r(3, 3, 'ofooffoofo'); r(4, 3, 'ofeffffefo'); r(5, 3, 'ofeffffefo'); } // worried: heavy brows over the eyes
-  r(6, 3, 'okffaaffko');
-  r(7, 4, 'oooooooo');
+  r(6, 3, 'okffrrffko');
+  r(7, 4, 'occcccco'); // the collar
   r(8, 4, 'ofbbbbfo'); r(9, 3, 'offbbbbffo'); r(10, 3, 'offbbbbffo'); r(11, 3, 'offbbbbffo');
   r(12, 2, 'ooffbbbbffoo'); r(13, 2, 'oooooooooooo');
   const tails = [
@@ -39,7 +45,12 @@ function front({ dy = 2, eyes = 'open', ears = 'up', tail = 0, armsR = 0, armsL 
     [[14, 12], [14, 11], [15, 10], [15, 9]],
     [[14, 12], [15, 11], [15, 10], [15, 9]],
   ][tail] ?? [];
-  if (!armsR) for (const [x, y] of tails) c.put(x, y + dy, 'o');
+  if (!armsR) for (const [x, y] of tails) c.put(x, y + dy, 'p');
+  // calico patches: orange on the left of the face and body, brown on the right, white between
+  const at = (pts) => pts.map(([x, y]) => [x, y + dy]);
+  c.tint(at([[4, 1], [4, 2], [5, 2], [4, 3], [5, 3], [6, 3], [4, 4], [5, 8], [4, 9], [5, 9], [4, 10], [4, 11], [4, 12]]), 'p');
+  c.tint(at([[11, 1], [10, 2], [11, 2], [9, 3], [10, 3], [11, 3], [11, 4], [11, 5], [10, 9], [11, 9], [11, 10], [10, 11], [11, 11], [10, 12], [11, 12]]), 'n');
+  c.put(7, 8 + dy, 'g'); c.put(8, 8 + dy, 'g'); // the gold tag under the collar
   // a raised paw: forearm column with an outline and a paw tip
   const paw = (x, shift) => {
     const y0 = 5 + shift;
@@ -59,10 +70,10 @@ function side({ legs, tail, step }) {
   const dy = 1;
   const r = (y, x, s) => c.row(x, y + dy, s);
   c.put(10, 2 + dy, 'o'); c.put(14, 2 + dy, 'o');
-  r(3, 9, 'oao oao');
+  r(3, 9, 'oro oro');
   r(4, 9, 'offfffo');
   r(5, 9, 'offfeeo');
-  r(6, 9, 'offfkfa');
+  r(6, 9, 'offfkfr');
   r(7, 10, 'oooooo');
   r(7, 3, 'oooooo');
   r(8, 2, 'offffffffo');
@@ -72,7 +83,12 @@ function side({ legs, tail, step }) {
   for (const [x, lift] of legs) {
     for (let y = 11; y <= 14 - lift; y++) c.put(x, y + dy, 'o');
   }
-  for (const [x, y] of tail) c.put(x, y + dy, 'o');
+  for (const [x, y] of tail) c.put(x, y + dy, 'p');
+  const at = (pts) => pts.map(([x, y]) => [x, y + dy]);
+  c.tint(at([[10, 4], [11, 4], [10, 5], [3, 8], [4, 8], [5, 8], [3, 9], [4, 9], [4, 10]]), 'p');
+  c.tint(at([[13, 4], [14, 4], [7, 8], [8, 8], [9, 8], [8, 9], [9, 9]]), 'n');
+  for (const x of [10, 11, 12]) c.put(x, 7 + dy, 'c'); // the collar under the chin
+  c.put(12, 8 + dy, 'g'); // the gold tag
   if (step) step(c);
   return c.done();
 }

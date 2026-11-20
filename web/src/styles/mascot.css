@@ -198,14 +198,21 @@
 /* Never in print. */
 @media print { .cat-mascot { display: none; } }
 
-/* Pixel cat sprite (web/src/components/CatSprite.jsx): a sheet of frames stepped with steps(); colours from the theme tokens. */
+/* Pixel cat sprite (web/src/components/CatSprite.jsx): a sheet of frames stepped with steps(); the cat colours are custom properties with light and dark values. */
 .cat-sprite {
-  --cat-outline: color-mix(in srgb, var(--ink) 88%, var(--panel));
-  --cat-fur: color-mix(in srgb, var(--accent) 55%, var(--panel));
-  --cat-belly: color-mix(in srgb, var(--ink) 5%, var(--panel));
+  /* A calico: white fur, orange and brown patches, pink ears, nose and cheeks, a collar in the theme accent with a gold tag.
+     The cat's own colours are fixed values (a cat is not recoloured by a theme); the collar and the effects follow the accent. */
+  --cat-outline: #3b2d28;
+  --cat-fur: #fffaf1;
+  --cat-belly: #ebe1d3;
   --cat-accent: var(--accent);
-  --cat-eye: var(--ink);
-  --cat-blush: color-mix(in srgb, var(--accent) 70%, var(--panel));
+  --cat-eye: #2a1f1b;
+  --cat-blush: #f6aebb;
+  --cat-pink: #f08fa3;
+  --cat-orange: #e8923a;
+  --cat-brown: #8c5b3b;
+  --cat-collar: var(--accent);
+  --cat-tag: #f3c63f;
   position: relative;
   overflow: hidden;
   image-rendering: pixelated;
@@ -215,16 +222,24 @@
   height: 100%;
   width: calc(100% * var(--cat-n));
 }
-/* Dark themes: a lighter fur and a light belly read better than the light-theme values mirrored; the eyes stay light. */
+/* Dark themes: the same cat with a slightly warmer white and brighter patches so it does not sink into the dark panel. */
 [data-theme="dark"] .cat-sprite {
-  --cat-fur: color-mix(in srgb, var(--accent) 62%, var(--panel));
-  --cat-belly: color-mix(in srgb, var(--ink) 72%, var(--panel));
+  --cat-outline: #1b1411;
+  --cat-fur: #f4ecdf;
+  --cat-belly: #d6cbbb;
+  --cat-orange: #f1a24f;
+  --cat-brown: #a8704a;
+  --cat-pink: #f29bad;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .cat-sprite {
-    --cat-fur: color-mix(in srgb, var(--accent) 62%, var(--panel));
-    --cat-belly: color-mix(in srgb, var(--ink) 72%, var(--panel));
-    }
+    --cat-outline: #1b1411;
+    --cat-fur: #f4ecdf;
+    --cat-belly: #d6cbbb;
+    --cat-orange: #f1a24f;
+    --cat-brown: #a8704a;
+    --cat-pink: #f29bad;
+  }
 }
 @media (prefers-reduced-motion: no-preference) {
   .cat-sheet {

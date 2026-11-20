@@ -32,6 +32,22 @@ describe('cat sprites', () => {
   it('never leaves an empty frame', () => {
     for (const n of names) for (const frame of SPRITES[n].frames as string[][]) assert.ok(count(frame) >= 40, n);
   });
+  it('is a calico: white fur with orange and brown patches, pink ears, a collar and a gold tag', () => {
+    assert.deepEqual(Object.values(PALETTE_KEYS).sort(),
+      ['accent', 'belly', 'blush', 'brown', 'collar', 'eye', 'fur', 'orange', 'outline', 'pink', 'tag']);
+    for (const n of ['idle', 'wave', 'celebrate', 'alert', 'worried'] as const) {
+      const f0 = (SPRITES[n].frames as string[][])[0];
+      for (const ch of ['p', 'n', 'c', 'g', 'f']) assert.ok(count(f0, ch) >= 2, `${n} has ${ch}`);
+      assert.ok(count(f0, 'f') + count(f0, 'b') > count(f0, 'p') + count(f0, 'n'), `${n}: white is the main colour`);
+    }
+    const walk = (SPRITES.walk.frames as string[][])[0];
+    for (const ch of ['p', 'n', 'c', 'g', 'r']) assert.ok(count(walk, ch) >= 1, `walk has ${ch}`);
+  });
+  it('the face keeps two eyes and pink ears with the patches on', () => {
+    const f0 = (SPRITES.idle.frames as string[][])[0];
+    assert.equal(count(f0, 'e'), 4); // two eyes, two pixels tall
+    assert.ok(count(f0, 'r') >= 4); // two ear insides, two nose pixels
+  });
   it('walk frames differ (a cycle, not a still)', () => {
     const distinct = new Set((SPRITES.walk.frames as string[][]).map((f) => f.join('|')));
     assert.ok(distinct.size >= 3);
