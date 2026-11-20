@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { invokeAgentCore } from './kiro-agentcore.ts';
+import { invokeAgentCore, invokeAgentCoreOneShot } from './kiro-agentcore.ts';
 import { agentCoreSessionId } from './agentcore-session.ts';
 import { snapshotAccess, cursorStateAccess } from './runner-snapshot-access.ts';
 import { createFileReceiver } from './runner-files.ts';
@@ -114,7 +114,7 @@ export async function listCursorModelsViaAgentCore(userId: string, credentialId:
   const arn = process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN;
   if (!arn) throw new HttpError(503, 'The Cursor cloud runtime is not configured.');
   const auth = await authFor(userId, credentialId);
-  for await (const raw of invokeAgentCore(arn, 'cursor-models-' + randomUUID(), { mode: 'cursor-models', apiKey: auth.apiKey, authToken: auth.authToken }, AbortSignal.timeout(60_000))) {
+  for await (const raw of invokeAgentCoreOneShot(arn, 'cursor-models-' + randomUUID(), { mode: 'cursor-models', apiKey: auth.apiKey, authToken: auth.authToken }, AbortSignal.timeout(60_000))) {
     const event = raw as unknown as Record<string, any>;
     if (event.type === 'models' && typeof event.text === 'string') return parseCursorModels(event.text);
     if (event.type === 'error') throw new HttpError(502, 'The Cursor cloud runner could not list models.');

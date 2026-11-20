@@ -4,7 +4,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { codexUsesCloud, openUserCodex, hasCodexLogin } from '../codex-auth.ts';
 import { cloudCodexAuth } from '../codex-device.ts';
-import { invokeAgentCore, agentCoreControlSender } from './kiro-agentcore.ts';
+import { invokeAgentCoreOneShot, agentCoreControlSender } from './kiro-agentcore.ts';
 import { driveCodexTurn } from './codex-session.ts';
 
 /** Short, isolated generation request using only the requesting person's Codex connection. */
@@ -16,7 +16,7 @@ export async function callCodexText(prompt: string, userId: string, model?: stri
     if (!arn) throw new Error('The Codex AgentCore runner is not configured.');
     const auth = await cloudCodexAuth(userId), runId = randomUUID(), session = 'codex-text-' + runId;
     const control = agentCoreControlSender(arn, session);
-    for await (const raw of invokeAgentCore(arn, session, { mode: 'codex-text', runId, prompt, ...auth, model }, signal)) {
+    for await (const raw of invokeAgentCoreOneShot(arn, session, { mode: 'codex-text', runId, prompt, ...auth, model }, signal)) {
       const event = raw as unknown as Record<string, any>;
       if (event.type === 'auth-refresh-request' && 'chatgptAuthTokens' in auth) {
         const renewed = await cloudCodexAuth(userId, true);

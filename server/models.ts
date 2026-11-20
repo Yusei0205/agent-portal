@@ -414,11 +414,13 @@ export async function getEngineModels(
   if (engine === 'codex') {
     const runsAs = { kind: 'credential' as const, label: 'Your Codex ChatGPT sign-in' };
     if (requestedCredentialId) return { models: [], source: 'none', runsAs, error: 'Codex uses your own Codex sign-in, not a Kiro or Claude credential.' };
+    // A good list is kept for a few minutes: the cloud list starts a runner machine, and every dialog that opens asks for it.
+    if (!refresh) { const hit = fromCache('codex', userId); if (hit) return hit; }
     let client: Awaited<ReturnType<typeof openUserCodex>> | undefined;
     try {
       if (codexUsesCloud()) {
         const { listCodexModelsViaAgentCore } = await import('./agent/codex-agentcore.ts');
-        return { models: await listCodexModelsViaAgentCore(userId), source: 'codex', runsAs };
+        return toCache('codex', userId, { models: await listCodexModelsViaAgentCore(userId), source: 'codex', runsAs });
       }
       client = await openUserCodex(userId);
       const account = await client.request('account/read', { refreshToken: false });
@@ -430,7 +432,7 @@ export async function getEngineModels(
         for (const m of page.data ?? []) models.push({ id: m.model, label: m.displayName ?? m.model, ...(m.isDefault ? { default: true as const } : {}) });
         cursor = page.nextCursor ?? null;
       } while (cursor);
-      return { models, source: 'codex', runsAs };
+      return toCache('codex', userId, { models, source: 'codex', runsAs });
     } catch {
       return { models: [], source: 'codex', runsAs, error: 'Could not list Codex models. Check Codex installation and sign-in in Connect > Agent sign-ins.' };
     } finally { client?.close(); }
@@ -450,14 +452,17 @@ export async function getEngineModels(
         auth = { apiKey: env.CURSOR_API_KEY, authToken: env.CURSOR_AUTH_TOKEN };
       } catch (e) { return { models: [], source: 'none', runsAs, error: (e as Error).message }; }
     }
+    const cursorCacheId = cred ? String(cred.id) : 'portal';
+    if (!refresh) { const hit = fromCache('cursor', cursorCacheId); if (hit) return hit; }
     if (process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN) {
       try {
         const { listCursorModelsViaAgentCore } = await import('./agent/cursor-agentcore.ts');
-        return { models: await listCursorModelsViaAgentCore(userId, cred ? String(cred.id) : null), source: 'cursor', runsAs };
+        return toCache('cursor', cursorCacheId, { models: await listCursorModelsViaAgentCore(userId, cred ? String(cred.id) : null), source: 'cursor', runsAs });
       } catch (e) { return { models: [], source: 'cursor', runsAs, error: (e as Error).message }; }
     }
     const r = await listCursorModels(auth);
-    return { models: r.models, source: 'cursor', runsAs, ...(r.error ? { error: r.error } : {}) };
+    const listed: EngineModelsResponse = { models: r.models, source: 'cursor', runsAs, ...(r.error ? { error: r.error } : {}) };
+    return r.error ? listed : toCache('cursor', cursorCacheId, listed);
   }
 
   // ── 1. Resolve which credential to use ──────────────────────────────────

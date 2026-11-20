@@ -26,10 +26,10 @@ export async function callCursorText(prompt: string, userId: string | null, mode
   const arn = process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN;
   if (arn) {
     if (!auth.apiKey && !auth.authToken) throw new HttpError(400, 'Cloud Cursor needs a Cursor API key or login token. Add one under Credentials, or set the portal Cursor key in Settings.');
-    const { invokeAgentCore } = await import('./kiro-agentcore.ts');
+    const { invokeAgentCoreOneShot } = await import('./kiro-agentcore.ts');
     const secrets = [auth.apiKey, auth.authToken].filter((s): s is string => Boolean(s));
     const signal = AbortSignal.timeout(TIMEOUT_MS);
-    for await (const raw of invokeAgentCore(arn, 'cursor-text-' + randomUUID(), { mode: 'cursor-text', prompt: full, model: cleanModel, apiKey: auth.apiKey, authToken: auth.authToken }, signal)) {
+    for await (const raw of invokeAgentCoreOneShot(arn, 'cursor-text-' + randomUUID(), { mode: 'cursor-text', prompt: full, model: cleanModel, apiKey: auth.apiKey, authToken: auth.authToken }, signal)) {
       const event = JSON.parse(secrets.reduce((text, s) => text.split(s).join('***'), JSON.stringify(raw))) as Record<string, unknown>;
       if (event.type === 'error') throw new HttpError(502, 'The Cursor runner could not answer: ' + String(event.message ?? '').slice(0, 300));
       if (event.type === 'result' && event.exitCode === 0 && typeof event.text === 'string') return event.text;

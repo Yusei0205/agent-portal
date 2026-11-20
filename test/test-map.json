@@ -496,6 +496,7 @@
       "tests": [
         "test/agentcore-metrics.test.ts",
         "test/agentcore-idle.test.ts",
+        "test/agentcore-one-shot.test.ts",
         "test/agentcore-eval.test.ts",
         "test/agentcore-memory.test.ts"
       ],
