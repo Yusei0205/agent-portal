@@ -754,7 +754,6 @@ exit 0
       fs.writeFileSync(path.join(work, 'b.txt'), 'x\n');
       await detectChanges(work, 'main', { remoteUrl: remote });
       await pushBranch({ ...opts, repoDir: work, remoteUrl: remote, baseSha, branch: 'autofix/env-1' });
-      await pushBranch({ ...opts, denyPaths: undefined, repoDir: work, branch: 'portal/env-2' });
     } finally {
       for (const [k, v] of [['GIT_TRACE', saved.t], ['GIT_SSH_COMMAND', saved.s], ['GIT_EXTERNAL_DIFF', saved.e]] as const) {
         if (v === undefined) delete process.env[k]; else process.env[k] = v;
@@ -762,6 +761,24 @@ exit 0
     }
     assert.equal(fs.existsSync(trace), false, 'a variable from the runner env reached git');
     assert.notEqual(lsRemote(remote, 'refs/heads/autofix/env-1'), '');
+  });
+
+  it('an ordinary (not auto-fix) push runs git as before the hardening: it reads the global git config', async () => {
+    // Runner images may route or authenticate git through the global config; the end-to-end engine test redirects its fake host this way.
+    const { remote, work } = makeRepo();
+    const fakeUrl = 'https://git.example.test/ordinary.git';
+    execFileSync('git', ['remote', 'set-url', 'origin', fakeUrl], { cwd: work });
+    const globalCfg = path.join(work, '..', 'global.gitconfig');
+    fs.writeFileSync(globalCfg, `[url "${remote.replace(/\\/g, '/')}"]\n\tinsteadOf = ${fakeUrl}\n`);
+    const saved = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = globalCfg;
+    try {
+      fs.writeFileSync(path.join(work, 'c.txt'), 'x\n');
+      await pushBranch({ ...opts, denyPaths: undefined, remoteUrl: undefined, baseSha: undefined, repoDir: work, branch: 'portal/global-cfg' });
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = saved;
+    }
+    assert.notEqual(lsRemote(remote, 'refs/heads/portal/global-cfg'), '');
   });
 
   it('validateFinalizeRequest carries an https remoteUrl and rejects anything else', () => {

@@ -147,6 +147,33 @@ export function gitProcessEnv(extra: Record<string, string> = {}): Record<string
   return { ...out, ...TRUSTED_GIT_ENV };
 }
 
+/**
+ * One git call of the ORDINARY (not auto-fix) push, run exactly as before the auto-fix hardening: the runner's whole environment and the
+ * system and global git config (an image may route or authenticate git through them). Auto-fix pushes never use this: they are committed,
+ * checked and pushed from a private repository with runGit (pushCheckedBranch), and auto-fix sessions are refused the ordinary path.
+ */
+function legacyRunGit(
+  cwd: string, args: string[], env: Record<string, string> = {}, allowFail = false,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, {
+      cwd,
+      env: { ...process.env, ...env, GIT_TERMINAL_PROMPT: '0' },
+      maxBuffer: 32 * 1024 * 1024,
+      timeout: GIT_TIMEOUT_MS,
+      windowsHide: true,
+    }, (err, stdout, stderr) => {
+      const out = String(stdout ?? '');
+      const errText = String(stderr ?? '');
+      if (!err) return resolve({ code: 0, stdout: out, stderr: errText });
+      const code = typeof (err as { code?: unknown }).code === 'number' ? (err as unknown as { code: number }).code : 1;
+      if (allowFail) return resolve({ code, stdout: out, stderr: errText });
+      const detail = redact(errText.trim() || (err as Error).message, env).slice(0, 500);
+      reject(new Error(`git ${subcommandOf(args)} failed: ${detail}`));
+    });
+  });
+}
+
 /** The git subcommand of an argument list (for error messages): the first argument after any `-c x` and `--git-dir x` pairs. */
 function subcommandOf(args: string[]): string {
   for (let i = 0; i < args.length; i++) {
@@ -602,34 +629,35 @@ export async function pushBranch(opts: {
   }
   const name = opts.identity?.name?.trim() || 'Agent Portal';
   const email = opts.identity?.email?.trim() || 'agent-portal@users.noreply.invalid';
-  const ident = ['-c', `user.name=${name}`, '-c', `user.email=${email}`];
+  const ident = ['-c', `user.name=${name}`, '-c', `user.email=${email}`, '-c', 'commit.gpgsign=false'];
 
   if (opts.denyPaths) return pushCheckedBranch({ ...opts, denyPaths: opts.denyPaths, ident });
 
-  // An ordinary (not auto-fix) push, in the session repository as before. The local steps run without the request's credentials (a
-  // filter the agent configured would run in `git add`); only the push itself has them. The push still reads the session's own remote
-  // configuration: auto-fix pushes never take this path.
+  // An ordinary (not auto-fix) push, in the session repository and with git run as before the auto-fix hardening (legacyRunGit: the
+  // runner's environment and the system and global git config, which an image may rely on to route or authenticate git). Two changes
+  // remain: the local steps run without the request's credentials (a filter the agent configured would run in `git add`), and exactly the
+  // resolved commit is pushed. Auto-fix pushes never take this path.
   const local = withoutCredentials(env);
-  const current = (await runGit(repoDir, ['rev-parse', '--abbrev-ref', 'HEAD'], local)).stdout.trim();
-  if (current !== branch) await runGit(repoDir, ['checkout', '-b', branch], local);
+  const current = (await legacyRunGit(repoDir, ['rev-parse', '--abbrev-ref', 'HEAD'], local)).stdout.trim();
+  if (current !== branch) await legacyRunGit(repoDir, ['checkout', '-b', branch], local);
 
   const pathspec = ['.', ...(opts.excludePaths ?? []).filter(Boolean).map((p) => `:(exclude,literal)${p}`)];
-  await runGit(repoDir, ['add', '-A', '--', ...pathspec], local);
-  const staged = await runGit(repoDir, ['diff', '--cached', '--quiet', '--no-ext-diff'], local, true);
+  await legacyRunGit(repoDir, ['add', '-A', '--', ...pathspec], local);
+  const staged = await legacyRunGit(repoDir, ['diff', '--cached', '--quiet', '--no-ext-diff'], local, true);
   if (staged.code === 1) {
-    await runGit(repoDir, [...ident, 'commit', '--no-verify', '-m', opts.message], local);
+    await legacyRunGit(repoDir, [...ident, 'commit', '--no-verify', '-m', opts.message], local);
   } else if (staged.code !== 0) {
     throw new Error(`git diff failed: ${redact(staged.stderr.trim(), env).slice(0, 500)}`);
   }
 
   // The commit to push, resolved once: whatever happens to the branch ref afterwards, this commit is what is pushed.
-  const resolved = await runGit(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`], local, true);
+  const resolved = await legacyRunGit(repoDir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`], local, true);
   const sha = resolved.stdout.trim();
   if (resolved.code !== 0 || !/^[0-9a-f]{40,64}$/.test(sha)) throw new Error('Refusing to push: the branch commit could not be resolved');
 
   await testBeforePush(repoDir, branch);
   // Exactly that commit, to this branch only: no tag or other ref of the same name, no configured push refspecs, no tags.
-  await runGit(repoDir, ['-c', 'push.followTags=false', 'push', '--no-verify', '--no-follow-tags', 'origin', `${sha}:refs/heads/${branch}`], env);
+  await legacyRunGit(repoDir, ['-c', 'push.followTags=false', 'push', '--no-verify', '--no-follow-tags', 'origin', `${sha}:refs/heads/${branch}`], env);
   return { sha };
 }
 
