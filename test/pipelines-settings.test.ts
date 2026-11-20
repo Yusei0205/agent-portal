@@ -35,6 +35,16 @@ describe('pipeline settings', () => {
   });
 });
 
+describe('settings hardening', () => {
+  it('rejects a null or non-object patch', async () => {
+    for (const bad of [null, 'x', [1], 5]) await assert.rejects(savePipelineSettings('p3', bad as never, actor), /object/);
+  });
+  it('strips control, bidi and zero-width characters from entries', async () => {
+    const s = await savePipelineSettings('p3', { alert_branches: ['re\u202Elease\u200B', '\u200B'] }, actor);
+    assert.deepEqual(s.alert_branches, ['release']);
+  });
+});
+
 describe('isDeployWorkflow', () => {
   it('defaults to a name containing deploy', () => {
     assert.equal(isDeployWorkflow(DEFAULT_PIPELINE_SETTINGS, 'Deploy portal'), true);

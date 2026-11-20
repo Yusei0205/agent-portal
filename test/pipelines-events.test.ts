@@ -19,7 +19,7 @@ describe('parseWorkflowRun', () => {
     assert.equal(e.actor, 'octocat');
     assert.equal(e.event, 'push');
     assert.equal(e.htmlUrl, 'https://github.com/acme/widgets/actions/runs/9200001');
-    assert.equal(e.startedAt, '2026-11-20T10:00:00Z');
+    assert.equal(e.startedAt, '2026-11-20T10:00:00.000Z');
     assert.equal(e.completedAt, null);
   });
   it('maps in_progress', () => {
@@ -28,7 +28,7 @@ describe('parseWorkflowRun', () => {
   it('maps timed_out and sets completedAt', () => {
     const e = parseWorkflowRun('workflow_run', fx('workflow_run_timed_out'))!;
     assert.equal(e.status, 'timed_out');
-    assert.equal(e.completedAt, '2026-11-20T10:05:00Z');
+    assert.equal(e.completedAt, '2026-11-20T10:05:00.000Z');
   });
   it('maps every conclusion', () => {
     const base = fx('workflow_run_timed_out');
@@ -47,7 +47,7 @@ describe('parseWorkflowRun', () => {
     p.workflow_run.actor = { login: 'bob' };
     const e = parseWorkflowRun('workflow_run', p)!;
     assert.equal(e.actor, 'bob');
-    assert.equal(e.startedAt, '2026-11-20T09:59:50Z');
+    assert.equal(e.startedAt, '2026-11-20T09:59:50.000Z');
     delete p.workflow_run.actor;
     assert.equal(parseWorkflowRun('workflow_run', p)!.actor, '');
   });
@@ -101,5 +101,31 @@ describe('parseWorkflowRun', () => {
     const p = fx('workflow_run_requested');
     p.workflow_run.head_branch = '';
     assert.equal(parseWorkflowRun('workflow_run', p), null);
+  });
+  it('strips bidi, zero-width and line-separator characters', () => {
+    const p = fx('workflow_run_requested');
+    p.workflow_run.name = 'a\u202Ebc\u200B\u2028d\u2066';
+    p.workflow_run.head_branch = 'm\u202Eain\uFEFF';
+    const e = parseWorkflowRun('workflow_run', p)!;
+    assert.equal(e.workflowName, 'abcd');
+    assert.equal(e.branch, 'main');
+  });
+  it('keeps only a plain https://github.com html_url', () => {
+    for (const u of ['https://github.com/a/b\u202E\n x', 'https://github.com/a/b x', 'https://github.com:444/x', 'https://u@github.com/x', 'https://u:p@github.com/x', 'https://github.com/a\u200B/b', 'not a url']) {
+      const p = fx('workflow_run_requested');
+      p.workflow_run.html_url = u;
+      assert.equal(parseWorkflowRun('workflow_run', p)!.htmlUrl, '', u);
+    }
+    const p = fx('workflow_run_requested');
+    p.workflow_run.html_url = 'https://github.com:443/a/b';
+    assert.equal(parseWorkflowRun('workflow_run', p)!.htmlUrl, 'https://github.com/a/b');
+  });
+  it('normalises timestamps and nulls invalid ones', () => {
+    const p = fx('workflow_run_requested');
+    p.workflow_run.run_started_at = '2026-11-20 10:00:00 +02:00';
+    p.workflow_run.created_at = 'garbage';
+    assert.equal(parseWorkflowRun('workflow_run', p)!.startedAt, '2026-11-20T08:00:00.000Z');
+    p.workflow_run.run_started_at = 'nope';
+    assert.equal(parseWorkflowRun('workflow_run', p)!.startedAt, null);
   });
 });

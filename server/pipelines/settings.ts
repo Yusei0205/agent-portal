@@ -19,7 +19,7 @@ const settingsKey = (projectId: string) => `pipelines.settings.${projectId}`;
 
 function list(v: unknown, name: string): string[] {
   if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw badRequest(`${name} must be a list of strings`);
-  const out = [...new Set((v as string[]).map((s) => s.trim()).filter(Boolean))];
+  const out = [...new Set((v as string[]).map((s) => s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').trim()).filter(Boolean))];
   if (out.length > MAX_ENTRIES) throw badRequest(`${name} can have at most ${MAX_ENTRIES} entries`);
   if (out.some((s) => s.length > MAX_CHARS)) throw badRequest(`${name} entries can have at most ${MAX_CHARS} characters`);
   return out;
@@ -43,6 +43,7 @@ export async function savePipelineSettings(
   patch: Partial<PipelineSettings>,
   actor: { actorId: string | null; ip: string | null },
 ): Promise<PipelineSettings> {
+  if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) throw badRequest('Settings must be an object');
   const current = await getPipelineSettings(projectId);
   const next: PipelineSettings = { ...current };
   const p = patch as Record<string, unknown>;

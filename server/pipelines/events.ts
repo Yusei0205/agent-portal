@@ -27,12 +27,27 @@ function obj(v: unknown): Record<string, unknown> | null {
 }
 const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 /** Strip control characters and bound the length. */
-const clean = (v: unknown, max = MAX_TEXT): string => text(v).replace(/[\u0000-\u001f\u007f-\u009f]/g, '').slice(0, max);
+const clean = (v: unknown, max = MAX_TEXT): string => text(v).replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, '').slice(0, max);
 const posInt = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? v : null);
 const timestamp = (v: unknown): string | null => {
   const s = text(v);
-  return s && s.length <= 40 && !Number.isNaN(Date.parse(s)) ? s : null;
+  if (!s || s.length > 40) return null;
+  const t = Date.parse(s);
+  return Number.isNaN(t) ? null : new Date(t).toISOString();
 };
+
+/** Only a plain https://github.com URL without userinfo or port, and nothing hidden in the raw text. */
+function githubUrl(v: unknown): string {
+  const raw = text(v);
+  if (!raw || raw.length > 500 || /[\s\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(raw)) return '';
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'https:' || u.host !== 'github.com' || u.username || u.password || u.port) return '';
+    return u.href;
+  } catch {
+    return '';
+  }
+}
 
 const CONCLUSIONS: Record<string, PipelineStatus> = {
   success: 'success', failure: 'failure', timed_out: 'timed_out', cancelled: 'cancelled', skipped: 'skipped',
@@ -61,8 +76,6 @@ export function parseWorkflowRun(eventName: string, payload: unknown): WorkflowR
   else if (p.action === 'completed') status = CONCLUSIONS[text(run.conclusion)] ?? 'other';
   else return null;
 
-  const url = text(run.html_url);
-  const htmlUrl = url.length <= 500 && url.startsWith('https://github.com/') ? url : '';
   const actor = clean(obj(run.triggering_actor)?.login, 100) || clean(obj(run.actor)?.login, 100);
 
   return {
@@ -77,7 +90,7 @@ export function parseWorkflowRun(eventName: string, payload: unknown): WorkflowR
     actor,
     event: clean(run.event, 50),
     status,
-    htmlUrl,
+    htmlUrl: githubUrl(run.html_url),
     startedAt: timestamp(run.run_started_at) ?? timestamp(run.created_at),
     completedAt: p.action === 'completed' ? timestamp(run.updated_at) : null,
   };
