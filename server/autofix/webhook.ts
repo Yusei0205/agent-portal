@@ -3,7 +3,7 @@
  * CI result or PR closing on an auto-fix branch moves that fix's finding on (pipeline.ts applyCiResult / applyPrClosed).
  */
 
-import { router, sendJson } from '../http.ts';
+import { router, sendJson, registerBackgroundWrite } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { readWebhookBody, webhookSignatureOk } from '../loop-triggers.ts';
 import { getSecret } from '../secrets.ts';
@@ -27,11 +27,12 @@ export async function _drainIntakeForTest(): Promise<void> {
   while (pending.size) await Promise.all([...pending]);
 }
 
-function runInBackground(work: () => Promise<void>): void {
+function runInBackground(work: () => Promise<void>): Promise<void> {
   const p: Promise<void> = work().catch((err) => {
     console.error('[autofix] webhook intake failed:', err instanceof Error ? err.message : err);
   }).finally(() => { pending.delete(p); });
   pending.add(p);
+  return p;
 }
 
 /** The largest webhook body read (1 MiB). */
@@ -57,12 +58,14 @@ export function registerAutofixWebhook(): void {
     }
     const event = String(req.headers['x-github-event'] ?? '');
     // Pipeline monitor: every workflow_run of a project repository is recorded, whatever Auto-fix's mode (nothing is stored otherwise).
-    let looked: { name: string; repo: Awaited<ReturnType<typeof findProjectGithubRepo>> } | null = null;
+    // Everything, the repository lookup included, runs in the background, so it can never change Auto-fix's answer. The work is
+    // registered with the request so it is drained before the response ends (Lambda may freeze the process right after).
     const wr = parseWorkflowRun(event, req.body);
     if (wr) {
-      const repo = await findProjectGithubRepo(projectId, wr.repoFullName);
-      looked = { name: wr.repoFullName, repo };
-      if (repo) runInBackground(() => recordPipelineRun(projectId, { id: repo.id, default_branch: repo.default_branch }, wr));
+      registerBackgroundWrite(runInBackground(async () => {
+        const repo = await findProjectGithubRepo(projectId, wr.repoFullName);
+        if (repo) await recordPipelineRun(projectId, { id: repo.id, default_branch: repo.default_branch }, wr);
+      }));
     }
     const parsed = parseGithubEvent(event, req.body);
     // CI results and PR closings matter only on auto-fix branches; any other branch's are acknowledged and touch nothing.
@@ -71,8 +74,7 @@ export function registerAutofixWebhook(): void {
     }
 
     const fullName = parsed.type === 'finding' ? parsed.candidate.repoFullName : parsed.repoFullName;
-    const projectRepo = looked && looked.name === fullName ? looked.repo : await findProjectGithubRepo(projectId, fullName);
-    if (!projectRepo) {
+    if (!await findProjectGithubRepo(projectId, fullName)) {
       sendJson(res, 404, { error: 'Repository is not part of this project' }); return;
     }
     if (parsed.type === 'finding') {

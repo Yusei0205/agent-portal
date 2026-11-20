@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { getDb } from '../server/db.ts';
 import { getGitReposRepository } from '../server/repositories/git-repos.ts';
-import { getPipelineRunsRepository } from '../server/repositories/pipeline-runs.ts';
+import { getPipelineRunsRepository, setPipelineRunsRepository } from '../server/repositories/pipeline-runs.ts';
 import { getInboxRepository } from '../server/repositories/inbox.ts';
 import { saveAutofixPolicy } from '../server/autofix/policy.ts';
 import { _drainIntakeForTest } from '../server/autofix/webhook.ts';
@@ -95,6 +95,43 @@ describe('workflow_run webhook wiring', () => {
   it('a repository outside the project is 404 and stores nothing', async () => {
     assert.equal(await deliver(payload({ repo: 'acme/other', name: 'CI / eslint' })), 404);
     assert.equal(await storedCount(), 0);
+  });
+  it('the pipeline lookup cannot change the Auto-fix answer: a failing repo lookup still answers 202 ignored', async () => {
+    const p = JSON.parse(payload({ conclusion: 'success' }));
+    p.action = 'in_progress'; p.workflow_run.status = 'in_progress'; p.workflow_run.conclusion = null;
+    const body = JSON.stringify(p);
+    const repos = getGitReposRepository();
+    const orig = repos.listByProject;
+    repos.listByProject = async () => { throw new Error('database unavailable'); };
+    try {
+      const r = await fetch(`${baseUrl}/api/hooks/autofix/${projectId}`, {
+        method: 'POST', body, headers: { 'content-type': 'application/json', 'x-github-event': 'workflow_run', 'x-hub-signature-256': sign(body) },
+      });
+      assert.equal(r.status, 202);
+      assert.deepEqual(await r.json(), { ok: true, ignored: true });
+      await _drainIntakeForTest();
+    } finally {
+      repos.listByProject = orig;
+    }
+    assert.equal(await storedCount(), 0);
+  });
+  it('the pipeline work is registered with the request, so it finishes before the response (Lambda)', async () => {
+    const real = getPipelineRunsRepository();
+    const slow = Object.create(real) as typeof real;
+    slow.upsertRun = async (input) => { await new Promise((r) => setTimeout(r, 150)); return real.upsertRun(input); };
+    setPipelineRunsRepository(slow);
+    try {
+      const body = payload({ conclusion: 'success' });
+      const r = await fetch(`${baseUrl}/api/hooks/autofix/${projectId}`, {
+        method: 'POST', body, headers: { 'content-type': 'application/json', 'x-github-event': 'workflow_run', 'x-hub-signature-256': sign(body) },
+      });
+      assert.equal(r.status, 202);
+      // No drain here: the run must already be stored when the response arrives.
+      assert.equal((await real.latestPerBranch(projectId)).length, 1);
+    } finally {
+      await _drainIntakeForTest();
+      setPipelineRunsRepository(real);
+    }
   });
 });
 
