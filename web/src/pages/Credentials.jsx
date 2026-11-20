@@ -302,7 +302,6 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
   const CURSOR_MODES = [
     { id: 'sign_in', label: 'Sign in with Cursor', desc: 'Sign in with your own Cursor account in your browser. It lasts about 60 days, then one click signs you in again. Experimental: check your Cursor terms before using a personal login on a shared server.' },
     { id: 'api_key', label: 'Cursor API key', desc: 'Create one at cursor.com/dashboard/api. Usage is billed to your Cursor plan.' },
-    { id: 'login_token', label: 'Paste a login token (advanced)', desc: 'Paste the contents of auth.json (or just its accessToken) from your own `agent login`, if you cannot sign in here.' },
   ];
   const modes = engine === 'kiro' ? KIRO_MODES : engine === 'cursor' ? CURSOR_MODES : CLAUDE_MODES;
 
@@ -449,10 +448,10 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
           )}
 
           {/* Secret fields by mode */}
-          {(mode === 'api_key' || mode === 'subscription_token' || mode === 'login_token') && (
+          {(mode === 'api_key' || mode === 'subscription_token') && (
             <div className="field">
               <label htmlFor="cred-secret">
-                {mode === 'api_key' ? 'API key' : mode === 'login_token' ? 'Login token' : 'Subscription token'}{' '}
+                {mode === 'api_key' ? 'API key' : 'Subscription token'}{' '}
                 <span aria-hidden="true">*</span>
               </label>
               <div style={{ display: 'flex', gap: 6 }}>
@@ -475,12 +474,6 @@ function AddCredentialDialog({ engine, onClose, onCreated }) {
                   <Icon name="eye" size={15} />
                 </button>
               </div>
-              {engine === 'cursor' && mode === 'login_token' && (
-                <p className="field-hint">
-                  Run <code>agent login</code>, then open <code>auth.json</code>: Windows <code>%APPDATA%Cursorauth.json</code>, macOS <code>~/.cursor/auth.json</code>,
-                  Linux <code>~/.config/cursor/auth.json</code>. Only the access token is kept; the refresh token stays on your machine.
-                </p>
-              )}
               <p className="field-hint">Write-only — after saving only the last 4 characters are shown.</p>
             </div>
           )}

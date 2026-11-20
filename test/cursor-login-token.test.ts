@@ -5,7 +5,10 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { parseLoginToken, daysLeft, looksLikeLoginToken, cursorAuthEnv } from '../server/cursor-login-token.ts';
 import { createTestServer, cleanup, fetchJson, withPasswordConfirmed } from './fixtures.ts';
-import { one } from '../server/db.ts';
+import { run as dbRun } from '../server/db.ts';
+import { one, insert } from '../server/db.ts';
+import { encrypt } from '../server/secrets.ts';
+import { config } from '../server/config.ts';
 import { generateId } from '../server/util.ts';
 import { resolveCredentialEnv } from '../server/credentials.ts';
 import { runCursor } from '../server/agent/cursor.ts';
@@ -36,7 +39,7 @@ describe('parseLoginToken', () => {
   });
 
   it('rejects empty, malformed, expired, expiry-less and oversized input, each with its own message', () => {
-    assert.throws(() => parseLoginToken('   '), /Paste the login token/);
+    assert.throws(() => parseLoginToken('   '), /No login token was received/);
     assert.throws(() => parseLoginToken('not-a-token'), /not a Cursor login token/);
     assert.throws(() => parseLoginToken('{broken'), /could not be read/);
     assert.throws(() => parseLoginToken('{"refreshToken":"x"}'), /No accessToken/);
@@ -61,12 +64,16 @@ describe('parseLoginToken', () => {
   });
 });
 
-describe('Cursor login-token credential', () => {
+describe('Cursor login credential (made by signing in)', () => {
   let baseUrl = '', cookie = '', projectId = '', userId = '';
   const password = 'password1234';
-  const create = async (secret: string, extra: Record<string, unknown> = {}) => {
-    const confirmed = await withPasswordConfirmed(baseUrl, cookie, password);
-    return fetchJson(baseUrl, '/api/credentials', { method: 'POST', body: { engine: 'cursor', mode: 'login_token', name: 'my login', secret, ...extra }, cookie: confirmed });
+  /** A signed-in login credential, as "Sign in with Cursor" leaves it (the sign-in flow itself is tested in cursor-login.test.ts). */
+  const signedIn = (days: number, n = 0): { id: string; token: string } => {
+    const id = generateId();
+    const token = fakeToken(days * 86400, { n });
+    insert('engine_credentials', { id, user_id: userId, engine: 'cursor', name: 'signed in', mode: 'login_token', secret_enc: encrypt(token, config.secretKey),
+      extra_config: JSON.stringify({ tokenExpiry: new Date(Date.now() + days * 86400_000).toISOString() }), is_default: 0, last4: token.slice(-4) });
+    return { id, token };
   };
 
   before(async () => {
@@ -79,32 +86,25 @@ describe('Cursor login-token credential', () => {
   });
   after(async () => { delete process.env.PORTAL_CURSOR_FAKE; await cleanup(); });
 
-  it('stores only the access token (encrypted) with its expiry, and never returns it', async () => {
+  it('does not accept a pasted token any more: adding or renewing a login means signing in', async () => {
     const t = fakeToken(30 * 86400);
-    const r = await create(JSON.stringify({ accessToken: t, refreshToken: fakeToken(30 * 86400, { n: 9 }) }));
-    assert.equal(r.status, 201, JSON.stringify(r.body));
-    const cred = (r.body as any).credential;
-    assert.equal(cred.mode, 'login_token');
-    assert.equal(cred.last4, t.slice(-4));
-    assert.ok(cred.config.tokenExpiry, 'the card can show the days left');
-    assert.ok(!JSON.stringify(r.body).includes(t), 'the token is never in a response');
-    const row = one<any>('SELECT secret_enc FROM engine_credentials WHERE id = ?', cred.id)!;
-    assert.ok(!String(row.secret_enc).includes(t.slice(0, 20)), 'stored encrypted');
-    assert.equal(cred.status, 'ok');
-  });
-
-  it('refuses a token that is expired, malformed or empty, before storing anything', async () => {
     const before = one<any>("SELECT COUNT(*) n FROM engine_credentials WHERE engine = 'cursor'")!.n;
-    assert.equal((await create(fakeToken(-86400))).status, 400);
-    assert.equal((await create('hello')).status, 400);
-    assert.equal((await create('')).status, 400);
-    assert.equal(one<any>("SELECT COUNT(*) n FROM engine_credentials WHERE engine = 'cursor'")!.n, before);
+    const create = await fetchJson(baseUrl, '/api/credentials', { method: 'POST', body: { engine: 'cursor', mode: 'login_token', name: 'pasted', secret: t }, cookie: await withPasswordConfirmed(baseUrl, cookie, password) });
+    assert.equal(create.status, 400);
+    assert.match(String((create.body as any).error), /Sign in with Cursor/);
+    assert.equal(one<any>("SELECT COUNT(*) n FROM engine_credentials WHERE engine = 'cursor'")!.n, before, 'nothing was stored');
+
+    const { id, token } = signedIn(20);
+    const put = await fetchJson(baseUrl, `/api/credentials/${id}`, { method: 'PUT', body: { secret: t }, cookie: await withPasswordConfirmed(baseUrl, cookie, password) });
+    assert.equal(put.status, 400);
+    assert.match(String((put.body as any).error), /Sign in again/);
+    assert.deepEqual(await resolveCredentialEnv('cursor', userId, id), { CURSOR_AUTH_TOKEN: token }, 'the stored token is untouched');
+    assert.ok(!JSON.stringify([create.body, put.body]).includes(t), 'the token is never echoed');
   });
 
   it('gives a run CURSOR_AUTH_TOKEN (not an API key), and the CLI sees it', async () => {
-    const t = fakeToken(20 * 86400);
-    const id = ((await create(t)).body as any).credential.id as string;
-    assert.deepEqual(await resolveCredentialEnv('cursor', userId, id), { CURSOR_AUTH_TOKEN: t });
+    const { id, token } = signedIn(20, 3);
+    assert.deepEqual(await resolveCredentialEnv('cursor', userId, id), { CURSOR_AUTH_TOKEN: token });
 
     const wf = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows`, { method: 'POST', body: { goal: 'x', engine: 'cursor' }, cookie });
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cursor-lt-'));
@@ -113,39 +113,27 @@ describe('Cursor login-token credential', () => {
       leadAgent: null, permissions: { rules: [] }, credentialId: id, credentialOwnerId: userId, model: null, engineSessionId: null } as unknown as AgentRun;
     const ctx: RunContext = { run, emit: (type, payload) => events.push({ type, payload: payload as any }), awaitInput: async () => ({ decision: 'deny', remember: false, message: '' }), allowed: new Set(), signal: null };
     const text = await runCursor(ctx);
-    assert.ok(text.includes(`token=${t}`) && text.includes('key=none'), text.slice(0, 120));
+    assert.ok(text.includes(`token=${token}`) && text.includes('key=none'), text.slice(0, 120));
   });
 
-  it('says plainly when a stored login token has expired', async () => {
-    const t = fakeToken(86400);
-    const id = ((await create(t)).body as any).credential.id as string;
+  it('says plainly when a stored login has expired, in the run, the model list and the card', async () => {
+    const { id } = signedIn(1, 4);
     const past = new Date(Date.now() - 2 * 86400_000).toISOString();
-    const { run: dbRun } = await import('../server/db.ts');
     dbRun('UPDATE engine_credentials SET extra_config = ? WHERE id = ?', JSON.stringify({ tokenExpiry: past }), id);
-    await assert.rejects(resolveCredentialEnv('cursor', userId, id), /expired on \d{4}-\d{2}-\d{2}.*agent login/);
+    await assert.rejects(resolveCredentialEnv('cursor', userId, id), /expired on \d{4}-\d{2}-\d{2}.*Sign in again/);
     const models = await fetchJson(baseUrl, `/api/engines/cursor/models?credentialId=${id}`, { cookie });
     assert.match(String((models.body as any).error), /expired/);
     const listed = await fetchJson(baseUrl, '/api/credentials', { cookie });
-    const view = ((listed.body as any).credentials as any[]).find((c) => c.id === id);
-    assert.equal(view.status, 'expired');
+    assert.equal(((listed.body as any).credentials as any[]).find((c) => c.id === id).status, 'expired');
   });
 
-  it('lists models with a login token', async () => {
-    const id = ((await create(fakeToken(10 * 86400))).body as any).credential.id as string;
-    const models = await fetchJson(baseUrl, `/api/engines/cursor/models?credentialId=${id}`, { cookie });
+  it('shows "expiring" in the last week and lists models with a login', async () => {
+    const soon = signedIn(3, 5);
+    const listed = await fetchJson(baseUrl, '/api/credentials', { cookie });
+    assert.equal(((listed.body as any).credentials as any[]).find((c) => c.id === soon.id).status, 'expiring');
+    const ok = signedIn(40, 6);
+    const models = await fetchJson(baseUrl, `/api/engines/cursor/models?credentialId=${ok.id}`, { cookie });
     assert.equal((models.body as any).models.length, 3);
     assert.match((models.body as any).runsAs.label, /Cursor login/);
-  });
-
-  it('replaces the token on update and refreshes the expiry', async () => {
-    const id = ((await create(fakeToken(5 * 86400))).body as any).credential.id as string;
-    const next = fakeToken(50 * 86400, { n: 5 });
-    const confirmed = await withPasswordConfirmed(baseUrl, cookie, password);
-    const r = await fetchJson(baseUrl, `/api/credentials/${id}`, { method: 'PUT', body: { secret: JSON.stringify({ accessToken: next }) }, cookie: confirmed });
-    assert.equal(r.status, 200, JSON.stringify(r.body));
-    assert.ok(daysLeft((r.body as any).credential.config.tokenExpiry)! >= 49);
-    assert.deepEqual(await resolveCredentialEnv('cursor', userId, id), { CURSOR_AUTH_TOKEN: next });
-    const bad = await fetchJson(baseUrl, `/api/credentials/${id}`, { method: 'PUT', body: { secret: 'nope' }, cookie: await withPasswordConfirmed(baseUrl, cookie, password) });
-    assert.equal(bad.status, 400);
   });
 });

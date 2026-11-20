@@ -176,11 +176,10 @@ describe('Cursor sign-in through the credentials API', () => {
     assert.deepEqual(await resolveCredentialEnv('cursor', userId, credential.id), { CURSOR_AUTH_TOKEN: fresh });
   });
 
-  it('keeps pasting a token working for people who cannot sign in here', async () => {
+  it('refuses a pasted token: a login is made by signing in', async () => {
     const confirmed = await withPasswordConfirmed(baseUrl, cookie, password);
     const r = await fetchJson(baseUrl, '/api/credentials', { method: 'POST', body: { engine: 'cursor', mode: 'login_token', name: 'pasted', secret: token(40) }, cookie: confirmed });
-    assert.equal(r.status, 201);
-    assert.equal((r.body as any).credential.status, 'ok');
-    assert.equal((r.body as any).deviceChallenge, undefined);
+    assert.equal(r.status, 400);
+    assert.match(String((r.body as any).error), /Sign in with Cursor/);
   });
 });

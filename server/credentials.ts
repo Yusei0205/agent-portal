@@ -19,7 +19,7 @@ import { config } from './config.ts';
 import { hasCodexLogin } from './codex-auth.ts';
 import { generateId, now, str, badRequest, HttpError } from './util.ts';
 import { appendAudit } from './audit.ts';
-import { parseLoginToken, daysLeft } from './cursor-login-token.ts';
+import { daysLeft } from './cursor-login-token.ts';
 import { startCursorLogin, pollCursorLogin, LOGIN_WINDOW_SECONDS, type CursorLoginStart } from './cursor-login.ts';
 import { KIRO_IDC_SCOPES, fetchKiroProfiles, setProfilesFetcherOverride } from './kiro-idc.ts';
 import type { FetchProfilesResult } from './kiro-idc.ts';
@@ -779,7 +779,7 @@ async function buildEnvFromCred(cred: CredentialRow): Promise<Record<string, str
     if (mode === 'login_token') {
       // A login token lasts about 60 days; say so plainly instead of letting the CLI fail with a generic sign-in error.
       const left = daysLeft(extra.tokenExpiry);
-      if (left !== null && left < 0) throw new HttpError(400, `Cursor login token ${label} expired on ${String(extra.tokenExpiry).slice(0, 10)}. Run \`agent login\` again and paste the new token under Credentials.`);
+      if (left !== null && left < 0) throw new HttpError(400, `Cursor login token ${label} expired on ${String(extra.tokenExpiry).slice(0, 10)}. Use "Sign in again" on the Cursor credential.`);
     }
     let val: string;
     try { val = decrypt(String(cred.secret_enc), config.secretKey); }
@@ -1142,13 +1142,8 @@ export function registerCredentialRoutes(): void {
       if (!roleArn.startsWith('arn:')) throw badRequest('config.roleArn must be a valid ARN');
       str(credConfig.region as string, 'config.region'); // validate required
     } else if (engine === 'cursor' && mode === 'login_token') {
-      // The token itself, or the whole auth.json: only the access token is kept, with its expiry for the card.
-      let parsed;
-      try { parsed = parseLoginToken(str(body.secret as string, 'secret')); }
-      catch (e) { throw badRequest((e as Error).message); }
-      secretEnc = encrypt(parsed.token, config.secretKey);
-      last4 = parsed.token.slice(-4);
-      credConfig.tokenExpiry = parsed.expiresAt;
+      // A Cursor login is only ever made by signing in (signIn: true, above); a pasted token is not accepted.
+      throw badRequest('Use "Sign in with Cursor" to add a Cursor login. Pasting a token is not supported.');
     } else {
       // api_key or subscription_token: secret required
       const secret = str(body.secret as string, 'secret');
@@ -1201,12 +1196,7 @@ export function registerCredentialRoutes(): void {
     }
 
     if (String(cred.engine) === 'cursor' && String(cred.mode) === 'login_token' && typeof body.secret === 'string' && body.secret.trim()) {
-      let parsed;
-      try { parsed = parseLoginToken(body.secret); }
-      catch (e) { throw badRequest((e as Error).message); }
-      fields.secret_enc = encrypt(parsed.token, config.secretKey);
-      fields.last4 = parsed.token.slice(-4);
-      fields.extra_config = JSON.stringify({ ...safeJson(cred.extra_config), tokenExpiry: parsed.expiresAt });
+      throw badRequest('To renew a Cursor login, use "Sign in again" on the card. Pasting a token is not supported.');
     } else if (
       typeof body.secret === 'string' &&
       body.secret.trim() &&
