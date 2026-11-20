@@ -118,8 +118,8 @@ async function createItemForClaim(projectId: string, repoId: string, ev: Workflo
       type: 'blocked',
       projectId,
       payload: {
-        kind: 'pipeline', workflow: ev.workflowName, repo: ev.repoFullName, branch: ev.branch, sha: ev.headSha.slice(0, 7),
-        actor: ev.actor, url: ev.htmlUrl || '', failures: 1,
+        kind: 'pipeline', title: `${ev.workflowName} on ${ev.repoFullName}@${ev.branch}`, workflow: ev.workflowName, repo: ev.repoFullName,
+        branch: ev.branch, sha: ev.headSha.slice(0, 7), actor: ev.actor, url: ev.htmlUrl || '', failures: 1,
       },
     });
   } catch (e) {

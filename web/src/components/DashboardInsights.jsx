@@ -25,7 +25,14 @@ const MAX_SHOWN = 6;
 
 function inboxLabel(item) {
   if (item.type === 'blocked' && item.payload?.kind === 'turn-interrupted') return 'Turn cut off';
+  if (item.type === 'blocked' && item.payload?.kind === 'pipeline') return 'Deploy failed';
   return INBOX_LABELS[item.type] || 'Needs attention';
+}
+
+/** A pipeline item stored before its payload carried a title: "workflow on repo@branch". */
+function pipelineTitle(item) {
+  const p = item.payload;
+  return p?.kind === 'pipeline' && p.workflow ? `${p.workflow} on ${p.repo || ''}@${p.branch || ''}` : '';
 }
 
 function inboxTone(item) {
@@ -61,7 +68,7 @@ export function buildAttention({ inbox = [], idleClosing = [], recentSessions = 
       key: `inbox-${item.id}`,
       tone: inboxTone(item),
       label: inboxLabel(item),
-      title: clip(item.workflow_goal || item.payload?.title || item.payload?.question || 'Session', 70),
+      title: clip(item.workflow_goal || item.payload?.title || pipelineTitle(item) || item.payload?.question || 'Session', 70),
       detail: clip(item.payload?.message || item.payload?.description || item.payload?.question || '', 140),
       project: item.project_name || '',
       href: item.project_id && item.workflow_id ? href(item.project_id, 'sessions', item.workflow_id) : '#/inbox',

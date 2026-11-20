@@ -476,6 +476,7 @@
       "tests": [
         "test/dashboard.test.ts",
         "test/stats-repo.test.ts",
+        "test/dashboard-attention.test.ts",
         "test/web-dashboard-insights.test.ts",
         "test/web-mission-control.test.ts",
         "test/web-portal-interactions.test.ts"

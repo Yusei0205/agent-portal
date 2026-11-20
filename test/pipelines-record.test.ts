@@ -55,7 +55,7 @@ describe('recordPipelineRun', () => {
     assert.equal(it1.length, 1);
     assert.equal(it1[0].type, 'blocked');
     assert.deepEqual(JSON.parse(it1[0].payload), {
-      kind: 'pipeline', workflow: 'Deploy portal', repo: 'acme/app', branch: 'main', sha: 'abcdef1', actor: 'dev',
+      kind: 'pipeline', title: 'Deploy portal on acme/app@main', workflow: 'Deploy portal', repo: 'acme/app', branch: 'main', sha: 'abcdef1', actor: 'dev',
       url: 'https://github.com/acme/app/actions/runs/100', failures: 1,
     });
     assert.equal(sent.length, 1);
