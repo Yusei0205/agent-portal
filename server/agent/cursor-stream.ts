@@ -157,7 +157,8 @@ export function handleCursorEvent(event: Json, state: CursorStreamState, emit: C
       const out = state.pendingBreak && state.text ? '\n\n' + text : text;
       state.pendingBreak = false;
       state.text += out;
-      emit('assistant-text', { text: out });
+      // Streamed pieces are partial text: `stream: true` tells the session view to join them as they are, not one per line.
+      emit('assistant-text', isDelta ? { text: out, stream: true } : { text: out });
       return;
     }
     case 'tool_call': {
@@ -180,6 +181,39 @@ export function handleCursorEvent(event: Json, state: CursorStreamState, emit: C
     default:
       return;
   }
+}
+
+/**
+ * Batches the CLI's per-token pieces of text and thought into a few events. Cursor sends one event per token, and every event is
+ * stored (a DynamoDB write in the cloud) and pushed to the browser, so a short reply became dozens of writes and some pieces were
+ * lost on the way. A batch is sent after `flushMs`, when it reaches `maxChars`, before any other kind of event (so a tool call
+ * never overtakes the text before it) and at the end. Anything that is not streamed text passes straight through.
+ */
+export function createTextCoalescer(emit: CursorEmit, opts: { flushMs?: number; maxChars?: number } = {}) {
+  const flushMs = opts.flushMs ?? 120;
+  const maxChars = opts.maxChars ?? 800;
+  let pending: { type: string; text: string } | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const flush = (): void => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    if (!pending) return;
+    const p = pending;
+    pending = null;
+    emit(p.type, p.type === 'assistant-text' ? { text: p.text, stream: true } : { text: p.text });
+  };
+  return {
+    emit(type: string, payload: object): void {
+      const text = (payload as { text?: unknown }).text;
+      const streamed = typeof text === 'string' && ((type === 'assistant-text' && (payload as { stream?: unknown }).stream === true) || type === 'agent-thought');
+      if (!streamed) { flush(); emit(type, payload); return; }
+      if (pending && pending.type !== type) flush();
+      if (!pending) pending = { type, text: '' };
+      pending.text += text as string;
+      if (pending.text.length >= maxChars) flush();
+      else if (!timer) { timer = setTimeout(flush, flushMs); timer.unref?.(); }
+    },
+    flush,
+  };
 }
 
 /**

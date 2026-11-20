@@ -5,7 +5,7 @@
  */
 
 import { spawnCursor } from '../cursor-cmd.ts';
-import { createCursorStreamReader, newCursorStreamState, type CursorEmit, type CursorStreamState } from './cursor-stream.ts';
+import { createCursorStreamReader, createTextCoalescer, newCursorStreamState, type CursorEmit, type CursorStreamState } from './cursor-stream.ts';
 
 const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9-]{7,99}$/;
@@ -62,11 +62,12 @@ export async function driveCursorTurn(o: CursorTurnOptions): Promise<CursorTurnR
   let stderrTail = '';
   let lastEventAt = Date.now();
   let reported: string | null = null;
+  // Per-token pieces are batched (see createTextCoalescer); everything else goes through at once, in order.
+  const batched = createTextCoalescer((type, payload) => { lastEventAt = Date.now(); o.emit(type, payload); });
   const reader = createCursorStreamReader(
     state,
     (type, payload) => {
-      lastEventAt = Date.now();
-      o.emit(type, payload);
+      batched.emit(type, payload);
       if (state.sessionId && state.sessionId !== reported) { reported = state.sessionId; o.onSession?.(reported); }
     },
     (line) => { if (process.env.PORTAL_DEBUG_SDK) process.stderr.write(`[cursor] ${line}\n`); },
@@ -102,6 +103,7 @@ export async function driveCursorTurn(o: CursorTurnOptions): Promise<CursorTurnR
   } catch (e) { spawnError = e as Error; }
   finally { clearInterval(heartbeat); o.signal?.removeEventListener('abort', onAbort); }
   reader.end();
+  batched.flush();
   return { state, exitCode, spawnError, stderrTail };
 }
 
