@@ -767,7 +767,9 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
   const [jiraProject, setJiraProject] = useState('');
   const [q, setQ]                     = useState('');
   const [status, setStatus]           = useState('');
-  const [assigneeMe, setAssigneeMe]   = useState(true);
+  // 'me' | 'any' | 'unassigned' | a Jira account id
+  const [assignee, setAssignee]       = useState('me');
+  const [assignees, setAssignees]     = useState([]);
   const [statuses, setStatuses]       = useState([]);
   const [issues, setIssues]           = useState(null);
   const { sorted: sortedIssues, sortProps } = useSort(issues, {
@@ -796,6 +798,18 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
       .catch(() => setStatuses([]));
   }, [projectId, jiraProject]);
 
+  // The people tickets can be assigned to in this project, for the assignee filter. A chosen person from another project
+  // does not carry over: the filter goes back to "me".
+  useEffect(() => {
+    let live = true;
+    setAssignee((cur) => (['me', 'any', 'unassigned'].includes(cur) ? cur : 'me'));
+    api
+      .get(`/api/projects/${projectId}/jira/assignees${jiraProject ? `?project=${encodeURIComponent(jiraProject)}` : ''}`)
+      .then((r) => { if (live) setAssignees(r.assignees ?? []); })
+      .catch(() => { if (live) setAssignees([]); });
+    return () => { live = false; };
+  }, [projectId, jiraProject]);
+
   // Debounce search
   const [debouncedQ, setDebouncedQ] = useState('');
   useEffect(() => {
@@ -809,7 +823,7 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
       setLoading(true);
       setLoadErr(null);
       try {
-        const params = new URLSearchParams({ assignee: assigneeMe ? 'me' : 'any' });
+        const params = new URLSearchParams({ assignee });
         if (jiraProject) params.set('project', jiraProject);
         if (debouncedQ) params.set('q', debouncedQ);
         if (status) params.set('status', status);
@@ -830,7 +844,7 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
         if (id === loadIdRef.current) setLoading(false);
       }
     },
-    [projectId, jiraProject, debouncedQ, status, assigneeMe, nextPage],
+    [projectId, jiraProject, debouncedQ, status, assignee, nextPage],
   );
 
   useEffect(() => {
@@ -838,7 +852,7 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
     setNextPage(null);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jiraProject, debouncedQ, status, assigneeMe]);
+  }, [jiraProject, debouncedQ, status, assignee]);
 
   return (
     <div
@@ -937,15 +951,25 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
             </select>
           )}
 
-          {/* Assigned-to-me toggle */}
-          <label className="choice ticket-filter-toggle">
-            <input
-              type="checkbox"
-              checked={assigneeMe}
-              onChange={(e) => setAssigneeMe(e.target.checked)}
-            />
-            <span>Assigned to me</span>
-          </label>
+          {/* Assignee filter */}
+          <select
+            aria-label="Assignee filter"
+            className="input"
+            style={{ maxWidth: 180 }}
+            value={assignee}
+            onChange={(e) => setAssignee(e.target.value)}
+          >
+            <option value="me">Assigned to me</option>
+            <option value="any">Anyone</option>
+            <option value="unassigned">Unassigned</option>
+            {assignees.length > 0 && (
+              <optgroup label="People">
+                {assignees.map((a) => (
+                  <option key={a.accountId} value={a.accountId}>{a.name}</option>
+                ))}
+              </optgroup>
+            )}
+          </select>
         </div>
 
         {/* Issue list */}
@@ -970,14 +994,14 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
           )}
           {!loading && issues && issues.length === 0 && (
             <p className="muted small" style={{ padding: '16px 18px' }}>
-              {assigneeMe ? (
+              {assignee === 'me' ? (
                 <>
                   No open tickets assigned to you.{' '}
                   <button
                     type="button"
                     className="btn btn-ghost btn-sm"
                     style={{ display: 'inline', padding: '0 4px' }}
-                    onClick={() => setAssigneeMe(false)}
+                    onClick={() => setAssignee('any')}
                   >
                     Show all tickets
                   </button>

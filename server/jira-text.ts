@@ -42,6 +42,9 @@ export interface TicketDetail {
   subtasks: { key: string; summary: string; status: string }[];
 }
 
+/** A Jira account id as it appears in an assignee filter: letters, digits, colon, dash, underscore. */
+export const ACCOUNT_ID_RE = /^[A-Za-z0-9:_-]{1,128}$/;
+
 export const jqlStr = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 
 export const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '\n…(shortened)' : s);
@@ -72,8 +75,12 @@ export function buildJql(
   // keys.length === 0 → no project filter (all-projects mode)
 
   if (m.jql.trim()) parts.push(`(${m.jql.trim()})`);
-  if (o.assignee === 'me') parts.push('assignee = currentUser()', 'statusCategory != Done');
-  else parts.push('statusCategory != Done');
+  // assignee: 'me', 'unassigned', a Jira account id, or anything else (including 'any') for no assignee clause.
+  const a = o.assignee ?? '';
+  if (a === 'me') parts.push('assignee = currentUser()');
+  else if (a === 'unassigned') parts.push('assignee is EMPTY');
+  else if (ACCOUNT_ID_RE.test(a) && a !== 'any') parts.push(`assignee = ${jqlStr(a)}`);
+  parts.push('statusCategory != Done');
   if (o.status) parts.push(`status = ${jqlStr(o.status)}`);
   const q = (o.q ?? '').trim();
   if (q) {
