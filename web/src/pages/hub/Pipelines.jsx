@@ -100,7 +100,8 @@ function ChipInput({ id, label, hint, values, onChange, readOnly, placeholder })
   };
   return (
     <div className="field af-field">
-      <label htmlFor={id}>{label}</label>
+      {/* Read-only has no input, so the label points at nothing. */}
+      <label htmlFor={readOnly ? undefined : id}>{label}</label>
       <ul className="af-chips" aria-label={label}>
         {values.map((v) => (
           <li key={v} className="af-chip">{v}
@@ -120,7 +121,7 @@ function ChipInput({ id, label, hint, values, onChange, readOnly, placeholder })
   );
 }
 
-function SettingsPanel({ projectId, canManage, requestConfirm, toast }) {
+function SettingsPanel({ projectId, canManage, requestConfirm, toast, onSaved }) {
   const [data, setData] = useState(null);
   const [wf, setWf] = useState([]);
   const [br, setBr] = useState([]);
@@ -149,6 +150,7 @@ function SettingsPanel({ projectId, canManage, requestConfirm, toast }) {
       const r = await api.put(`/api/projects/${projectId}/pipelines/settings`, { deploy_workflows: wf, alert_branches: br });
       setWf(r.settings.deploy_workflows); setBr(r.settings.alert_branches);
       toast('Pipeline settings saved', 'ok');
+      onSaved?.(); // the alerting branches decide which runs the tab lists
     } catch (err) { setError(err.message || 'Could not save the settings'); }
     finally { setBusy(false); }
   };
@@ -171,8 +173,8 @@ function SettingsPanel({ projectId, canManage, requestConfirm, toast }) {
     try {
       const r = await api.post(`/api/projects/${projectId}/pipelines/chat/test`, {});
       toast(r.ok ? 'Test message sent' : 'The channel did not accept the test message', r.ok ? 'ok' : 'error');
-      const s = await api.get(`/api/projects/${projectId}/pipelines/settings`);
-      setData(s);
+      // Refresh the delivery status; a failure here must not replace the toast above.
+      try { setData(await api.get(`/api/projects/${projectId}/pipelines/settings`)); } catch { /* status shows on the next load */ }
     } catch (err) { toast(err.message || 'Could not send the test message', 'error'); }
     finally { setBusy(false); }
   };
@@ -222,11 +224,14 @@ export function Pipelines({ projectId, canManage = false, requestConfirm = async
   const [error, setError] = useState(null);
   const [openKey, setOpenKey] = useState('');
   const timer = useRef(0);
+  const seq = useRef(0);
 
+  // Only the newest request's answer is applied (a quick toggle or refresh must not be overwritten by an older answer).
   const load = useCallback(() => {
+    const n = ++seq.current;
     return api.get(`/api/projects/${projectId}/pipelines${showAll ? '?all=1' : ''}`)
-      .then((r) => { setData(r); setError(null); })
-      .catch((e) => setError(e.message || 'Failed to load pipelines'));
+      .then((r) => { if (n === seq.current) { setData(r); setError(null); } })
+      .catch((e) => { if (n === seq.current) setError(e.message || 'Failed to load pipelines'); });
   }, [projectId, showAll]);
 
   useEffect(() => { load(); }, [load]);
@@ -274,7 +279,7 @@ export function Pipelines({ projectId, canManage = false, requestConfirm = async
           )}
         </section>
       ))}
-      <SettingsPanel projectId={projectId} canManage={canManage} requestConfirm={requestConfirm} toast={toast} />
+      <SettingsPanel projectId={projectId} canManage={canManage} requestConfirm={requestConfirm} toast={toast} onSaved={load} />
     </div>
   );
 }

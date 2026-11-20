@@ -861,11 +861,42 @@ async function main() {
           if (await p.getByLabel('Chat webhook URL').count() !== 0) throw new Error('A member sees the chat URL field');
           if (await p.getByRole('button', { name: 'Save settings' }).count() !== 0) throw new Error('A member sees Save settings');
           if (await p.getByRole('button', { name: 'Add', exact: true }).count() !== 0) throw new Error('A member can add chips');
+          if (await p.locator('label[for="pl-wf"], label[for="pl-br"]').count() !== 0) throw new Error('A read-only chip label points at a missing input');
         } finally {
           await p.unroute(stateFilter, memberState);
           await p.unroute(projectFilter, projectState);
           await p.unroute(listFilter, listHandler);
           await p.unroute(settingsFilter, settingsHandler);
+        }
+      }, page);
+      await test('Pipelines tab: saving settings reloads the list; a failed status refresh keeps the test-message toast', async (p) => {
+        let listCalls = 0;
+        const countingList = (route: import('playwright').Route) => { listCalls++; return listHandler(route); };
+        let settingsGets = 0;
+        const flakySettings = (route: import('playwright').Route) => {
+          if (route.request().method() === 'GET' && ++settingsGets > 1) return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'boom' }) });
+          return settingsHandler(route);
+        };
+        const testFilter = (url: URL) => url.pathname === `${listPath}/chat/test`;
+        const testHandler = (route: import('playwright').Route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) });
+        await p.route(listFilter, countingList);
+        await p.route(settingsFilter, flakySettings);
+        await p.route(testFilter, testHandler);
+        try {
+          await openTab(p);
+          await p.locator('[data-testid="pipeline-run"]', { hasText: 'Deploy portal' }).waitFor({ timeout: 5000 });
+          const before = listCalls;
+          await p.getByRole('button', { name: 'Save settings' }).click();
+          await p.getByText('Pipeline settings saved').first().waitFor({ timeout: 5000 });
+          for (let i = 0; i < 20 && listCalls === before; i++) await p.waitForTimeout(100);
+          if (listCalls === before) throw new Error('Saving the settings did not reload the list');
+          await p.getByRole('button', { name: 'Send test message' }).click();
+          await p.getByText('Test message sent').first().waitFor({ timeout: 5000 });
+          if (await p.getByText('boom').count() !== 0) throw new Error('The status refresh error replaced the toast');
+        } finally {
+          await p.unroute(listFilter, countingList);
+          await p.unroute(settingsFilter, flakySettings);
+          await p.unroute(testFilter, testHandler);
         }
       }, page);
       await test('Pipelines tab: no horizontal page scroll at 390 px', async (p) => {
