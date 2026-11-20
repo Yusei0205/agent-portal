@@ -121,6 +121,9 @@ jobs:
       # Agent turns never fall back to a Lambda invocation (15-minute cap, and a turn there dies without a trace) when the job runtime cannot take them:
       # the turn fails at once with the reason. Other background jobs keep the fallback. Set the variable to `lambda` to allow it again.
       JOB_RUNTIME_FALLBACK: ${{ vars.JOB_RUNTIME_FALLBACK || 'execute-run' }}
+      # Minutes the job runtime keeps an idle session after its job ends (1 to 480). The session holds its memory, and its bill, until
+      # then; 5 was chosen over the stack's 20 because a later job restarts the session from its saved state in seconds.
+      JOB_RUNTIME_IDLE_MINUTES: ${{ vars.JOB_RUNTIME_IDLE_MINUTES || '5' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -251,6 +254,7 @@ jobs:
             -c "jobRuntime=$JOB_RUNTIME"
             -c "jobRuntimeAgentRuns=$JOB_RUNTIME_AGENT_RUNS"
             -c "jobRuntimeFallback=$JOB_RUNTIME_FALLBACK"
+            -c "jobRuntimeIdleMinutes=$JOB_RUNTIME_IDLE_MINUTES"
           )
           if [[ -n "$CODEX_OAUTH_CLIENT_SECRET_ARN" ]]; then
             args+=(-c "codexOAuthSecretArn=$CODEX_OAUTH_CLIENT_SECRET_ARN")

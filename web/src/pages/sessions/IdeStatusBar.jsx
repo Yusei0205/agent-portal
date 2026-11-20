@@ -292,7 +292,8 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 15_000);
+    // Not while the tab is hidden: nobody sees the bar, and every load reads the database.
+    const t = setInterval(() => { if (!document.hidden) load(); }, 15_000);
     return () => clearInterval(t);
   }, [load]);
 
@@ -306,7 +307,8 @@ export function IdeStatusBar({ projectId, workflowId, engine, credentialId, onMo
       .catch(() => { if (live) setLimits((prev) => (prev === undefined ? null : prev)); });
     setLimits(undefined);
     loadLimits();
-    const t = setInterval(loadLimits, 60_000);
+    // Every 3 minutes, and not while the tab is hidden: for Codex and Cursor in the cloud each ask starts a runner machine.
+    const t = setInterval(() => { if (!document.hidden) loadLimits(); }, 180_000);
     return () => { live = false; clearInterval(t); };
   }, [projectId, workflowId, engine]);
 

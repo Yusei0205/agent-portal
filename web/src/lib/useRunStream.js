@@ -85,6 +85,7 @@ export function useRunStream(runId) {
     const alive = { v: true };
     let unsubRealtime = null;
     let pollTimer = null;
+    let onVisible = null;
     let done = false;
 
     const addEvent = (ev) => {
@@ -138,18 +139,28 @@ export function useRunStream(runId) {
       // Safety net: the live channel can miss events (a dropped connection, a late subscribe, a token that ran out
       // on a page left open). Until the run reports it has ended, ask for what is new every few seconds: cheap now,
       // since only events after the last one shown come back. Slower after 20 minutes, and never given up on while the
-      // page is open and the run is going (a run can last hours).
+      // page is open and the run is going (a run can last hours). Every ask is a database read, so it backs off with the age of
+      // the run (2.5 s, then 5 s after 2 minutes, then 15 s after 20 minutes) and does not ask at all while the tab is hidden:
+      // coming back to the tab asks at once.
       const started = Date.now();
+      const pollDelay = () => { const age = Date.now() - started; return age > 20 * 60_000 ? 15_000 : age > 2 * 60_000 ? 5000 : 2500; };
       const poll = async () => {
         if (!alive.v || done || Date.now() - started > 6 * 3600_000) return;
-        try { await loadHistory(); } catch { /* try again */ }
-        if (alive.v && !done) pollTimer = setTimeout(poll, Date.now() - started > 20 * 60_000 ? 8000 : 2500);
+        if (!document.hidden) { try { await loadHistory(); } catch { /* try again */ } }
+        if (alive.v && !done) pollTimer = setTimeout(poll, pollDelay());
       };
       pollTimer = setTimeout(poll, 2500);
+      onVisible = () => {
+        if (document.hidden || !alive.v || done) return;
+        clearTimeout(pollTimer);
+        poll();
+      };
+      document.addEventListener('visibilitychange', onVisible);
     });
 
     return () => {
       alive.v = false;
+      if (onVisible) document.removeEventListener('visibilitychange', onVisible);
       clearTimeout(retryTimer.current);
       if (pollTimer) clearTimeout(pollTimer);
       esRef.current?.close();
