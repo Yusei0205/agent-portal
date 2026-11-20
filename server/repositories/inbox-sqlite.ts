@@ -104,7 +104,7 @@ export class SqliteInboxRepository implements InboxRepository {
     return Number(row?.n ?? 0);
   }
 
-  async resolveConditional(id: string, userId: string, resolvedAt: string): Promise<boolean> {
+  async resolveConditional(id: string, userId: string | null, resolvedAt: string): Promise<boolean> {
     const result = dbRun(
       'UPDATE p6_inbox SET resolved = 1, resolved_by = ?, resolved_at = ? WHERE id = ? AND resolved = 0',
       userId,

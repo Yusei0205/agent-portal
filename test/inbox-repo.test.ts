@@ -205,6 +205,18 @@ function runContract(label: string, makeRepo: () => Promise<InboxRepository>): v
       assert.ok(count >= 2);
     });
 
+    test('resolveConditional -- a system resolve (null user) succeeds and stores no user', async () => {
+      const id = generateId();
+      const pid = `rcn-${sfx}`;
+      maybeProject(pid);
+      await repo.create({ id, project_id: pid, workflow_id: null, run_id: null, type: 'push', payload: '{}', created_at: now() });
+      assert.equal(await repo.resolveConditional(id, null, now()), true);
+      assert.equal(await repo.resolveConditional(id, null, now()), false);
+      const item = await repo.getById(id);
+      assert.equal(item?.resolved, 1);
+      assert.equal(item?.resolved_by, null);
+    });
+
     test('resolveConditional -- one winner among concurrent resolves', async () => {
       const id = generateId();
       const ts = now();

@@ -126,12 +126,13 @@ export interface InboxRepository {
   /**
    * Atomically resolve an inbox item.
    * Only resolves if the item is currently unresolved (conditional write).
+   * userId null = resolved automatically by the system (stored as NULL; there is no 'system' user row).
    * Returns true when resolved by this call; false when already resolved (race).
    *
    * SQLite: UPDATE WHERE resolved = 0, checks changes > 0.
    * DynamoDB: TransactWriteItems — conditional UpdateItem + counter decrements.
    */
-  resolveConditional(id: string, userId: string, resolvedAt: string): Promise<boolean>;
+  resolveConditional(id: string, userId: string | null, resolvedAt: string): Promise<boolean>;
 }
 
 // ── Singleton ─────────────────────────────────────────────────────────────────

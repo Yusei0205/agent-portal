@@ -83,7 +83,7 @@ async function dropStaleApprovals(items: InboxRecord[]): Promise<InboxRecord[]> 
       const row = await sessRepo.getInputByRunAndId(runId, inputId);
       if (row && row.status === 'pending') return;
       stale.add(item.id);
-      await inboxRepo.resolveConditional(item.id, 'system', now());
+      await inboxRepo.resolveConditional(item.id, null, now());
     } catch { /* leave it listed; the next load tries again */ }
   }));
   return stale.size ? items.filter((i) => !stale.has(i.id)) : items;
@@ -265,12 +265,12 @@ export function registerInboxRoutes(): void {
       const sessRepo = getSessionsRepository();
       const inputRow = await sessRepo.getInputByRunAndId(runId, inputId);
       if (!inputRow || inputRow.status === 'expired') {
-        await inboxRepo.resolveConditional(req.params.id, 'system', now()).catch(() => false);
+        await inboxRepo.resolveConditional(req.params.id, null, now()).catch(() => false);
         sendJson(res, 409, { error: 'Nobody answered this in time, so the agent was told to carry on without it.' });
         return;
       }
       if (inputRow.status !== 'pending') {
-        await inboxRepo.resolveConditional(req.params.id, 'system', now()).catch(() => false);
+        await inboxRepo.resolveConditional(req.params.id, null, now()).catch(() => false);
         sendJson(res, 409, { error: 'This was already answered.' });
         return;
       }

@@ -284,7 +284,7 @@ export class DynamoDbInboxRepository implements InboxRepository {
     return res.Item ? Math.max(0, getNumber(res.Item, 'count')) : 0;
   }
 
-  async resolveConditional(id: string, userId: string, resolvedAt: string): Promise<boolean> {
+  async resolveConditional(id: string, userId: string | null, resolvedAt: string): Promise<boolean> {
     // Read the item first to get project_id (needed for counter decrement)
     const existing = await this.getById(id);
     if (!existing) return false;
@@ -308,7 +308,7 @@ export class DynamoDbInboxRepository implements InboxRepository {
           ExpressionAttributeValues: {
             ':one': { N: '1' },
             ':zero': { N: '0' },
-            ':resolvedBy': av(userId),
+            ':resolvedBy': userId === null ? { NULL: true } : av(userId),
             ':resolvedAt': av(resolvedAt),
             ':newSk': av(newSortKey),
           },
