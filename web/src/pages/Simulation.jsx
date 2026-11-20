@@ -88,8 +88,8 @@ function ImportDialog({ projectId, groups, onClose, onDone }) {
   useEffect(() => () => { alive.current = false; }, []);
 
   const ext = file ? (file.name.match(/\.[^.]+$/)?.[0] || '').toLowerCase() : '';
-  const kind = ext === '.json' ? 'json' : ext === '.docx' ? 'docx' : ext === '.xlsx' ? 'xlsx' : '';
-  const useAi = kind === 'docx' || (kind === 'xlsx' && mode === 'ai');
+  const kind = ext === '.json' ? 'json' : ext === '.docx' ? 'docx' : ext === '.pdf' ? 'pdf' : ext === '.xlsx' ? 'xlsx' : '';
+  const useAi = kind === 'docx' || kind === 'pdf' || (kind === 'xlsx' && mode === 'ai');
   const existingGroup = groups.find((g) => g.toLowerCase() === group.trim().toLowerCase()) || '';
 
   const finish = (r) => { setResult(r); onDone(); };
@@ -149,7 +149,7 @@ function ImportDialog({ projectId, groups, onClose, onDone }) {
           {!result && (
             <>
               <p className="muted small">
-                A Word or Excel document in any layout is read by AI. An OpenAPI file or a Postman collection (JSON) is already structured
+                A Word, PDF or Excel document in any layout is read by AI. An OpenAPI file or a Postman collection (JSON) is already structured
                 and is read directly, with no AI. Importing an updated document again adds a new version to the APIs it recognises, and
                 the changes show on the review screen.
               </p>
@@ -160,7 +160,7 @@ function ImportDialog({ projectId, groups, onClose, onDone }) {
                   <label className={`btn${busy ? ' disabled' : ''}`}>
                     <Icon name="upload" size={14} />
                     {file ? 'Change file' : 'Choose file'}
-                    <input id="sim-file" ref={input} type="file" accept=".xlsx,.docx,.json" disabled={busy} className="sim-file-input"
+                    <input id="sim-file" ref={input} type="file" accept=".xlsx,.docx,.pdf,.json" disabled={busy} className="sim-file-input"
                       onChange={(e) => {
                         const f = e.target.files?.[0] || null;
                         setFile(f); setError(''); setMode('ai');
@@ -169,7 +169,7 @@ function ImportDialog({ projectId, groups, onClose, onDone }) {
                   </label>
                   <span className="small sim-file-name" title={file?.name || ''}>{file ? file.name : 'No file chosen'}</span>
                 </div>
-                {file && !kind && <span className="field-hint">Choose a .docx, .xlsx or .json file.</span>}
+                {file && !kind && <span className="field-hint">Choose a .docx, .pdf, .xlsx or .json file.</span>}
                 {kind === 'json' && <span className="field-hint">OpenAPI or Postman: read directly, no AI needed.</span>}
               </div>
 

@@ -320,6 +320,20 @@ export async function pptxSlides(
 
 // ── PDF ───────────────────────────────────────────────────────────────────────
 
+/**
+ * Which text sizes are headings: the size most of the text is set in is the body; the sizes clearly above it (at least 15 %),
+ * biggest first, are levels 1 to 3. A document set in one size has none.
+ */
+export function pdfHeadingLevels(lines: Array<{ text: string; size: number }>): Map<number, number> {
+  const chars = new Map<number, number>();
+  for (const l of lines) if (l.size > 0) chars.set(l.size, (chars.get(l.size) ?? 0) + l.text.length);
+  let body = 0;
+  let most = 0;
+  for (const [size, n] of chars) if (n > most) { most = n; body = size; }
+  const sizes = [...chars.keys()].filter((s) => body > 0 && s >= body * 1.15).sort((a, b) => b - a);
+  return new Map(sizes.map((s, i) => [s, Math.min(i + 1, 3)] as [number, number]));
+}
+
 export async function pdfToMarkdown(filePath: string): Promise<string> {
   requirePdfCapability();
   const buf = fs.readFileSync(filePath);
@@ -334,33 +348,43 @@ export async function pdfToMarkdown(filePath: string): Promise<string> {
     })
     .promise;
 
-  const lines: string[] = [];
+  // Each line keeps the size of its biggest text: a PDF has no heading styles, so a line set larger than the body text is the
+  // heading (the size is the only sign the page gives).
+  const lines: Array<{ text: string; size: number }> = [];
   for (let n = 1; n <= doc.numPages; n++) {
     const page = await doc.getPage(n);
     const tc = await page.getTextContent();
     let line = '';
+    let size = 0;
     let lastY: number | null = null;
     const flush = () => {
       const t = line.replace(/\s+/g, ' ').trim();
-      if (t) lines.push(t);
+      if (t) lines.push({ text: t, size });
       line = '';
+      size = 0;
     };
     for (const item of tc.items as any[]) {
       if (typeof item.str !== 'string') continue;
       const y: number | null = item.transform?.[5] ?? null;
       if (lastY !== null && y !== null && Math.abs(y - lastY) > 2 && line) flush();
       line += item.str;
+      if (item.str.trim()) size = Math.max(size, Math.round(Math.abs(Number(item.height) || Number(item.transform?.[3]) || 0) * 2) / 2);
       if (item.hasEOL) flush();
       lastY = y;
     }
     flush();
-    lines.push('');
+    lines.push({ text: '', size: 0 });
     page.cleanup?.();
   }
   await doc.destroy?.();
 
+  const headingLevels = pdfHeadingLevels(lines);
+
   return lines
-    .map((l) => {
+    .map((ln) => {
+      const l = ln.text;
+      const level = headingLevels.get(ln.size);
+      if (level && l.length <= 120 && !/[.:;,]$/.test(l) && !/^[\d\s.]+$/.test(l)) return `\n${'#'.repeat(level)} ${l}\n`;
       const m = l.match(/^(\d+(?:\.\d+){0,3})\.?\s+([A-Z][^.!?]{2,80})$/);
       if (m) return `\n${'#'.repeat(Math.min(m[1].split('.').length + 1, 4))} ${m[1]} ${m[2]}\n`;
       return l;

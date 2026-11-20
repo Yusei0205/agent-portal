@@ -1,5 +1,5 @@
 /**
- * Reading Word and Excel documents of any layout with AI (a stand-in model here), and saving what it finds as drafts.
+ * Reading Word, PDF and Excel documents of any layout with AI (a stand-in model here), and saving what it finds as drafts.
  */
 
 import { describe, test, before, after } from 'node:test';
@@ -11,7 +11,7 @@ import {
 } from '../server/api-sim/ai-extract.ts';
 import { _setImportModel, pickLiveBaseUrl } from '../server/api-sim/ai-import.ts';
 import { getAiAttachmentRepository } from '../server/repositories/ai-attachments.ts';
-import { convertToMarkdown } from '../server/convert.ts';
+import { convertToMarkdown, pdfHeadingLevels } from '../server/convert.ts';
 import type { ModelCall } from '../server/api-sim/ai-extract.ts';
 import type { ApiSpec, Operation } from '../server/api-sim/types.ts';
 
@@ -441,6 +441,123 @@ describe('importing a Word document with AI', () => {
     assert.equal((await fetchJson(baseUrl, m(`/import-jobs/${jobId}`), { cookie: outsider })).status, 404);
     assert.equal((await fetchJson(baseUrl, m('/import-ai'), { body: {}, cookie })).status, 400);
     assert.equal((await fetchJson(baseUrl, m('/import-ai'), { body: { attachmentId: 'nope' }, cookie })).status, 400);
+  });
+});
+
+// ── PDF ──────────────────────────────────────────────────────────────────────
+
+/** A one-page PDF (Helvetica) with the given lines, each [font size, text]. Built by hand so the test needs no PDF library. */
+function pdfBuffer(lines: Array<[number, string]>): Buffer {
+  let y = 800;
+  const ops = ['BT'];
+  for (const [size, text] of lines) {
+    ops.push(`/F1 ${size} Tf 1 0 0 1 50 ${y} Tm (${text.replace(/[()\\]/g, '\\$&')}) Tj`);
+    y -= size + 10;
+  }
+  ops.push('ET');
+  const content = ops.join('\n');
+  const objs = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 5 0 R /Resources << /Font << /F1 4 0 R >> >> >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${content.length} >>\nstream\n${content}\nendstream`,
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets: number[] = [];
+  objs.forEach((o, i) => { offsets.push(out.length); out += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n${offsets.map((o) => String(o).padStart(10, '0') + ' 00000 n \n').join('')}`;
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(out, 'latin1');
+}
+
+const BODY = 'Plain text of the document, set in the body size, long enough to be most of the page.';
+const petPdf = (): Buffer => pdfBuffer([
+  [18, 'API Configuration'], [10, 'Endpoint: UAT: https://uat.example.com/api'], [10, BODY],
+  [14, 'Get Pet'], [10, 'Gets a pet.'], [10, BODY],
+  [12.5, 'Schema'], [10, 'Endpoint Path: pets/get'], [10, 'Method: GET'], [10, BODY],
+  [14, 'Make Pet'], [10, 'Creates a pet.'], [10, BODY],
+  [12.5, 'Schema'], [10, 'Endpoint Path: pets/make'], [10, 'Method: POST'], [10, BODY],
+]);
+
+describe('a PDF document', () => {
+  test('text set larger than the body is a heading, by how much larger', () => {
+    const lines = [{ text: 'x'.repeat(500), size: 10 }, { text: 'Title', size: 18 }, { text: 'Part', size: 14 }, { text: 'Sub', size: 12.5 }, { text: 'Fine print', size: 8 }, { text: 'Almost', size: 11 }];
+    const levels = pdfHeadingLevels(lines);
+    assert.deepEqual([...levels.entries()], [[18, 1], [14, 2], [12.5, 3]]);
+    assert.equal(pdfHeadingLevels([{ text: 'all one size', size: 10 }]).size, 0, 'no headings in a document set in one size');
+  });
+
+  test('the converter keeps the headings, in order, and the text under them', async () => {
+    const fs = await import('node:fs/promises');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const file = path.join(os.tmpdir(), `aiimp-${Date.now()}.pdf`);
+    await fs.writeFile(file, petPdf());
+    const md = await convertToMarkdown(file, 'application/pdf');
+    await fs.rm(file);
+    assert.deepEqual(splitSections(md).filter((s) => s.level > 0).map((s) => `${s.level}:${s.title}`), ['1:API Configuration', '2:Get Pet', '3:Schema', '2:Make Pet', '3:Schema']);
+    assert.match(splitSections(md).find((s) => s.title === 'Schema')!.body, /pets\/get/);
+  });
+
+  test('a long document with no headings is cut into parts the outline can point at', () => {
+    const para = (i: number): string => `Paragraph ${i}: ${'text '.repeat(120)}`;
+    const s = splitSections(Array.from({ length: 40 }, (_, i) => para(i)).join('\n\n'));
+    assert.ok(s.length > 3, 'cut into several parts');
+    assert.ok(s.every((x) => x.level === 1 && /^Part \d+$/.test(x.title) && x.body.length <= 6_000 + 700));
+    assert.equal(splitSections('a short note with no headings').length, 1, 'a short one is left alone');
+  });
+});
+
+describe('importing a PDF with AI', () => {
+  let baseUrl: string;
+  let cookie: string;
+  let pid: string;
+  const m = (p: string) => `/api/projects/${pid}/sim${p}`;
+
+  before(async () => {
+    _setImportModel(() => standIn([]));
+    baseUrl = (await createTestServer()).baseUrl;
+    await fetchJson(baseUrl, '/api/auth/setup', { body: { email: 'a@pdfimp.test', password: 'adminpassword1', name: 'A' } });
+    cookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'a@pdfimp.test', password: 'adminpassword1' } })).cookie ?? '';
+    pid = ((await fetchJson(baseUrl, '/api/projects', { body: { name: 'PDF import' }, cookie })).body as { project: { id: string } }).project.id;
+  });
+  after(async () => { _setImportModel(null); await cleanup(); });
+
+  const upload = async (buf: Buffer, name: string): Promise<{ status: number; id?: string }> => {
+    const fd = new FormData();
+    fd.append('file', new Blob([new Uint8Array(buf)]), name);
+    const res = await fetch(`${baseUrl}/api/projects/${pid}/ai-attachments`, { method: 'POST', headers: { 'X-Requested-With': 'agent-portal', Cookie: cookie }, body: fd });
+    return { status: res.status, id: res.status === 201 ? ((await res.json()) as { attachment: { id: string } }).attachment.id : undefined };
+  };
+  const finish = async (attachmentId: string): Promise<Record<string, any>> => {
+    const started = await fetchJson(baseUrl, m('/import-ai'), { body: { attachmentId }, cookie });
+    assert.equal(started.status, 202, JSON.stringify(started.body));
+    const jobId = (started.body as { jobId: string }).jobId;
+    for (let i = 0; i < 200; i++) {
+      const j = (await fetchJson(baseUrl, m(`/import-jobs/${jobId}`), { cookie })).body as { job: Record<string, any> };
+      if (j.job.status !== 'running') return j.job;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error('the job did not finish');
+  };
+
+  test('a PDF is read like a Word document: its APIs become drafts', async () => {
+    const up = await upload(petPdf(), 'spec.pdf');
+    assert.equal(up.status, 201);
+    const job = await finish(up.id!);
+    assert.equal(job.status, 'done', JSON.stringify(job));
+    assert.deepEqual((job.created as Array<{ name: string }>).map((c) => c.name).sort(), ['Get Pet', 'Make Pet']);
+    assert.equal(job.liveBaseUrl, 'https://uat.example.com/api');
+  });
+
+  test('a PDF with no text (a scan) fails with a message that says why', async () => {
+    const up = await upload(pdfBuffer([]), 'scan.pdf');
+    assert.equal(up.status, 201);
+    const job = await finish(up.id!);
+    assert.equal(job.status, 'failed');
+    assert.match(String(job.error), /no text to read/);
   });
 });
 
