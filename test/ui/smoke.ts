@@ -5940,9 +5940,17 @@ async function main() {
           if (await p.locator('[role="toolbar"][aria-label="Graph controls"]').count()) {
             throw new Error('The Agent Network is cards now; it should have no graph zoom toolbar');
           }
-          const newErrors = jsErrors.slice(errorsBefore).filter(
-            (e) => !e.includes('[404]') && !/favicon/i.test(e),
-          );
+          // The mocked payload lists a recent session ("sess-smoke-1") that does not exist, so the dashboard's
+          // session panels get a 404 for it. Chromium logs each as a bare "Failed to load resource ... 404"
+          // console error (no URL) next to our "[404] <url>" entry: ignore exactly as many bare 404 lines as
+          // there are 404s for that fake session, so any other failed request still fails the test.
+          const entries = jsErrors.slice(errorsBefore);
+          let bare404Allowed = entries.filter((e) => e.startsWith('[404]') && e.includes('/sess-smoke-1')).length;
+          const newErrors = entries.filter((e) => {
+            if (e.startsWith('[404]') || /favicon/i.test(e)) return false;
+            if (bare404Allowed > 0 && /Failed to load resource.*404/.test(e)) { bare404Allowed--; return false; }
+            return true;
+          });
           if (newErrors.length > 0) {
             throw new Error(`JS errors on the dashboard: ${newErrors.slice(0, 3).join('; ')}`);
           }
