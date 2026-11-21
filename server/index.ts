@@ -196,6 +196,7 @@ export async function startServer(
   await initIntegrationsRepository();
   await (await import('./repositories/simulation.ts')).initSimulationRepository();
   await initThemesRepository();
+  await (await import('./themes.ts')).applyKyuubitDefaultOnce();
   await initFeedbackRepository();
   await initUserConfigRepository();
   await initAgentcoreLoginRepository();

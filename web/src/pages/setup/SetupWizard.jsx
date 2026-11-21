@@ -94,7 +94,7 @@ export default function SetupWizard({ onDone }) {
       <div className="wizard-card">
         <div className="wizard-brand">
           <img src="/favicon.svg" alt="" width={26} height={26} />
-          <span>Agent Portal Setup</span>
+          <span>Kyuubit Setup</span>
         </div>
 
         <WizardProgress steps={steps} current={step} labels={STEP_LABELS} />

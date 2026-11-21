@@ -12,7 +12,7 @@
  *   - CSS vars set via element.style.setProperty on :root
  *
  * localStorage keys:
- *   portal-template-id  — active template id (default: aethrix-night)
+ *   portal-template-id  — active template id (default: kyuubit)
  *   portal-mode         — user mode choice: dark | light | system (default: system)
  *   portal-theme-etag   — ETag from last /api/theme fetch
  *   portal-theme-cached — JSON of last /api/theme payload
@@ -41,7 +41,7 @@ function lsSet(key, val) {
 
 /** @returns {string} */
 export function getActiveTemplateId() {
-  return lsGet(LS_TEMPLATE) || 'aethrix-night';
+  return lsGet(LS_TEMPLATE) || 'kyuubit';
 }
 
 /**
@@ -221,7 +221,7 @@ export async function fetchAndApplyTheme() {
  *
  * Usage:
  *   const tmpl = useActiveTemplate();
- *   const name = tmpl?.brand?.productName || 'Agent Portal';
+ *   const name = tmpl?.brand?.productName || 'Kyuubit';
  */
 export function useActiveTemplate() {
   const [tmpl, setTmpl] = useState(() => getTemplate(getActiveTemplateId()));

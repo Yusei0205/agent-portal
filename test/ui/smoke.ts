@@ -4730,7 +4730,7 @@ async function main() {
       console.log('\n45. Theme / template system');
       currentSectionId = '45b';
 
-      await test('Default template applied on first load (data-template=aethrix-night)', async (p) => {
+      await test('Default template applied on first load (data-template=kyuubit)', async (p) => {
         // Clear any saved template preference so we get the true default
         await p.evaluate(() => {
           try { localStorage.removeItem('portal-template-id'); } catch {}
@@ -4741,9 +4741,9 @@ async function main() {
           document.documentElement.getAttribute('data-template'),
         );
         if (!template) throw new Error('data-template attribute not set on <html>');
-        // Default is aethrix-night but allow any non-null value
-        if (template !== 'aethrix-night') {
-          console.log(`  ℹ  data-template="${template}" (expected aethrix-night for fresh install)`);
+        // Default is kyuubit but allow any non-null value
+        if (template !== 'kyuubit') {
+          console.log(`  ℹ  data-template="${template}" (expected kyuubit for fresh install)`);
         }
       }, page);
 
@@ -4935,7 +4935,7 @@ async function main() {
           await route.fulfill({
             status: 200,
             contentType: 'application/json',
-            body: JSON.stringify({ template: { id: 'aethrix-night', brand: { productName: 'Agent Portal' } }, builtin: true, overridden: false }),
+            body: JSON.stringify({ template: { id: 'aethrix-night', brand: { productName: 'Kyuubit' } }, builtin: true, overridden: false }),
           });
         });
 

@@ -11,7 +11,7 @@ import { getTemplate, getActiveTemplateId } from '../lib/theme.js';
  */
 function AuthFrame({ title, intro, children }) {
   const tmpl = getTemplate(getActiveTemplateId());
-  const productName = tmpl?.brand?.productName || 'Agent Portal';
+  const productName = tmpl?.brand?.productName || 'Kyuubit';
   const logoSvg     = tmpl?.brand?.logoSvg;
   const logoDataUrl = logoSvg
     ? `data:image/svg+xml,${encodeURIComponent(logoSvg)}`
@@ -58,7 +58,7 @@ const LOGIN_STEPS = [
  */
 export function Login({ onDone, googleEnabled = false, expired = false }) {
   const tmpl = getTemplate(getActiveTemplateId());
-  const productName = tmpl?.brand?.productName || 'Agent Portal';
+  const productName = tmpl?.brand?.productName || 'Kyuubit';
   const logoSvg = tmpl?.brand?.logoSvg;
   const logoDataUrl = logoSvg ? `data:image/svg+xml,${encodeURIComponent(logoSvg)}` : '/favicon.svg';
 

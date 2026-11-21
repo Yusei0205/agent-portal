@@ -15,6 +15,7 @@ import twilightJson     from '../../../../shared/themes/twilight.json';
 import terminalJson     from '../../../../shared/themes/terminal.json';
 import kiroIdeJson      from '../../../../shared/themes/kiro-ide.json';
 import graphiteJson     from '../../../../shared/themes/graphite.json';
+import kyuubitJson      from '../../../../shared/themes/kyuubit.json';
 
 // ── Font family name → full CSS stack ────────────────────────────────────────
 // Covers every name in the server validator allow-list.
@@ -127,9 +128,9 @@ export function getTemplates() {
   return [...registry.values()];
 }
 
-/** Get a template by id (falls back to aethrix-night). */
+/** Get a template by id (falls back to kyuubit). */
 export function getTemplate(id) {
-  return registry.get(id) || registry.get('aethrix-night');
+  return registry.get(id) || registry.get('kyuubit');
 }
 
 /**
@@ -152,3 +153,4 @@ registerTemplate(twilightJson);
 registerTemplate(terminalJson);
 registerTemplate(kiroIdeJson);
 registerTemplate(graphiteJson);
+registerTemplate(kyuubitJson);

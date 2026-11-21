@@ -87,7 +87,7 @@ export const HELP_TOPICS = [
     title: 'Getting started',
     icon: 'info',
     summary:
-      'Agent Portal is a self-hosted place to run Claude Code and Kiro agents on your repositories, review their code, test your apps and keep the knowledge they need.',
+      'Kyuubit is a self-hosted place to run Claude Code and Kiro agents on your repositories, review their code, test your apps and keep the knowledge they need.',
     sections: [
       {
         heading: 'Your first ten minutes',

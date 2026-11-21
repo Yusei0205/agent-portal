@@ -690,7 +690,7 @@ export function Rail({
   // Brand from active template — reactive: re-renders on 'portal-theme-changed'
   const activeTmpl  = useActiveTemplate();
   const logoSvg     = activeTmpl?.brand?.logoSvg;
-  const productName = activeTmpl?.brand?.productName || 'Agent Portal';
+  const productName = activeTmpl?.brand?.productName || 'Kyuubit';
   const logoDataUrl = logoSvg
     ? `data:image/svg+xml,${encodeURIComponent(logoSvg)}`
     : null;

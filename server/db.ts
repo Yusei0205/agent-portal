@@ -1732,7 +1732,7 @@ const M27_FK_CASCADES = `
  * Migration 28: Look-and-feel themes.
  *
  * - themes: custom theme storage (built-ins live in server/themes.ts, not DB).
- * - settings: theme.active — the active theme ID (default: 'aethrix-night').
+ * - settings: theme.active — the active theme ID (default: 'kyuubit' for new installs; was 'aethrix-night').
  */
 const M28_THEMES = `
   CREATE TABLE IF NOT EXISTS themes (
@@ -1745,7 +1745,7 @@ const M28_THEMES = `
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  INSERT OR IGNORE INTO settings (key, value) VALUES ('theme.active', '"aethrix-night"');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('theme.active', '"kyuubit"');
 `;
 
 /**

@@ -21,6 +21,7 @@ import type { PortalRequest, PortalResponse } from './http.ts';
 import { getDb } from './db.ts';
 import { getSetting, setSetting, getSettings } from './settings.ts';
 import { getThemesRepository } from './repositories/themes.ts';
+import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
 import { appendAudit } from './audit.ts';
 import { emitGlobal } from './events.ts';
 import { generateId, now, notFound, badRequest, forbidden } from './util.ts';
@@ -35,6 +36,7 @@ import twilightJson from '../shared/themes/twilight.json' with { type: 'json' };
 import terminalJson from '../shared/themes/terminal.json' with { type: 'json' };
 import kiroIdeJson from '../shared/themes/kiro-ide.json' with { type: 'json' };
 import graphiteJson from '../shared/themes/graphite.json' with { type: 'json' };
+import kyuubitJson from '../shared/themes/kyuubit.json' with { type: 'json' };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -499,6 +501,7 @@ export const TWILIGHT: ThemeTemplate = twilightJson as unknown as ThemeTemplate;
 export const TERMINAL: ThemeTemplate = terminalJson as unknown as ThemeTemplate;
 export const KIRO_IDE: ThemeTemplate = kiroIdeJson as unknown as ThemeTemplate;
 export const GRAPHITE: ThemeTemplate = graphiteJson as unknown as ThemeTemplate;
+export const KYUUBIT: ThemeTemplate = kyuubitJson as unknown as ThemeTemplate;
 export const BUILTIN_THEMES: ReadonlyMap<string, ThemeTemplate> = new Map([
   [AETHRIX_NIGHT.id, AETHRIX_NIGHT],
   [CLASSIC_TEAL.id, CLASSIC_TEAL],
@@ -510,6 +513,7 @@ export const BUILTIN_THEMES: ReadonlyMap<string, ThemeTemplate> = new Map([
   [TERMINAL.id, TERMINAL],
   [KIRO_IDE.id, KIRO_IDE],
   [GRAPHITE.id, GRAPHITE],
+  [KYUUBIT.id, KYUUBIT],
 ]);
 
 const BUILTIN_ETAGS: ReadonlyMap<string, string> = new Map(
@@ -521,7 +525,7 @@ const BUILTIN_ETAGS: ReadonlyMap<string, string> = new Map(
 
 // ── Active theme helpers ──────────────────────────────────────────────────────
 
-const DEFAULT_THEME_ID = 'aethrix-night';
+const DEFAULT_THEME_ID = 'kyuubit';
 
 export function getActiveThemeId(): string {
   try {
@@ -534,8 +538,29 @@ export function getActiveThemeId(): string {
   }
 }
 
+const KYUUBIT_MARKER = 'theme.kyuubit_default_applied';
+
 /**
- * Resolve the active template. Falls back to aethrix-night if the active id is
+ * One-time startup step. An install still on the old default (aethrix-night)
+ * is moved to kyuubit; any other choice is kept. The marker is written either
+ * way, so a later deliberate pick of aethrix-night is never reverted.
+ * Goes through the settings repository, so it works on SQLite and DynamoDB.
+ */
+export async function applyKyuubitDefaultOnce(): Promise<void> {
+  const repo = getSettingsRepository();
+  if (!repo) return;
+  if (await repo.getKey(KYUUBIT_MARKER)) return;
+  const raw = await repo.getKey('theme.active');
+  let active: unknown = null;
+  try { active = raw ? JSON.parse(raw) : null; } catch { /* treat as unset */ }
+  const pairs: Array<[string, string]> = [[KYUUBIT_MARKER, '"1"']];
+  if (active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify(DEFAULT_THEME_ID)]);
+  await repo.setKeys(pairs);
+  for (const [k, v] of pairs) _updateSnapshotKey(k, v);
+}
+
+/**
+ * Resolve the active template. Falls back to the default (kyuubit) if the active id is
  * missing or its stored JSON is invalid.
  */
 export async function resolveActiveTemplate(): Promise<{ template: ThemeTemplate; etag: string; updatedAt: string | null }> {
@@ -575,8 +600,8 @@ export async function resolveActiveTemplate(): Promise<{ template: ThemeTemplate
     }
   }
 
-  // Fallback to aethrix-night
-  const fallback = AETHRIX_NIGHT;
+  // Fallback to the default template
+  const fallback = KYUUBIT;
   return {
     template: fallback,
     etag: BUILTIN_ETAGS.get(DEFAULT_THEME_ID) ?? `"builtin-${DEFAULT_THEME_ID}"`,

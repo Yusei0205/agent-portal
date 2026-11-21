@@ -524,7 +524,7 @@ function Shell({ user, onSignOut }) {
           >
             <Icon name="menu" />
           </button>
-          <span className="topbar-title">Agent Portal</span>
+          <span className="topbar-title">Kyuubit</span>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
             <button
               type="button"

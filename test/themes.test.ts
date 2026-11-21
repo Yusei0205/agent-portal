@@ -474,7 +474,7 @@ describe('Theme CRUD routes', () => {
     assert.equal(r.status, 200);
     const body = r.body as { template: { id: string }; etag: string };
     assert.ok(body.template, 'Expected template in response');
-    assert.equal(body.template.id, 'aethrix-night', 'Default active should be aethrix-night');
+    assert.equal(body.template.id, 'kyuubit', 'Default active should be kyuubit');
     assert.ok(typeof body.etag === 'string', 'Expected etag');
   });
 
@@ -956,7 +956,7 @@ describe('Theme export/import round-trip', () => {
 // ── Fallback when active theme is missing ─────────────────────────────────────
 
 describe('Theme fallback', () => {
-  it('GET /api/theme falls back to aethrix-night when active id does not exist', async () => {
+  it('GET /api/theme falls back to kyuubit when active id does not exist', async () => {
     const db = createTestDb();
     // Point active to a nonexistent theme
     setSetting(db, 'theme.active', '"nonexistent-theme"');
@@ -971,8 +971,8 @@ describe('Theme fallback', () => {
     const r = await fetchJson(ts.baseUrl, '/api/theme');
     assert.equal(r.status, 200);
     const body = r.body as { template: { id: string } };
-    // Active is aethrix-night by default in new DB
-    assert.equal(body.template.id, 'aethrix-night');
+    // Active is kyuubit by default in new DB
+    assert.equal(body.template.id, 'kyuubit');
 
     await cleanup();
   });

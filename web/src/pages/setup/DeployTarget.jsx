@@ -6,7 +6,7 @@ export function DeployTarget({ value, onChange }) {
   return (
     <div>
       <div className="wizard-heading">
-        <h1>Where are you running Agent Portal?</h1>
+        <h1>Where are you running Kyuubit?</h1>
         <p>Choose the environment that best describes your setup.</p>
       </div>
 

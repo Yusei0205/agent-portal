@@ -1214,11 +1214,13 @@
         "shared/themes/twilight.json",
         "shared/themes/terminal.json",
         "shared/themes/kiro-ide.json",
+        "shared/themes/kyuubit.json",
         "web/src/pages/settings/Appearance.jsx",
         "web/src/components/Rail.jsx"
       ],
       "tests": [
         "test/themes.test.ts",
+        "test/kyuubit-brand.test.ts",
         "test/themes-repo.test.ts"
       ],
       "smokeIds": [
