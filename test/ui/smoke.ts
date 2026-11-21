@@ -863,11 +863,17 @@ async function main() {
           await cp.keyboard.press('Enter');
           await cp.locator('.cat-msg-cat').filter({ hasText: /sign-in|couldn't answer|lot of questions|too long/ }).waitFor({ timeout: 5000 });
           if (await cp.locator('.cat-chip').count() < 5) throw new Error('The chips are missing after the reply');
+          // focus must still be in the input once the reply is shown, and Escape must still close the panel from there
+          if (!(await cp.evaluate(() => document.activeElement?.classList.contains('cat-panel-input') === true))) throw new Error('Focus left the input while the question was pending');
           if (!(await hashOf(cp)).includes('/sessions')) throw new Error('A question navigated');
           await cp.locator('.cat-panel-input').fill('inbox');
           await cp.keyboard.press('Enter');
           await waitHash(cp, /^#\/inbox/);
           await openPanel(cp);
+          await cp.locator('.cat-panel-input').fill('what is the weather');
+          await cp.keyboard.press('Enter');
+          await cp.locator('.cat-msg-cat').filter({ hasText: /sign-in|couldn't answer|lot of questions|too long/ }).waitFor({ timeout: 5000 });
+          if (!(await cp.evaluate(() => document.activeElement?.classList.contains('cat-panel-input') === true))) throw new Error('Focus is not in the input after the reply');
           await cp.keyboard.press('Escape');
           await cp.locator('[data-testid="cat-panel"]').waitFor({ state: 'detached', timeout: 2000 });
           if (!(await focusIsCat(cp))) throw new Error('Focus did not return to the cat after Escape');

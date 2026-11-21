@@ -48,13 +48,16 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
   const ask = async (q) => {
     const history = trimHistory(messages);
     const pendingId = seq.current++;
-    setMessages((all) => push(all, { id: seq.current++, role: 'me', text: q }, { id: pendingId, role: 'cat', text: '', pending: true }));
+    const meId = seq.current++;
+    setMessages((all) => push(all, { id: meId, role: 'me', text: q }, { id: pendingId, role: 'cat', text: '', pending: true }));
     setPending(true);
     const replace = (m) => setMessages((all) => all.map((x) => (x.id === pendingId ? { id: pendingId, role: 'cat', ...m } : x)));
     try {
       const r = await api.post('/api/assistant/chat', { question: q, projectId: route.projectId ?? undefined, history });
       replace({ text: String(r?.reply ?? ''), links: Array.isArray(r?.links) ? r.links : [] });
     } catch (err) {
+      // The unanswered question stays on screen but is not sent as history (no two `me` entries in a row).
+      setMessages((all) => all.map((x) => (x.id === meId ? { ...x, error: true } : x)));
       const signIn = err?.data?.code === 'no_sign_in';
       replace({ text: describeAssistantError(err), error: true, links: signIn ? [{ id: 'sign-ins', label: 'Agent sign-ins', href: '#/config/sign-ins' }] : [] });
     } finally {
@@ -120,7 +123,7 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
           aria-label="Tell the cat where to go"
           autoComplete="off"
           maxLength={1000}
-          disabled={pending}
+          readOnly={pending}
         />
         <button type="submit" className="cat-panel-send" aria-label="Go" disabled={pending || !text.trim()}><Icon name="send" size={14} /></button>
       </form>

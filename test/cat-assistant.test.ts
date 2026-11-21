@@ -36,6 +36,10 @@ describe('trimHistory', () => {
     ]);
     assert.deepEqual(out.map((m: { text: string }) => m.text), ['a', 'b']);
   });
+  it('excludes a question flagged as unanswered after a failed request', () => {
+    const out = trimHistory([{ id: 1, role: 'me', text: 'q1', error: true }, { id: 2, role: 'cat', text: 'oops', error: true }, { id: 3, role: 'me', text: 'q2' }]);
+    assert.deepEqual(out.map((m: { text: string }) => m.text), ['q2']);
+  });
   it('cuts long text to 600 characters', () => {
     const out = trimHistory([{ id: 1, role: 'me', text: 'x'.repeat(2000) }]);
     assert.equal(out[0].text.length, 600);
