@@ -288,6 +288,11 @@
 .login-title { margin: 0; font-size: clamp(1.7rem, 4.5vw, 2.3rem); line-height: 1.2; font-weight: 600; letter-spacing: -0.02em; }
 .login-accent { color: var(--accent); }
 
+/* The cat with its four-leaf clover: decorative, static, and out of the way on short screens. */
+.login-illustration { width: min(208px, 60vw); aspect-ratio: 26 / 16; height: auto; overflow: visible; }
+.login-illustration svg { display: block; width: 100%; height: 100%; }
+@media (max-height: 639px) { .login-illustration { display: none; } }
+
 .login-card {
   width: 100%;
   display: grid;

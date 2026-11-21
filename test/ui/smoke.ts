@@ -549,6 +549,28 @@ async function main() {
     // ── Login via browser ────────────────────────────────────────────────
     console.log('\n0. Login');
     currentSectionId = '0';
+    await test('Login page is branded Kyuubit with the cat-and-clover illustration', async (p) => {
+      await p.goto(BASE, { waitUntil: 'domcontentloaded' });
+      await p.waitForSelector('#login-email', { timeout: 8000 });
+      const mark = (await p.locator('.login-mark span').first().textContent()) ?? '';
+      if (mark.trim() !== 'Kyuubit') throw new Error(`Login brand should say Kyuubit, got "${mark}"`);
+      const art = p.locator('[data-testid="login-illustration"]');
+      if ((await art.count()) !== 1) throw new Error('Login illustration missing');
+      if ((await art.getAttribute('aria-hidden')) !== 'true') throw new Error('Login illustration must be aria-hidden');
+      const rects = await art.locator('svg rect').count();
+      if (rects < 40) throw new Error(`Illustration should be pixel rects, found ${rects}`);
+      if (!(await art.isVisible())) throw new Error('Illustration hidden at the default viewport height');
+      // Phone width: still visible, no horizontal scroll.
+      await p.setViewportSize({ width: 390, height: 844 });
+      if (!(await art.isVisible())) throw new Error('Illustration hidden on a 390x844 phone');
+      const overflow = await p.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      if (overflow > 0) throw new Error(`Login scrolls horizontally by ${overflow}px at 390px`);
+      // Short window: the illustration gives way to the form.
+      await p.setViewportSize({ width: 1280, height: 600 });
+      if (await art.isVisible()) throw new Error('Illustration should be hidden when the viewport is under 640px high');
+      await p.setViewportSize({ width: 1280, height: 800 });
+    }, page);
+
     await test('Login with admin credentials shows shell', async (p) => {
       await p.goto(BASE, { waitUntil: 'domcontentloaded' });
       await p.waitForTimeout(600);
@@ -564,6 +586,14 @@ async function main() {
       await p.fill('#login-password', ADMIN_PASSWORD);
       await p.click('button[type="submit"]');
       await p.waitForSelector('.shell', { timeout: 8_000 });
+    }, page);
+
+    await test('Header brand says Kyuubit with the pixel logo', async (p) => {
+      const brand = p.locator('.brand').first();
+      await brand.waitFor({ timeout: 5000 });
+      const name = ((await brand.locator('span').first().textContent()) ?? '').trim();
+      if (name !== 'Kyuubit') throw new Error(`Header brand should say Kyuubit, got "${name}"`);
+      if ((await brand.locator('svg, img').count()) === 0) throw new Error('Header brand logo missing');
     }, page);
 
     // ── 1. Setup wizard regression ───────────────────────────────────────

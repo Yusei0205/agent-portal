@@ -1,4 +1,6 @@
-# Agent Portal
+# Kyuubit
+
+_Lucky agents. Nine lives._ (formerly Agent Portal)
 
 A self-hosted web portal for running AI coding agents on your projects, to speed up delivery, QA and
 code review. It runs agents through the official

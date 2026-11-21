@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api } from '../lib/api.js';
+import { LoginIllustration } from '../components/LoginIllustration.jsx';
 import { getTemplate, getActiveTemplateId } from '../lib/theme.js';
 
 /**
@@ -104,6 +105,7 @@ export function Login({ onDone, googleEnabled = false, expired = false }) {
       <div className="login-aurora" aria-hidden="true" />
 
       <div className="login-center">
+        <LoginIllustration />
         <div className="login-mark">
           <img src={logoDataUrl} alt="" width={44} height={44} />
           <span>{productName}</span>

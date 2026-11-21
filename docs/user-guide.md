@@ -1,4 +1,6 @@
-# Agent Portal — User Guide
+# Kyuubit — User Guide
+
+Kyuubit ("Lucky agents. Nine lives.") is the name of this portal, with a pixel cat and a four-leaf clover as its logo. A custom template can show its own name and logo instead.
 
 ## Table of contents
 
@@ -80,7 +82,7 @@ The header shows a breadcrumb for the current page. On the right:
 
 ### The cat companion
 
-A small pixel cat (a calico: white with orange and brown patches, a collar and a gold tag) lives at the bottom of the screen. It is a helper, never a requirement: nothing in the portal depends on it.
+A small pixel cat (a calico: white with orange and brown patches, a gold collar and a small green four-leaf clover charm) lives at the bottom of the screen. It is a helper, never a requirement: nothing in the portal depends on it.
 
 - **Roaming.** On screens wider than 600 px the cat sits for a few seconds, walks a short way along the bottom, and repeats. It stops where it is while you type in a field or while a dialog is open, and it does not move at all if your system asks for reduced motion. On phones it stays in the corner.
 - **Hover and click.** Pointing at the cat makes it wave and shows a "Chat with Agent" label. Clicking the cat opens a small shortcut panel (see below). A tip bubble pops up by itself shortly after the page loads on wide screens; **×** closes it, and **Esc** closes any bubble, menu or the panel. To see another tip, right-click (or press and hold) the cat and choose **Show a tip**.
@@ -944,7 +946,8 @@ Click **Edit** on any custom template (or **Duplicate** on a built-in template t
 
 **Template structure** (for advanced users or API use): a template JSON has an `id`, `name`, `version`, `brand` (productName, tagline, logoSvg, faviconSvg), `modes` with `dark` and/or `light` token maps, `fonts` (display, body, mono), `effects` (glow, gridBackground, gradientAccents, motion), and `radius` (sm, md, lg).
 
-Built-in templates:
+Built-in templates (every one shows the Kyuubit name and logo; a template you make yourself can carry its own):
+- **Kyuubit** — the default: deep green-black with clover-green and gold accents in dark, warm cream with clover green in light, rounded cards and a soft glow, matching the logo. A portal that still had Aethrix Night active when it was updated to this release is switched to Kyuubit once; pick Aethrix Night again at any time and it stays.
 - **Aethrix Night** — deep-space navy with violet and cyan accents, Space Grotesk + Inter fonts, faint grid background, gradient primary buttons. Has both dark and light modes.
 - **Classic Teal** — the original quiet workbench, teal accents, system fonts. Has both dark and light modes.
 
