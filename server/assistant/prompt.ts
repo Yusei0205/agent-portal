@@ -80,6 +80,8 @@ export function buildPrompt(input: {
   history: Array<{ role: 'me' | 'cat'; text: string }>;
   guide: GuidePassage[];
   knowledge: Array<{ docName: string; heading: string; text: string }>;
+  /** Approved project memory facts (agentcore-memory projectMemoryNotes). */
+  notes?: string[];
   summary: ProjectSummary | null;
   links: AssistantLink[];
   maxChars: number | null;
@@ -99,6 +101,7 @@ export function buildPrompt(input: {
   let guide = [...input.guide];
   let knowledge = [...input.knowledge];
   let history = [...input.history];
+  let notes = [...(input.notes ?? [])];
 
   const render = (): string => {
     const parts: string[] = [BEGIN];
@@ -109,6 +112,10 @@ export function buildPrompt(input: {
     if (knowledge.length) {
       parts.push('[Project knowledge]');
       for (const k of knowledge) parts.push(`## ${defang(k.docName)} / ${defang(k.heading)}\n${defang(k.text)}`);
+    }
+    if (notes.length) {
+      parts.push('[Approved project notes]');
+      for (const n of notes) parts.push(`- ${defang(n).replace(/\n/g, '\n  ')}`);
     }
     if (input.summary) parts.push(`[Live project summary]\n${summaryText(input.summary)}`);
     parts.push(END);
@@ -122,8 +129,9 @@ export function buildPrompt(input: {
   let user = render();
   if (input.maxChars != null) {
     const max = input.maxChars;
-    while (user.length > max && (knowledge.length || guide.length || history.length)) {
+    while (user.length > max && (knowledge.length || notes.length || guide.length || history.length)) {
       if (knowledge.length) knowledge.pop();
+      else if (notes.length) notes.pop();
       else if (guide.length) guide.pop();
       else history.shift();
       user = render();

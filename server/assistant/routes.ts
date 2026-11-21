@@ -9,6 +9,7 @@ import { requireMember } from '../dashboard.ts';
 import { getProjectRepository } from '../repositories/projects.ts';
 import { callTextModel, pickTextEngine, textPromptLimit } from '../testing/model-provider.ts';
 import { retrieve } from '../knowledge-search.ts';
+import { projectMemoryNotes } from '../agentcore-memory.ts';
 import { loadGuide, rankGuide } from './guide.ts';
 import { assistantLinks, buildPrompt, parseReply } from './prompt.ts';
 import { checkAndCount } from './limits.ts';
@@ -25,6 +26,9 @@ export function setAssistantTimeoutForTest(ms: number | null): void { timeoutOve
 type Retriever = typeof retrieve;
 let retrieveOverride: Retriever | null = null;
 export function setAssistantRetrieveForTest(fn: Retriever | null): void { retrieveOverride = fn; }
+type NotesReader = typeof projectMemoryNotes;
+let notesOverride: NotesReader | null = null;
+export function setAssistantNotesForTest(fn: NotesReader | null): void { notesOverride = fn; }
 
 type Fail = 'no_sign_in' | 'rate_limited' | 'too_long' | 'failed';
 const STATUS: Record<Fail, number> = { too_long: 400, no_sign_in: 402, rate_limited: 429, failed: 502 };
@@ -79,20 +83,26 @@ export function registerAssistantRoutes(): void {
         const history = cleanHistory(body.history);
         const guide = rankGuide(loadGuide(), question, 4);
         let knowledge: Array<{ docName: string; heading: string; text: string }> = [];
+        let notes: string[] = [];
         let summary = null;
         if (projectId) {
           const project = await getProjectRepository().getProjectById(projectId);
           if (project) {
-            try {
-              const r = await (retrieveOverride ?? retrieve)({ id: project.id, slug: project.slug }, question, 4);
-              knowledge = r.passages.map((p) => ({ docName: p.docName, heading: p.heading, text: p.text }));
-            } catch { knowledge = []; }
+            // Membership was checked above; approved project memory is read alongside the knowledge search.
+            const [k, n] = await Promise.all([
+              (retrieveOverride ?? retrieve)({ id: project.id, slug: project.slug }, question, 4)
+                .then((r) => r.passages.map((p) => ({ docName: p.docName, heading: p.heading, text: p.text })))
+                .catch(() => []),
+              (notesOverride ?? projectMemoryNotes)(projectId, question).catch(() => []),
+            ]);
+            knowledge = k;
+            notes = n;
             summary = await buildSummary(projectId).catch(() => null);
           }
         }
         const links = assistantLinks(projectId);
         const maxChars = await textPromptLimit(userId, null);
-        const { system, user } = buildPrompt({ question, history, guide, knowledge, summary, links, maxChars });
+        const { system, user } = buildPrompt({ question, history, guide, knowledge, notes, summary, links, maxChars });
         const raw = await withTimeout(callTextModel(system, user, { createdBy: userId, maxTokens: 700 }), timeoutOverride ?? TIMEOUT_MS);
         const parsed = parseReply(String(raw ?? ''), links);
         if (!parsed.reply && !parsed.links.length) { fail(res, 'failed'); return; }

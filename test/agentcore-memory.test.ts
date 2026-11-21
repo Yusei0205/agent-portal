@@ -9,7 +9,7 @@ import { getDb } from '../server/db.ts';
 import { hashPassword } from '../server/auth.ts';
 import { now } from '../server/util.ts';
 import { setSetting } from '../server/settings.ts';
-import { redactSecrets, sweepMemoryWrites, buildProjectMemoryBlock, _setMemoryClient, recordStatus } from '../server/agentcore-memory.ts';
+import { redactSecrets, sweepMemoryWrites, buildProjectMemoryBlock, projectMemoryNotes, _setMemoryClient, recordStatus } from '../server/agentcore-memory.ts';
 import { buildConversationRecap } from '../server/agent/recap.ts';
 
 describe('redactSecrets', () => {
@@ -115,6 +115,33 @@ describe('project memory', () => {
     assert.ok(!block.includes('Deploy on Fridays'));
     const recap = await buildConversationRecap('wf-mem-4', 'run-other');
     assert.ok(recap.startsWith('[Project notes'), recap.slice(0, 60));
+  });
+
+  test('projectMemoryNotes: approved facts only, only when memory is on, [] on failure, capped', async () => {
+    records.set('r-ok', { id: 'r-ok', text: 'Tests run with pnpm vitest', ns: '/project/proj-mem-a/facts' });
+    records.set('r-pending', { id: 'r-pending', text: 'Deploy on Fridays', ns: '/project/proj-mem-a/facts' });
+    records.set('r-rejected', { id: 'r-rejected', text: 'Wrong fact', ns: '/project/proj-mem-a/facts' });
+    await setSetting(getDb(), 'agentcore.memory.status.r-ok', 'approved');
+    await setSetting(getDb(), 'agentcore.memory.status.r-rejected', 'rejected');
+    assert.deepEqual(await projectMemoryNotes('proj-mem-a', 'how do tests run'), []);
+    await on('proj-mem-a');
+    assert.deepEqual(await projectMemoryNotes('proj-mem-a', 'how do tests run'), ['Tests run with pnpm vitest']);
+    const q = calls.filter((c) => c.cmd === 'RetrieveMemoryRecords').at(-1)!;
+    assert.equal(q.input.namespace, '/project/proj-mem-a/facts');
+    assert.equal(q.input.searchCriteria.searchQuery, 'how do tests run');
+    assert.deepEqual(await projectMemoryNotes('proj-mem-b', 'x'), []);
+    for (let i = 0; i < 10; i++) {
+      records.set(`r-big-${i}`, { id: `r-big-${i}`, text: `${i}`.repeat(600), ns: '/project/proj-mem-a/facts' });
+      await setSetting(getDb(), `agentcore.memory.status.r-big-${i}`, 'approved');
+    }
+    const notes = await projectMemoryNotes('proj-mem-a', 'x');
+    assert.ok(notes.join('').length <= 2500, String(notes.join('').length));
+  });
+
+  test('projectMemoryNotes gives [] when the memory service fails', async () => {
+    await on('proj-mem-a');
+    _setMemoryClient({ client: { send: async () => { throw new Error('boom'); } }, cmds: { RetrieveMemoryRecords: mk('RetrieveMemoryRecords') } });
+    assert.deepEqual(await projectMemoryNotes('proj-mem-a', 'x'), []);
   });
 
   test('a failing memory service gives no block instead of failing the session', async () => {

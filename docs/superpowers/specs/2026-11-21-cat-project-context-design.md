@@ -1,6 +1,6 @@
 # Cat assistant: context per project
 
-Date: 2026-11-21. Status: draft, approach chosen by the owner ("Yes proceed" to options 1 and 2).
+Date: 2026-11-21. Status: approved ("Can proceed") and built.
 Builds on: `2026-11-21-cat-assistant-design.md` (B2, answers only).
 
 ## Intent

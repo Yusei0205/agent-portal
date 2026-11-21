@@ -63,6 +63,9 @@ describe('describeAssistantError', () => {
   });
 });
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Msg = any;
+
 describe('per-project chat storage', () => {
   const now = Date.parse('2026-11-21T00:00:00Z');
   const DAY = 24 * 3600 * 1000;
@@ -75,14 +78,14 @@ describe('per-project chat storage', () => {
   });
 
   it('drops the greeting and pending replies, keeps the newest 20', () => {
-    const msgs = [{ id: 0, role: 'cat', text: 'hi' }];
+    const msgs: Msg[] = [{ id: 0, role: 'cat', text: 'hi' }];
     for (let i = 1; i <= 25; i++) msgs.push({ id: i, role: i % 2 ? 'me' : 'cat', text: `m${i}` });
     msgs.push({ id: 26, role: 'cat', text: '', pending: true });
-    const out = parseChat(serialiseChat(msgs, now), now);
+    const out: Msg[] = parseChat(serialiseChat(msgs, now), now);
     assert.equal(out.length, 20);
     assert.equal(out[0].text, 'm6');
     assert.equal(out[19].text, 'm25');
-    assert.ok(out.every((m) => m.id !== 0 && !m.pending));
+    assert.ok(out.every((m: Msg) => m.id !== 0 && !m.pending));
   });
 
   it('round-trips links, notice links and the error flag', () => {
@@ -92,7 +95,7 @@ describe('per-project chat storage', () => {
       { id: 3, role: 'cat', text: 'A session finished.', href: '#/p/x/sessions/1' },
     ];
     const out = parseChat(serialiseChat(msgs, now), now);
-    assert.deepEqual(out.map(({ role, text, error, links, href }) => ({ role, text, error, links, href })), [
+    assert.deepEqual(out.map(({ role, text, error, links, href }: Msg) => ({ role, text, error, links, href })), [
       { role: 'me', text: 'q', error: true, links: undefined, href: undefined },
       { role: 'cat', text: 'a', error: undefined, links: [{ id: 'inbox', label: 'Inbox', href: '#/inbox' }], href: undefined },
       { role: 'cat', text: 'A session finished.', error: undefined, links: undefined, href: '#/p/x/sessions/1' },
@@ -109,6 +112,6 @@ describe('per-project chat storage', () => {
 
   it('skips entries that are not plain me/cat text', () => {
     const raw = JSON.stringify({ savedAt: now, messages: [{ role: 'system', text: 'x' }, { role: 'me', text: 5 }, null, { role: 'cat', text: 'fine' }] });
-    assert.deepEqual(parseChat(raw, now).map((m) => m.text), ['fine']);
+    assert.deepEqual(parseChat(raw, now).map((m: Msg) => m.text), ['fine']);
   });
 });

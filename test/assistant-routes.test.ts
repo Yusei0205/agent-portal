@@ -7,7 +7,7 @@ import { encrypt } from '../server/secrets.ts';
 import { setCallTextModelOverride } from '../server/testing/model-provider.ts';
 import { setGuidePathForTest } from '../server/assistant/guide.ts';
 import { resetLimitsForTest } from '../server/assistant/limits.ts';
-import { setAssistantTimeoutForTest, setAssistantRetrieveForTest } from '../server/assistant/routes.ts';
+import { setAssistantTimeoutForTest, setAssistantRetrieveForTest, setAssistantNotesForTest } from '../server/assistant/routes.ts';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -53,12 +53,13 @@ before(async () => {
   fs.writeFileSync(guideFile, '# Guide\n\n## Auto-fix\nTurn on auto-fix in Setup to repair failing pipelines.\n');
   setGuidePathForTest(guideFile);
 });
-after(() => { setCallTextModelOverride(null); setGuidePathForTest(null); setAssistantTimeoutForTest(null); setAssistantRetrieveForTest(null); return cleanup(); });
+after(() => { setCallTextModelOverride(null); setGuidePathForTest(null); setAssistantTimeoutForTest(null); setAssistantRetrieveForTest(null); setAssistantNotesForTest(null); return cleanup(); });
 beforeEach(() => {
   calls = []; reply = 'Open the Inbox.\nLINKS: inbox, admin-secrets';
   resetLimitsForTest();
   setAssistantTimeoutForTest(null);
   setAssistantRetrieveForTest(async () => ({ passages: [], via: 'keyword' }));
+  setAssistantNotesForTest(async () => []);
   setCallTextModelOverride(async (sys, usr) => { calls.push({ sys, usr }); return reply; });
 });
 
@@ -105,6 +106,20 @@ describe('POST /api/assistant/chat', () => {
     const r = await ask(member, { question: 'deploy?', projectId });
     assert.equal((r.body as { via: string }).via, 'guide+knowledge');
     assert.match(calls[0]!.usr, /KNOWLEDGE-PASSAGE-TEXT/);
+  });
+
+  it('approved project notes go into the prompt for a project question, not without a project', async () => {
+    const seen: string[] = [];
+    setAssistantNotesForTest(async (pid) => { seen.push(pid); return ['APPROVED-NOTE-TEXT']; });
+    await ask(member, { question: 'how do tests run?', projectId });
+    assert.match(calls[0]!.usr, /\[Approved project notes\]\n- APPROVED-NOTE-TEXT/);
+    await ask(member, { question: 'how do tests run?' });
+    assert.doesNotMatch(calls[1]!.usr, /APPROVED-NOTE-TEXT/);
+    assert.deepEqual(seen, [projectId]);
+    setAssistantNotesForTest(async () => { throw new Error('memory down'); });
+    const r = await ask(member, { question: 'how do tests run?', projectId });
+    assert.equal(r.status, 200);
+    setAssistantNotesForTest(async () => []);
   });
 
   it('retrieve throwing still answers from the guide', async () => {

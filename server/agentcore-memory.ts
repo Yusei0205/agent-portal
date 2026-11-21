@@ -146,33 +146,47 @@ export async function listProjectRecords(projectId: string): Promise<MemoryRecor
 }
 
 /**
- * The approved notes for a project as a block to put in front of the agent, or '' (memory off, none approved, or AgentCore slow or
- * down: a session must never wait on memory, so a failure just means no block).
+ * The approved facts of a project that are relevant to `query`, newest-relevance first, at most 2,500 characters in all; [] when memory
+ * is unavailable or off for the project, or AgentCore is slow (3 s) or failing: a caller must never wait on memory or fail because of it.
+ * Only facts a project owner approved are returned; pending and rejected ones never reach a prompt.
  */
-export async function buildProjectMemoryBlock(workflowId: string): Promise<string> {
+export async function projectMemoryNotes(projectId: string, query: string): Promise<string[]> {
   const id = memoryId();
-  if (!id) return '';
+  if (!id || !projectId || !isProjectMemoryOn(projectId)) return [];
   try {
-    const w = await getSessionsRepository().getWorkflowById(workflowId);
-    const projectId = w?.project_id ? String(w.project_id) : '';
-    if (!projectId || !isProjectMemoryOn(projectId)) return '';
     const { client, cmds } = await sdk();
-    const query = String(w?.goal ?? '').slice(0, 400) || 'project conventions';
+    const q = String(query ?? '').slice(0, 400) || 'project conventions';
     const r = await Promise.race([
-      client.send(new cmds.RetrieveMemoryRecords({ memoryId: id, namespace: factsNamespace(projectId), searchCriteria: { searchQuery: query, topK: TOP_K }, maxResults: TOP_K })),
+      client.send(new cmds.RetrieveMemoryRecords({ memoryId: id, namespace: factsNamespace(projectId), searchCriteria: { searchQuery: q, topK: TOP_K }, maxResults: TOP_K })),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
     ]);
-    if (!r) return '';
-    const lines: string[] = [];
+    if (!r) return [];
+    const notes: string[] = [];
     let size = 0;
     for (const s of r.memoryRecordSummaries ?? []) {
       const text = String(s.content?.text ?? '').trim();
       if (!text || recordStatus(String(s.memoryRecordId)) !== 'approved') continue;
       if (size + text.length > MAX_BLOCK_CHARS) break;
-      lines.push(`- ${text}`);
+      notes.push(text);
       size += text.length;
     }
-    return lines.length ? `[Project notes, approved by this project's owners]\n${lines.join('\n')}\n\n` : '';
+    return notes;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The approved notes for a project as a block to put in front of the agent, or '' (memory off, none approved, or AgentCore slow or
+ * down: a session must never wait on memory, so a failure just means no block).
+ */
+export async function buildProjectMemoryBlock(workflowId: string): Promise<string> {
+  if (!memoryId()) return '';
+  try {
+    const w = await getSessionsRepository().getWorkflowById(workflowId);
+    const projectId = w?.project_id ? String(w.project_id) : '';
+    const notes = await projectMemoryNotes(projectId, String(w?.goal ?? ''));
+    return notes.length ? `[Project notes, approved by this project's owners]\n${notes.map((n) => `- ${n}`).join('\n')}\n\n` : '';
   } catch {
     return '';
   }
