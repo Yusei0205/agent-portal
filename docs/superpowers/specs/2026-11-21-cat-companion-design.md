@@ -1,6 +1,6 @@
 # Cat companion: a pixel cat that roams, reacts and (later) answers
 
-Date: 2026-11-21. Status: phase A and B1 built (cat v2); B2 (a real assistant) is open and needs its own decisions.
+Date: 2026-11-21. Status: phase A and B1 built (cat v2); B2 built (answers only, read-only assistant, see 2026-11-21-cat-assistant-design.md); actions that change things stay open.
 
 ## Intent
 
@@ -86,7 +86,7 @@ things that need them, without ever being in the way.
   for now". The tip bubble stays for tips (menu item "Show a tip"); the hover label now names a real action. No model calls, no server
   changes, no new dependency. "Start a session" opens the Sessions page and presses Alt+N for the person (the page owns that dialog).
   Reactions that arrive while the panel is open are said inside it instead of a bubble.
-- **B2 assistant:** a real chat. Not designed yet.
+- **B2 assistant:** built (answers only): a read-only chat in the panel, uses the user's own sign-in, nothing stored on the server.
 
 ## Open questions (for B2, before it is built)
 

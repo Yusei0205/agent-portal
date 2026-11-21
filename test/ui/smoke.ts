@@ -880,6 +880,122 @@ async function main() {
         });
       }, page);
 
+      // ── Cat assistant (POST /api/assistant/chat is mocked) ──
+      const SHOTS = process.env.CAT_SHOTS_DIR || '';
+      const shot = async (cp: Page, name: string) => {
+        if (!SHOTS) return;
+        fs.mkdirSync(SHOTS, { recursive: true });
+        await cp.waitForTimeout(500); // the panel's pop-in
+        await cp.screenshot({ path: path.join(SHOTS, `${name}.png`) });
+      };
+      const chatMock = async (cp: Page, respond: (n: number) => { status: number; body: any; wait?: Promise<void> }) => {
+        const hits = { n: 0 };
+        await cp.route('**/api/assistant/chat', async (route) => {
+          hits.n++;
+          const r = respond(hits.n);
+          if (r.wait) await r.wait;
+          await route.fulfill({ status: r.status, contentType: 'application/json', body: JSON.stringify(r.body) });
+        });
+        return hits;
+      };
+      const ask = async (cp: Page, q: string) => {
+        await cp.locator('.cat-panel-input').fill(q);
+        await cp.keyboard.press('Enter');
+      };
+      const REPLY = { reply: 'Your last session stopped because the sign-in expired. Reconnect it and start the session again.', links: [{ id: 'inbox', label: 'Inbox', href: '#/inbox' }, { id: 'sign-ins', label: 'Agent sign-ins', href: '#/config/sign-ins' }] };
+
+      await test('the assistant: a thinking indicator, then the reply with a link button that navigates; "inbox" never calls the route', async () => {
+        for (const mode of ['light', 'dark'] as const) {
+          await withCat({ prefs: SIT, mode }, async (cp) => {
+            let release!: () => void;
+            const gate = new Promise<void>((r) => { release = r; });
+            const hits = await chatMock(cp, () => ({ status: 200, body: REPLY, wait: gate }));
+            await openPanel(cp);
+            await ask(cp, 'why did my last build fail');
+            await cp.locator('.cat-typing').waitFor({ timeout: 2000 });
+            release();
+            const reply = cp.locator('.cat-msg-cat').filter({ hasText: 'sign-in expired' });
+            await reply.waitFor({ timeout: 3000 });
+            if (await cp.locator('.cat-typing').count() !== 0) throw new Error('The thinking indicator stayed');
+            await shot(cp, `desktop-${mode}-reply`);
+            await reply.getByRole('button', { name: 'Inbox', exact: true }).click();
+            await waitHash(cp, /^#\/inbox/);
+            if (hits.n !== 1) throw new Error(`Expected 1 route hit, got ${hits.n}`);
+            await goto(cp, sessionsHash());
+            await openPanel(cp);
+            await ask(cp, 'inbox');
+            await waitHash(cp, /^#\/inbox/);
+            if (hits.n !== 1) throw new Error(`"inbox" called the assistant (${hits.n} hits)`);
+          });
+        }
+      }, page);
+
+      await test('the assistant: 402 shows the sign-in message with an Agent sign-ins link; 429 shows the wait message', async () => {
+        await withCat({ prefs: SIT, mode: 'light' }, async (cp) => {
+          await chatMock(cp, () => ({ status: 402, body: { error: 'no sign-in', code: 'no_sign_in' } }));
+          await openPanel(cp);
+          await ask(cp, 'what is the weather');
+          const msg = cp.locator('.cat-msg-cat').filter({ hasText: 'Connect a sign-in' });
+          await msg.waitFor({ timeout: 3000 });
+          await shot(cp, 'desktop-light-error-402');
+          await msg.getByRole('button', { name: 'Agent sign-ins', exact: true }).click();
+          await waitHash(cp, /^#\/config\/sign-ins/);
+        });
+        await withCat({ prefs: SIT, mode: 'light' }, async (cp) => {
+          await chatMock(cp, () => ({ status: 429, body: { error: 'slow down', code: 'rate_limited' } }));
+          await openPanel(cp);
+          await ask(cp, 'what is the weather');
+          await cp.locator('.cat-msg-cat').filter({ hasText: 'Try again in a minute' }).waitFor({ timeout: 3000 });
+          await shot(cp, 'desktop-light-error-429');
+        });
+      }, page);
+
+      await test('the assistant: while pending the input takes no input and a second Enter sends nothing; a 500 shows the retry message and the input works again', async () => {
+        await withCat({ prefs: SIT, mode: 'light' }, async (cp) => {
+          let release!: () => void;
+          const gate = new Promise<void>((r) => { release = r; });
+          const hits = await chatMock(cp, (n) => (n === 1 ? { status: 500, body: { error: 'boom' }, wait: gate } : { status: 200, body: REPLY }));
+          await openPanel(cp);
+          await ask(cp, 'what is the weather');
+          await cp.locator('.cat-typing').waitFor({ timeout: 2000 });
+          const input = cp.locator('.cat-panel-input');
+          if ((await input.getAttribute('readonly')) === null) throw new Error('The input is not read-only while pending');
+          await cp.keyboard.type('more');
+          if ((await input.inputValue()) !== '') throw new Error('The input took text while pending');
+          await cp.keyboard.press('Enter');
+          await cp.waitForTimeout(300);
+          if (hits.n !== 1) throw new Error(`A second Enter sent a request (${hits.n})`);
+          release();
+          const err = cp.locator('.cat-msg-cat').filter({ hasText: "couldn't answer that just now" });
+          await err.waitFor({ timeout: 3000 });
+          await shot(cp, 'desktop-light-error-500');
+          if ((await input.getAttribute('readonly')) !== null) throw new Error('The input stayed read-only after the error');
+          await ask(cp, 'why did my last build fail');
+          await cp.locator('.cat-msg-cat').filter({ hasText: 'sign-in expired' }).waitFor({ timeout: 3000 });
+          if ((hits as { n: number }).n !== 2) throw new Error(`Expected 2 route hits, got ${(hits as { n: number }).n}`);
+        });
+      }, page);
+
+      await test('the assistant: on a phone the reply and its buttons fit without sideways scroll; HTML in a reply is shown as text', async () => {
+        await withCat({ prefs: null, width: 390, height: 800 }, async (cp) => {
+          await chatMock(cp, () => ({ status: 200, body: { reply: 'Try <b>x</b> and then ' + 'a-very-long-unbroken-word-'.repeat(8), links: REPLY.links } }));
+          await openPanel(cp);
+          await ask(cp, 'why did my last build fail');
+          const reply = cp.locator('.cat-msg-cat').filter({ hasText: '<b>x</b>' });
+          await reply.waitFor({ timeout: 3000 });
+          if (await reply.locator('b').count() !== 0) throw new Error('The reply HTML was rendered');
+          await cp.waitForTimeout(400);
+          if (await cp.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error('The page scrolls sideways');
+          const panel = await cp.locator('[data-testid="cat-panel"]').boundingBox();
+          for (const loc of [reply, reply.getByRole('button', { name: 'Inbox', exact: true }), reply.getByRole('button', { name: 'Agent sign-ins', exact: true })]) {
+            const b = await loc.boundingBox();
+            if (!b || !panel || b.x < panel.x - 1 || b.x + b.width > panel.x + panel.width + 1) throw new Error('Something sticks out of the sheet');
+          }
+          if (await cp.evaluate(() => { const l = document.querySelector('.cat-panel-log') as HTMLElement; return l.scrollWidth > l.clientWidth + 1; })) throw new Error('The log scrolls sideways');
+          await shot(cp, 'phone-reply');
+        });
+      }, page);
+
       await test('the roam checkbox follows the mode and changes it; the menu still has Show a tip', async () => {
         await withCat({ prefs: null }, async (cp) => {
           await openPanel(cp);
