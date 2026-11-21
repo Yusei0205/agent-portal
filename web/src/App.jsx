@@ -169,12 +169,14 @@ function Shell({ user, onSignOut }) {
   }, []);
 
   // Sync browser tab title and favicon with active template brand
+  const [brandName, setBrandName] = useState(() => getTemplate(getActiveTemplateId())?.brand?.productName || 'Kyuubit');
   useEffect(() => {
     const onThemeChanged = () => {
       const tmpl = getTemplate(getActiveTemplateId());
       const productName = tmpl?.brand?.productName;
       if (productName) {
         document.title = productName;
+        setBrandName(productName);
       }
       // Update favicon using faviconSvg (or logoSvg) from the template
       const svgSrc = tmpl?.brand?.faviconSvg || tmpl?.brand?.logoSvg;
@@ -524,7 +526,7 @@ function Shell({ user, onSignOut }) {
           >
             <Icon name="menu" />
           </button>
-          <span className="topbar-title">Kyuubit</span>
+          <span className="topbar-title">{brandName}</span>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '4px' }}>
             <button
               type="button"
