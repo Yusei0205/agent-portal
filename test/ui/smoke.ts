@@ -6369,7 +6369,7 @@ async function main() {
     }, page);
 
     // ── §51d: IDE at 390 px — agent panel within viewport, editor hidden, breadcrumb has project name ──
-    await test('Open demo session at 390 px: agent panel within viewport, editor area hidden, breadcrumb has project name', async (p) => {
+    await test('Open demo session at 390 px: agent panel within viewport, work pane stacked above it, breadcrumb has project name', async (p) => {
       if (!demoSessionId) throw new Error('No demo session available — skipping');
       await p.setViewportSize({ width: 390, height: 844 });
       // Seed localStorage so the editor panel is open (editorPanelOpen=true) when the session loads.
@@ -6404,19 +6404,22 @@ async function main() {
         );
       }
 
-      // Editor area must not be visible on mobile (the mobile CSS hides it with display:none !important)
-      // We seeded editorPanelOpen=true so the element IS rendered in the DOM — this test will fail
-      // if the CSS rule is removed or overridden.
-      const editorAreaCount = await p.locator('.ide-editor-area').count();
-      if (editorAreaCount > 0) {
-        const editorVisible = await p.locator('.ide-editor-area').first().evaluate((el) => {
-          const s = window.getComputedStyle(el);
-          return s.display !== 'none' && s.visibility !== 'hidden';
-        });
-        if (editorVisible) {
-          throw new Error('.ide-editor-area is visible at 390 px — should be hidden by mobile CSS');
-        }
+      // On a phone the work pane (editor / execution / review) is stacked above the conversation
+      // (session-studio.css, container <= 760px). It must stay inside the viewport and must not
+      // overlap the conversation or push it out of view.
+      const geo = await p.evaluate(`(function () {
+        function r(q) { var e = document.querySelector(q); if (!e) return null; var b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom }; }
+        return { pane: r('.ide-editor-area'), agent: r('.ide-agent-panel'), ih: window.innerHeight };
+      })()`) as { pane: { l: number; t: number; r: number; b: number } | null; agent: { l: number; t: number; r: number; b: number } | null; ih: number };
+      if (!geo.pane) throw new Error('.ide-editor-area should render with the seeded editorPanelOpen layout');
+      if (!geo.agent) throw new Error('.ide-agent-panel missing at 390 px');
+      if (geo.pane.l < 0 || geo.pane.r > innerWidth + 1) {
+        throw new Error(`.ide-editor-area spans ${Math.round(geo.pane.l)}..${Math.round(geo.pane.r)} outside the ${innerWidth} px viewport`);
       }
+      if (geo.pane.b > geo.agent.t + 1) {
+        throw new Error(`.ide-editor-area (bottom ${Math.round(geo.pane.b)}) overlaps the conversation (top ${Math.round(geo.agent.t)}) at 390 px`);
+      }
+      if (geo.agent.t >= geo.ih) throw new Error('The conversation is pushed below the viewport at 390 px');
 
       // Breadcrumb must include the project name (not just "Sessions")
       const breadcrumbText = (await p.locator('.app-header-breadcrumb').first().evaluate(
