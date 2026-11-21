@@ -6058,6 +6058,9 @@ async function main() {
           `Expected workspaceId "${wsId}" in POST body, got "${sentBody.workspaceId}"`,
         );
       }
+      // Starting a session opens it. Wait for that navigation to land so it cannot fire later and take
+      // over the page of whichever test runs next (this used to be papered over by a sleep in §49).
+      await p.waitForURL(new RegExp(`#/p/${projectId}/sessions/[^/?#]+`), { timeout: 10_000 });
     }, page);
     } // end §48 workspaces/sessions
 
@@ -6069,8 +6072,6 @@ async function main() {
     await test('Tickets page renders not-connected card', async (p) => {
       // Jira is not configured in the smoke-test environment, so we expect
       // to see the "Connect Jira" card (not a "Coming soon" placeholder).
-      // The session created in the test before can still be opening and would take the page over: let it finish first.
-      await goto(p, '/projects', 1500);
       await goto(p, `/p/${projectId}/tickets`, 1000);
       await p.waitForSelector('.shell', { timeout: 8000 });
       await assertNoPlaceholder(p);
