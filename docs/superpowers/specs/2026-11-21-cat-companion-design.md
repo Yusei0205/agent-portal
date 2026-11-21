@@ -14,8 +14,8 @@ things that need them, without ever being in the way.
 
 - **Phase A (built now):** the pixel cat, roaming, drag, hover label, tip bubble kept, mood reactions to live events, a three-way mode
   menu, tests, user guide note.
-- **Phase B:** the chat panel the mockup shows. **B1 (built, cat v2): a panel of shortcuts, no live chat.** B2: a real assistant, still
-  open; it needs its own decisions (see "Open questions").
+- **Phase B:** the chat panel the mockup shows. **B1 (built, cat v2): a panel of shortcuts, no live chat.** B2: a real assistant, built
+  (answers only); its decisions are answered in 2026-11-21-cat-assistant-design.md.
 - **Cat v2 (built with B1):** a calico look (white fur, orange and brown patches, pink ears and cheeks, collar with a gold tag; colours are
   CSS custom properties with light and dark values), a "working" animation (cat at a laptop, 4 frames) while the open project has a
   running session (tracked from `workflow.updated` events only; roaming pauses, reactions still win), and the B1 panel below.
@@ -88,7 +88,9 @@ things that need them, without ever being in the way.
   Reactions that arrive while the panel is open are said inside it instead of a bubble.
 - **B2 assistant:** built (answers only): a read-only chat in the panel, uses the user's own sign-in, nothing stored on the server.
 
-## Open questions (for B2, before it is built)
+## Open questions (for B2): answered
+
+Answered by 2026-11-21-cat-assistant-design.md (B2 built, answers only). Kept below for the record.
 
 - What may the assistant do: answer questions about the portal and the project only, or start sessions and change things?
 - Which engine and budget pays for it (per user monthly cap?), and is it available to every member or only owners?

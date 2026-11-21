@@ -71,6 +71,13 @@ to jump to the right page, at no cost to the portal and with no way for the chat
 - Panel keeps at most 20 messages in memory; history sent is the last 4 exchanges, each trimmed to 600 characters.
 - The cat's reply is shown as plain text (no HTML or Markdown rendering), with line breaks kept.
 
+## Known limits
+
+- When the portal provider mode is LiteLLM, `callTextModel` uses the portal's gateway key, so the cost is then the portal's, not the person's
+  (shared with other features; Ruling: accepted).
+- A timed-out model call is not aborted and still counts toward the person's quota.
+- The reply is lost if the panel is closed while it is pending.
+
 ## Open (not for this build)
 
 - Streaming replies; remembering chats; answering across projects; actions.
