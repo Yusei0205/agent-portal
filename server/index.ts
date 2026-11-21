@@ -196,7 +196,11 @@ export async function startServer(
   await initIntegrationsRepository();
   await (await import('./repositories/simulation.ts')).initSimulationRepository();
   await initThemesRepository();
-  await (await import('./themes.ts')).applyKyuubitDefaultOnce();
+  try {
+    await (await import('./themes.ts')).applyKyuubitDefaultOnce();
+  } catch (err) {
+    console.warn(`[themes] Kyuubit default step failed: ${(err as Error)?.message ?? 'unknown error'}`);
+  }
   await initFeedbackRepository();
   await initUserConfigRepository();
   await initAgentcoreLoginRepository();

@@ -547,16 +547,22 @@ const KYUUBIT_MARKER = 'theme.kyuubit_default_applied';
  * Goes through the settings repository, so it works on SQLite and DynamoDB.
  */
 export async function applyKyuubitDefaultOnce(): Promise<void> {
-  const repo = getSettingsRepository();
-  if (!repo) return;
-  if (await repo.getKey(KYUUBIT_MARKER)) return;
-  const raw = await repo.getKey('theme.active');
-  let active: unknown = null;
-  try { active = raw ? JSON.parse(raw) : null; } catch { /* treat as unset */ }
-  const pairs: Array<[string, string]> = [[KYUUBIT_MARKER, '"1"']];
-  if (active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify(DEFAULT_THEME_ID)]);
-  await repo.setKeys(pairs);
-  for (const [k, v] of pairs) _updateSnapshotKey(k, v);
+  // A cosmetic default must never stop the server starting: on any error the
+  // marker stays unset and the step retries on the next start.
+  try {
+    const repo = getSettingsRepository();
+    if (!repo) return;
+    if (await repo.getKey(KYUUBIT_MARKER)) return;
+    const raw = await repo.getKey('theme.active');
+    let active: unknown = null;
+    try { active = raw ? JSON.parse(raw) : null; } catch { /* treat as unset */ }
+    const pairs: Array<[string, string]> = [[KYUUBIT_MARKER, '"1"']];
+    if (active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify(DEFAULT_THEME_ID)]);
+    await repo.setKeys(pairs);
+    for (const [k, v] of pairs) _updateSnapshotKey(k, v);
+  } catch (err) {
+    console.warn(`[themes] Kyuubit default step skipped, will retry next start: ${(err as Error)?.message ?? 'unknown error'}`);
+  }
 }
 
 /**

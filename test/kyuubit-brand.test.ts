@@ -102,4 +102,24 @@ describe('Kyuubit default', () => {
     await applyKyuubitDefaultOnce();
     assert.equal(active(), 'aethrix-night');
   });
+
+  it('a failing settings repository does not propagate and leaves the marker unset', async () => {
+    await reset('aethrix-night', false);
+    const repo = getSettingsRepository() as any;
+    const orig = { getKey: repo.getKey, setKeys: repo.setKeys };
+    const warn = console.warn;
+    console.warn = () => {};
+    try {
+      repo.setKeys = async () => { throw new Error('transient'); };
+      await assert.doesNotReject(applyKyuubitDefaultOnce());
+      repo.getKey = async () => { throw new Error('transient'); };
+      await assert.doesNotReject(applyKyuubitDefaultOnce());
+    } finally {
+      console.warn = warn;
+      repo.getKey = orig.getKey;
+      repo.setKeys = orig.setKeys;
+    }
+    assert.equal(active(), 'aethrix-night');
+    assert.equal(getSetting(getDb(), MARKER), null);
+  });
 });

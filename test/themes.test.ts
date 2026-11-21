@@ -10,7 +10,7 @@
  *   - Built-in protection: cannot edit or delete aethrix-night / classic-teal
  *   - Activate: POST /api/admin/themes/:id/activate changes active theme
  *   - Public GET /api/theme returns active template; ETag 304
- *   - Fallback: GET /api/theme falls back to aethrix-night when active is missing
+ *   - Fallback: GET /api/theme falls back to kyuubit when active is missing
  *   - Import/export round-trip
  *   - API token refused on write routes
  */
