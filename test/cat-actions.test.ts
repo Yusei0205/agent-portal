@@ -73,6 +73,14 @@ describe('matchCatInput', () => {
     assert.equal(matchCatInput('inbox', [], []).kind, 'none');
     assert.equal(matchCatInput('inbox', undefined, undefined).kind, 'none');
   });
+  it('long or question-like text that merely contains a page word is none, short names still navigate', () => {
+    for (const t of ['why did my last session fail', 'how do I turn on auto-fix', 'how do I fix this', "what's new", 'inbox why is it so full']) assert.equal(hit(t).kind, 'none', t);
+    assert.equal(hit('What needs me?').item.href, '#/inbox');
+    assert.equal(hit('take me to my inbox').item.href, '#/inbox');
+    assert.equal(hit('start a session').item.id, 'start');
+    assert.equal(hit('new session').item.id, 'start');
+    assert.equal(hit('inbox').item.href, '#/inbox');
+  });
   it('does not offer project pages it was not given', () => {
     assert.equal(matchCatInput('auto-fix', catActions(portal), pages).kind, 'none');
   });

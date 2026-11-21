@@ -61,7 +61,14 @@ export function matchCatInput(text, actions, pages) {
   };
   for (const a of actions ?? []) consider('action', a, [a.label, ...(a.keywords ?? [])]);
   for (const pg of pages ?? []) if (pg && pg.href) consider('page', pg, [pg.label]);
-  return best.score >= 45 ? { kind: best.kind, item: best.item } : { kind: 'none' };
+  if (best.score < 45) return { kind: 'none' };
+  // Long or question-like text that merely contains a page or action word is a question for the assistant, not a shortcut.
+  if (best.score < 100) {
+    const words = q.split(' ').length;
+    const questiony = /^(why|how|what|when|where|who|which|can|could|does|do|did|is|are|should)\b/.test(q) || /\?\s*$/.test(String(text ?? ''));
+    if (words > 3 || questiony) return { kind: 'none' };
+  }
+  return { kind: best.kind, item: best.item };
 }
 
 export const CAT_GREETING = "Meow! I'm your portal assistant. What would you like to do?";

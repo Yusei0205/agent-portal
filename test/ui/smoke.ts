@@ -911,7 +911,7 @@ async function main() {
             const gate = new Promise<void>((r) => { release = r; });
             const hits = await chatMock(cp, () => ({ status: 200, body: REPLY, wait: gate }));
             await openPanel(cp);
-            await ask(cp, 'why did my last build fail');
+            await ask(cp, 'why did my last session fail');
             await cp.locator('.cat-typing').waitFor({ timeout: 2000 });
             release();
             const reply = cp.locator('.cat-msg-cat').filter({ hasText: 'sign-in expired' });
@@ -970,7 +970,7 @@ async function main() {
           await err.waitFor({ timeout: 3000 });
           await shot(cp, 'desktop-light-error-500');
           if ((await input.getAttribute('readonly')) !== null) throw new Error('The input stayed read-only after the error');
-          await ask(cp, 'why did my last build fail');
+          await ask(cp, 'why did my last session fail');
           await cp.locator('.cat-msg-cat').filter({ hasText: 'sign-in expired' }).waitFor({ timeout: 3000 });
           if ((hits as { n: number }).n !== 2) throw new Error(`Expected 2 route hits, got ${(hits as { n: number }).n}`);
         });
@@ -980,7 +980,7 @@ async function main() {
         await withCat({ prefs: null, width: 390, height: 800 }, async (cp) => {
           await chatMock(cp, () => ({ status: 200, body: { reply: 'Try <b>x</b> and then ' + 'a-very-long-unbroken-word-'.repeat(8), links: REPLY.links } }));
           await openPanel(cp);
-          await ask(cp, 'why did my last build fail');
+          await ask(cp, 'why did my last session fail');
           const reply = cp.locator('.cat-msg-cat').filter({ hasText: '<b>x</b>' });
           await reply.waitFor({ timeout: 3000 });
           if (await reply.locator('b').count() !== 0) throw new Error('The reply HTML was rendered');
