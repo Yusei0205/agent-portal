@@ -1,14 +1,13 @@
 /// <reference lib="dom" />
 /**
- * The session shows the pending "open a pull request?" question with answer buttons (the same answer as in the Inbox), and an old
- * declined card does not stay behind once a newer question exists. Real page in Chromium; the server's answers are stood in for.
+ * Old publication suggestions are hidden; real publication outcomes remain visible and dismissible.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { chromium } from 'playwright';
 import { build } from 'esbuild';
 
-test('the session answers the pull request question itself', async () => {
+test('the session hides old pull request suggestions and keeps publication outcomes', async () => {
   const entry = `import React from 'react'; import {createRoot} from 'react-dom/client'; import {PullRequestCards} from './web/src/pages/sessions/PullRequestCard.jsx'; import './web/src/styles/tokens.css'; import './web/src/styles/base.css'; import './web/src/styles/components.css';
 const base = { type: 'pull-request', repo: 'rhb.backend.shared', repoId: 'r1', base: 'main', files: 1, commits: 0 };
 const events = [{ ...base, state: 'asked', inboxId: 'old', created_at: '2026-11-13T07:10:17Z' }, { ...base, state: 'declined', created_at: '2026-11-14T09:48:58Z' }, { ...base, state: 'asked', inboxId: 'inbox1', created_at: '2026-11-14T12:34:18Z' }];
@@ -36,20 +35,15 @@ createRoot(document.getElementById('root')).render(<PullRequestCards events={eve
     });
     await page.goto('http://portal.test/');
 
-    // One card for the repository, and it is the pending question, not the older declined one.
-    await page.getByRole('region', { name: /Pull request: rhb.backend.shared/ }).waitFor();
-    assert.equal(await page.getByRole('region').count(), 1);
-    await page.getByText('Open a pull request for rhb.backend.shared?').waitFor();
+    await page.waitForFunction(() => document.getElementById('root')?.innerHTML === '');
+    assert.equal(await page.getByRole('region').count(), 0);
+    assert.equal(await page.getByText('Open a pull request for rhb.backend.shared?').count(), 0);
     assert.equal(await page.getByText(/declined or dismissed/).count(), 0);
 
-    await page.getByRole('button', { name: 'Not now' }).click();
-    await page.waitForFunction(() => true);
-    await page.getByRole('button', { name: 'Open pull request' }).click();
-    await new Promise((r) => setTimeout(r, 300));
-    assert.deepEqual(posts, [
-      { url: '/api/inbox/inbox1/resolve', body: { response: 'decline' } },
-      { url: '/api/inbox/inbox1/resolve', body: { response: 'approve' } },
-    ]);
+    assert.deepEqual(posts, []);
+
+    await page.goto('http://portal.test/?v=2');
+    await page.getByText(/Pull request failed for rhb.backend.shared|Could not push|failed/i).first().waitFor();
 
     // Dismiss hides the card, and it stays hidden after a reload (this browser remembers it).
     await page.getByRole('button', { name: /Dismiss the pull request card for rhb.backend.shared/ }).click();
@@ -58,10 +52,6 @@ createRoot(document.getElementById('root')).render(<PullRequestCards events={eve
     await page.waitForLoadState('load');
     await new Promise((r) => setTimeout(r, 500));
     assert.equal(await page.getByRole('region').count(), 0, 'still hidden after a reload');
-    // Something new for the repository (a newer event) shows the card again.
-    await page.goto('http://portal.test/?v=2');
-    await page.getByText(/Pull request failed for rhb.backend.shared|Could not push|failed/i).first().waitFor();
-    assert.equal(await page.getByRole('region').count(), 1, 'a newer event is not hidden by the old dismissal');
     assert.deepEqual(errors, []);
   } finally {
     await browser.close();

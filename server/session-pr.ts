@@ -3,8 +3,7 @@
  *
  * The runner only looks (it emits `repo-changes` at the end of a run). The portal decides here:
  *   - the session has a ticket and the project's "open pull requests" setting is on: go ahead
- *   - no ticket: ask in the Inbox (type "push"); approving calls createPullRequestForSession, declining writes `declined`
- *   - setting off: write `available` so the session card offers a button
+ *   - no ticket, or setting off: record changes without suggesting publication; the user can request a PR in chat
  * An auto-fix session (server/autofix/delivery.ts) is decided by its gate first: blocked, asked (propose mode, or a diff that cannot
  * go ahead alone) or pushed as a draft PR at once (draft_pr mode with a clean diff), whatever the project setting.
  * Going ahead means: choose a branch name, ask the runner (finalize mode, same AgentCore session) to commit and push,
@@ -312,20 +311,10 @@ async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<voi
     const settings = getPullRequestSettings(ctx.projectId);
     const ticket = ticketOf(w);
 
-    if (!settings.openPullRequests) {
+    // Keep an explicit chat request as the publication entry point unless the
+    // project has opted into automatic PRs for Jira-linked sessions.
+    if (!settings.openPullRequests || !ticket) {
       await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, base);
-      return;
-    }
-    if (!ticket) {
-      const inboxId = await createInboxItem({
-        type: 'push', projectId: ctx.projectId, workflowId: ctx.workflowId, runId: ctx.runId,
-        payload: {
-          title: `Open a pull request for ${change.repo}?`,
-          body: `${change.files} files changed in ${change.commits} commit(s) in ${change.repo}. Approve to push a new branch and open a pull request.`,
-          repo: change.repo, repoId, base: change.base, commits: change.commits, files: change.files,
-        },
-      });
-      await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, { ...base, state: 'asked', inboxId });
       return;
     }
     await runPullRequest(ctx.runId, w, resolved, base, { userId: ctx.userId }, 'other');

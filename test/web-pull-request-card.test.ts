@@ -134,15 +134,14 @@ describe('live PR review handoff', () => {
 
 
 describe('session pull request cards', () => {
-  it('shows the pending question, and only the latest state: an older declined card does not stay behind', () => {
+  it('hides pending and historical publication suggestions', () => {
     const cards = sessionPullRequestCards([
       { ...base, state: 'asked', inboxId: 'inbox0' },
       { ...base, state: 'declined' },
       { ...base, state: 'asked', inboxId: 'inbox1' },
     ]);
-    assert.equal(cards.length, 1);
-    assert.equal(cards[0].state, 'asked');
-    assert.equal(cards[0].inboxId, 'inbox1');
+    assert.deepEqual(cards, []);
+    assert.deepEqual(sessionPullRequestCards([{ ...base, state: 'available' }]), []);
   });
   it('keeps progress, PR links and review results visible', () => {
     for (const state of ['pushing', 'opened', 'review-started', 'review-failed', 'failed']) {

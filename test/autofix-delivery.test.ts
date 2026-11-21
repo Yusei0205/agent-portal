@@ -638,14 +638,11 @@ describe('the gate in the session PR flow', () => {
     assert.equal(inbox(s2).find((i) => i.type === 'blocked')?.payload.reason, 'attempt limit reached');
   });
 
-  it('a workflow that belongs to no finding, or to a finding not fixing, is untouched', async () => {
+  it('a workflow without a finding records changes without suggesting publication', async () => {
     const s = await makeFix({ withFinding: false });
     await handleRepoChanges(ctxOf(s), [clean]);
-    assert.deepEqual(states(s), ['asked']);
-    const pl = inbox(s)[0].payload;
-    assert.equal(pl.kind, undefined);
-    assert.equal(pl.title, 'Open a pull request for shop?');
-    assert.equal(pl.body, '2 files changed in 1 commit(s) in shop. Approve to push a new branch and open a pull request.');
+    assert.deepEqual(states(s), ['available']);
+    assert.equal(inbox(s).length, 0);
 
   });
 

@@ -201,9 +201,9 @@ Click the **Stop** button in the workspace header while the session is running.
 When a session changes code in a project repository, the portal can push the work to a new branch, open a pull request and start a code review of it.
 
 - **Sessions linked to a Jira ticket** open the pull request by themselves when a run ends. The branch is `portal/<TICKET>-<short-title>`, the title is `<TICKET>: <ticket summary>`, and a draft review starts with the branch, PR number and Jira key already filled in. Nothing is posted to the pull request until you approve the review.
-- **Sessions without a ticket** ask first. An item "Open a pull request for <repo>?" appears in the Inbox and on the session; nothing is pushed until you approve it.
+- **Sessions without a ticket** do not suggest opening a pull request. Ask the agent in chat when you want one, including the target branch if needed.
 - **No changes, no pull request.** A session that did not change the repository pushes nothing.
-- The **Pull request** card on the session shows each step (asked, pushed, opened, review started) with links. If a step fails, or you declined or the question expired, the card has a **Create pull request** or **Try again** button.
+- The **Pull request** card shows publication progress and results with links. Suggestion cards asking whether to create a PR are hidden, including older suggestions.
 - Supported: **GitHub** and **AWS CodeCommit**. On other hosts the branch is pushed and the card says no pull request was opened.
 - The token or AWS account behind the repository needs write access: a GitHub token with repository write access, or CodeCommit `GitPush` and `CreatePullRequest`. Without it the card says "No permission to push to <repo>".
 
