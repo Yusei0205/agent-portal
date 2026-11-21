@@ -247,19 +247,23 @@
 .cat-paw svg { fill: currentColor; }
 .cat-paw:hover { opacity: 1; color: var(--accent); }
 
-/* Celebration sparkles: six small dots flying outward. */
-.cat-sparkles { position: absolute; left: 50%; top: 35%; width: 0; height: 0; pointer-events: none; }
+/* Celebration sparkles: six small four-leaf clovers flying outward. */
+.cat-sparkles { --cat-clover: #2f8f5b; position: absolute; left: 50%; top: 35%; width: 0; height: 0; pointer-events: none; }
+[data-theme="dark"] .cat-sparkles { --cat-clover: #3fae6e; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cat-sparkles { --cat-clover: #3fae6e; } }
 .cat-sparkles i { display: none; }
 @media (prefers-reduced-motion: no-preference) {
   .cat-bubble { animation: cat-pop 180ms ease-out; }
   .cat-sparkles i {
     display: block;
     position: absolute;
-    left: -2px;
-    top: -2px;
-    width: 4px;
-    height: 4px;
-    background: var(--accent);
+    left: -4px;
+    top: -4px;
+    width: 8px;
+    height: 8px;
+    background: var(--cat-clover);
+    /* a plus: four leaves round a gold-free centre, drawn as a clipped square */
+    clip-path: polygon(33% 0, 67% 0, 67% 33%, 100% 33%, 100% 67%, 67% 67%, 67% 100%, 33% 100%, 33% 67%, 0 67%, 0 33%, 33% 33%);
     opacity: 0;
     transform: rotate(var(--a)) translateY(0);
     animation: cat-spark 900ms ease-out forwards;
@@ -299,8 +303,9 @@
 
 /* Pixel cat sprite (web/src/components/CatSprite.jsx): a sheet of frames stepped with steps(); the cat colours are custom properties with light and dark values. */
 .cat-sprite {
-  /* A calico: white fur, orange and brown patches, pink ears, nose and cheeks, a collar in the theme accent with a gold tag.
-     The cat's own colours are fixed values (a cat is not recoloured by a theme); the collar and the effects follow the accent. */
+  /* The owner's calico: brown on the cat's left half and orange on the right, a cream blaze, a cream and grey belly, pink ears,
+     nose and cheeks, a gold collar and a green four-leaf clover charm with a gold centre.
+     The cat's own colours are fixed values (a cat is not recoloured by a theme); only the effects follow the accent. */
   --cat-outline: #3b2d28;
   --cat-fur: #fffaf1;
   --cat-belly: #ebe1d3;
@@ -310,8 +315,9 @@
   --cat-pink: #f08fa3;
   --cat-orange: #e8923a;
   --cat-brown: #8c5b3b;
-  --cat-collar: var(--accent);
-  --cat-tag: #f3c63f;
+  --cat-collar: #f2b33c;
+  --cat-tag: #f2cb3c;
+  --cat-clover: #2f8f5b;
   position: relative;
   overflow: hidden;
   image-rendering: pixelated;
@@ -329,6 +335,7 @@
   --cat-orange: #f1a24f;
   --cat-brown: #a8704a;
   --cat-pink: #f29bad;
+  --cat-clover: #3fae6e;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .cat-sprite {
@@ -338,6 +345,7 @@
     --cat-orange: #f1a24f;
     --cat-brown: #a8704a;
     --cat-pink: #f29bad;
+    --cat-clover: #3fae6e;
   }
 }
 @media (prefers-reduced-motion: no-preference) {

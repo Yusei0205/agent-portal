@@ -1,14 +1,15 @@
 /**
  * The cat's pixel art, drawn in code: 16x16 character grids, one per animation frame.
  *   .  transparent   o outline   f fur (white)   b belly (shaded white)   a accent (sparkles, marks)   e eye   k blush (cheeks)
- *   r pink (ears, nose)   p orange patch   n brown patch   c collar   g tag (gold)
- * The cat is a calico: white fur with an orange patch on the left of the face and body and a brown patch on the right; patches only
- * ever replace fur or belly pixels, so the outline, eyes and face stay readable. The frames are composed by a tiny painter (so a pose is a few lines, not 256 hand-typed characters) and exported as plain string
+ *   r pink (ears, nose)   p orange patch   n brown patch   c collar (gold)   g clover centre (gold)   l clover leaf (green)
+ * The cat is the owner's calico: the head and body split brown on the cat's left half (viewer's left, x <= 7) and orange on the
+ * right half (x >= 8), with a cream blaze down the middle of the face, a cream and grey belly, pink ears, cheeks and nose, a gold
+ * collar and a small four-leaf clover charm under it; patches only ever replace fur or belly pixels, so the outline, eyes and face stay readable. The frames are composed by a tiny painter (so a pose is a few lines, not 256 hand-typed characters) and exported as plain string
  * grids; the component renders them as crisp SVG rects coloured from theme tokens. No image files.
  */
 export const SPRITE_SIZE = 16;
 export const PALETTE_KEYS = {
-  o: 'outline', f: 'fur', b: 'belly', a: 'accent', e: 'eye', k: 'blush', r: 'pink', p: 'orange', n: 'brown', c: 'collar', g: 'tag',
+  o: 'outline', f: 'fur', b: 'belly', a: 'accent', e: 'eye', k: 'blush', r: 'pink', p: 'orange', n: 'brown', c: 'collar', g: 'tag', l: 'clover',
 };
 
 function canvas() {
@@ -46,11 +47,12 @@ function front({ dy = 2, eyes = 'open', ears = 'up', tail = 0, armsR = 0, armsL 
     [[14, 12], [15, 11], [15, 10], [15, 9]],
   ][tail] ?? [];
   if (!armsR) for (const [x, y] of tails) c.put(x, y + dy, 'p');
-  // calico patches: orange on the left of the face and body, brown on the right, white between
+  // the owner's calico: brown on the cat's left half (x <= 7), orange on the right half (x >= 8), a cream blaze between the eyes
   const at = (pts) => pts.map(([x, y]) => [x, y + dy]);
-  c.tint(at([[4, 1], [4, 2], [5, 2], [4, 3], [5, 3], [6, 3], [4, 4], [5, 8], [4, 9], [5, 9], [4, 10], [4, 11], [4, 12]]), 'p');
-  c.tint(at([[11, 1], [10, 2], [11, 2], [9, 3], [10, 3], [11, 3], [11, 4], [11, 5], [10, 9], [11, 9], [11, 10], [10, 11], [11, 11], [10, 12], [11, 12]]), 'n');
-  c.put(7, 8 + dy, 'g'); c.put(8, 8 + dy, 'g'); // the gold tag under the collar
+  c.tint(at([[4, 2], [5, 2], [4, 3], [5, 3], [6, 3], [4, 4], [4, 5], [5, 8], [4, 9], [5, 9], [4, 10], [4, 11], [5, 11], [4, 12], [5, 12]]), 'n');
+  c.tint(at([[10, 2], [11, 2], [9, 3], [10, 3], [11, 3], [11, 4], [10, 8], [10, 9], [11, 9], [11, 10], [10, 11], [11, 11], [10, 12], [11, 12]]), 'p');
+  // a small plus-shaped four-leaf clover with a gold centre, hanging under the collar
+  c.put(7, 8 + dy, 'l'); c.put(6, 9 + dy, 'l'); c.put(7, 9 + dy, 'g'); c.put(8, 9 + dy, 'l'); c.put(7, 10 + dy, 'l');
   // a raised paw: forearm column with an outline and a paw tip
   const paw = (x, shift) => {
     const y0 = 5 + shift;
@@ -85,10 +87,10 @@ function side({ legs, tail, step }) {
   }
   for (const [x, y] of tail) c.put(x, y + dy, 'p');
   const at = (pts) => pts.map(([x, y]) => [x, y + dy]);
-  c.tint(at([[10, 4], [11, 4], [10, 5], [3, 8], [4, 8], [5, 8], [3, 9], [4, 9], [4, 10]]), 'p');
-  c.tint(at([[13, 4], [14, 4], [7, 8], [8, 8], [9, 8], [8, 9], [9, 9]]), 'n');
+  c.tint(at([[10, 4], [11, 4], [10, 5], [3, 8], [4, 8], [5, 8], [3, 9], [4, 9], [4, 10]]), 'n');
+  c.tint(at([[13, 4], [14, 4], [7, 8], [8, 8], [9, 8], [8, 9], [9, 9]]), 'p');
   for (const x of [10, 11, 12]) c.put(x, 7 + dy, 'c'); // the collar under the chin
-  c.put(12, 8 + dy, 'g'); // the gold tag
+  c.put(12, 8 + dy, 'l'); c.put(11, 9 + dy, 'l'); c.put(12, 9 + dy, 'g'); c.put(13, 9 + dy, 'l'); c.put(12, 10 + dy, 'l'); // the clover charm
   if (step) step(c);
   return c.done();
 }
