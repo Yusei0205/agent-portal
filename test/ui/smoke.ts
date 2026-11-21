@@ -2445,6 +2445,9 @@ async function main() {
         status: 'pending', verificationUrl: 'https://auth.openai.com/codex/device', userCode: 'TEST-1234',
       } }));
       try {
+        // Leave the page first: a hash-only change to the same route keeps the mounted component,
+        // which has already loaded the real /api/codex/status and would never see this mock.
+        await goto(p, '/projects', 300);
         await goto(p, '/config/sign-ins', 500);
         const section = p.locator('section[aria-labelledby="codex-credentials-title"]');
         await section.getByRole('button', { name: 'Sign in with ChatGPT', exact: true }).click();
