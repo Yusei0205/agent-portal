@@ -715,7 +715,13 @@ async function main() {
       const withCat = async (opts: Parameters<typeof catPage>[0], fn: (cp: Page) => Promise<void>) => {
         const cp = await catPage(opts);
         try { await fn(cp); } finally {
-          try { await cp.evaluate((k) => localStorage.removeItem(k), CAT_PREFS); } catch { /* best effort */ }
+          try {
+            await cp.evaluate((k) => {
+              localStorage.removeItem(k);
+              // The cat keeps its conversation per project; start every case without one.
+              for (const key of Object.keys(localStorage)) if (key.startsWith('portal.cat.chat.')) localStorage.removeItem(key);
+            }, CAT_PREFS);
+          } catch { /* best effort */ }
           await cp.close();
         }
       };
@@ -1036,6 +1042,50 @@ async function main() {
           }
           if (await cp.evaluate(() => { const l = document.querySelector('.cat-panel-log') as HTMLElement; return l.scrollWidth > l.clientWidth + 1; })) throw new Error('The log scrolls sideways');
           await shot(cp, 'phone-reply');
+        });
+      }, page);
+
+      await test('the conversation is kept per project: it survives closing the panel and a reload, Clear chat empties it, another project has its own', async () => {
+        await withCat({ prefs: SIT, mode: 'light' }, async (cp) => {
+          const hits = await chatMock(cp, () => ({ status: 200, body: REPLY }));
+          await openPanel(cp);
+          await ask(cp, 'why did my last session fail');
+          await cp.locator('.cat-msg-cat').filter({ hasText: 'sign-in expired' }).waitFor({ timeout: 3000 });
+          await cp.keyboard.press('Escape');
+          await cp.locator('[data-testid="cat-panel"]').waitFor({ state: 'detached', timeout: 2000 });
+          await openPanel(cp);
+          await cp.locator('.cat-msg-me').filter({ hasText: 'why did my last session fail' }).waitFor({ timeout: 2000 });
+          await cp.locator('.cat-msg-cat').filter({ hasText: 'sign-in expired' }).waitFor({ timeout: 2000 });
+          await cp.reload();
+          await openPanel(cp);
+          await cp.locator('.cat-msg-cat').filter({ hasText: 'sign-in expired' }).waitFor({ timeout: 3000 });
+          if (hits.n !== 1) throw new Error(`Reopening asked again (${hits.n} hits)`);
+          // A follow-up sends the kept conversation as history.
+          let sent: unknown = null;
+          await cp.unroute('**/api/assistant/chat');
+          await cp.route('**/api/assistant/chat', async (route) => {
+            sent = route.request().postDataJSON();
+            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ reply: 'Follow-up answer.', links: [] }) });
+          });
+          await ask(cp, 'and how do I fix it');
+          await cp.locator('.cat-msg-cat').filter({ hasText: 'Follow-up answer.' }).waitFor({ timeout: 3000 });
+          const history = (sent as { history?: Array<{ role: string; text: string }> } | null)?.history ?? [];
+          if (!history.some((h) => h.role === 'me' && h.text === 'why did my last session fail')) throw new Error('The kept question was not sent as history');
+          // Outside the project there is a separate conversation.
+          await cp.keyboard.press('Escape');
+          await goto(cp, '/inbox');
+          await openPanel(cp);
+          await cp.waitForTimeout(200);
+          if (await cp.locator('.cat-msg-me').count() !== 0) throw new Error('The project conversation showed outside the project');
+          await cp.keyboard.press('Escape');
+          await goto(cp, sessionsHash());
+          await openPanel(cp);
+          await cp.locator('.cat-msg-cat').filter({ hasText: 'Follow-up answer.' }).waitFor({ timeout: 3000 });
+          await cp.getByRole('button', { name: 'Clear chat', exact: true }).click();
+          if (await cp.locator('.cat-msg-me').count() !== 0) throw new Error('Clear chat left messages');
+          await cp.keyboard.press('Escape');
+          await openPanel(cp);
+          if (await cp.locator('.cat-msg-me').count() !== 0) throw new Error('The cleared conversation came back');
         });
       }, page);
 

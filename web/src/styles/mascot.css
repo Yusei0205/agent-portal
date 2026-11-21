@@ -150,7 +150,9 @@
   color: var(--ink-3);
   cursor: pointer;
 }
+.cat-panel-tools { display: inline-flex; gap: 2px; }
 .cat-panel-close:hover { color: var(--ink); background: var(--raised); }
+.cat-panel-close:disabled { opacity: .4; cursor: default; background: transparent; }
 .cat-panel-send { background: var(--accent); color: var(--accent-ink); }
 .cat-panel-send:disabled { background: var(--raised); color: var(--ink-3); cursor: default; }
 .cat-panel-close:focus-visible,

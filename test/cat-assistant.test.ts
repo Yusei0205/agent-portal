@@ -2,7 +2,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 // @ts-expect-error — plain JS module without type declarations
-import { shouldAsk, trimHistory, describeAssistantError } from '../web/src/lib/cat-assistant.js';
+import { shouldAsk, trimHistory, describeAssistantError, chatKey, serialiseChat, parseChat } from '../web/src/lib/cat-assistant.js';
 
 describe('shouldAsk', () => {
   it('asks when nothing matched and the text is long enough', () => {
@@ -60,5 +60,55 @@ describe('describeAssistantError', () => {
   it('falls back for anything else', () => {
     assert.equal(describeAssistantError({ status: 500 }), "I couldn't answer that just now. Please try again.");
     assert.equal(describeAssistantError({}), "I couldn't answer that just now. Please try again.");
+  });
+});
+
+describe('per-project chat storage', () => {
+  const now = Date.parse('2026-11-21T00:00:00Z');
+  const DAY = 24 * 3600 * 1000;
+
+  it('keys by user and project, "portal" outside a project', () => {
+    assert.equal(chatKey('u1', 'p9'), 'portal.cat.chat.u1.p9');
+    assert.equal(chatKey('u1', null), 'portal.cat.chat.u1.portal');
+    assert.equal(chatKey('u1', undefined), 'portal.cat.chat.u1.portal');
+    assert.notEqual(chatKey('u1', 'p9'), chatKey('u2', 'p9'));
+  });
+
+  it('drops the greeting and pending replies, keeps the newest 20', () => {
+    const msgs = [{ id: 0, role: 'cat', text: 'hi' }];
+    for (let i = 1; i <= 25; i++) msgs.push({ id: i, role: i % 2 ? 'me' : 'cat', text: `m${i}` });
+    msgs.push({ id: 26, role: 'cat', text: '', pending: true });
+    const out = parseChat(serialiseChat(msgs, now), now);
+    assert.equal(out.length, 20);
+    assert.equal(out[0].text, 'm6');
+    assert.equal(out[19].text, 'm25');
+    assert.ok(out.every((m) => m.id !== 0 && !m.pending));
+  });
+
+  it('round-trips links, notice links and the error flag', () => {
+    const msgs = [
+      { id: 1, role: 'me', text: 'q', error: true },
+      { id: 2, role: 'cat', text: 'a', links: [{ id: 'inbox', label: 'Inbox', href: '#/inbox' }] },
+      { id: 3, role: 'cat', text: 'A session finished.', href: '#/p/x/sessions/1' },
+    ];
+    const out = parseChat(serialiseChat(msgs, now), now);
+    assert.deepEqual(out.map(({ role, text, error, links, href }) => ({ role, text, error, links, href })), [
+      { role: 'me', text: 'q', error: true, links: undefined, href: undefined },
+      { role: 'cat', text: 'a', error: undefined, links: [{ id: 'inbox', label: 'Inbox', href: '#/inbox' }], href: undefined },
+      { role: 'cat', text: 'A session finished.', error: undefined, links: undefined, href: '#/p/x/sessions/1' },
+    ]);
+  });
+
+  it('returns [] for nothing, garbage, a wrong shape or data older than 14 days', () => {
+    assert.deepEqual(parseChat(null, now), []);
+    assert.deepEqual(parseChat('{not json', now), []);
+    assert.deepEqual(parseChat('{"savedAt":1,"messages":"x"}', now), []);
+    assert.deepEqual(parseChat(JSON.stringify({ savedAt: now - 15 * DAY, messages: [{ role: 'me', text: 'old' }] }), now), []);
+    assert.equal(parseChat(JSON.stringify({ savedAt: now - 13 * DAY, messages: [{ role: 'me', text: 'ok' }] }), now).length, 1);
+  });
+
+  it('skips entries that are not plain me/cat text', () => {
+    const raw = JSON.stringify({ savedAt: now, messages: [{ role: 'system', text: 'x' }, { role: 'me', text: 5 }, null, { role: 'cat', text: 'fine' }] });
+    assert.deepEqual(parseChat(raw, now).map((m) => m.text), ['fine']);
   });
 });

@@ -3,7 +3,7 @@ import { Icon } from './Icon.jsx';
 import { buildNavItems } from './CommandPalette.jsx';
 import { navigate } from '../lib/router.js';
 import { CAT_GREETING, catActions, matchCatInput } from '../lib/cat-actions.js';
-import { describeAssistantError, shouldAsk, trimHistory } from '../lib/cat-assistant.js';
+import { chatKey, describeAssistantError, parseChat, serialiseChat, shouldAsk, trimHistory } from '../lib/cat-assistant.js';
 import { api } from '../lib/api.js';
 
 /**
@@ -11,14 +11,35 @@ import { api } from '../lib/api.js';
  * opened; anything else is asked of the read-only assistant (POST /api/assistant/chat) and the reply is shown as plain text with link
  * buttons. Non-modal: the page behind stays usable. Escape closes
  * it; the cat gives focus to the input on open and takes it back on close. On a phone it is a full-width sheet at the bottom.
+ * The conversation is kept in this browser, one per person and project (chatKey), so it survives closing the panel and reloading.
  */
+
+const GREETING = { id: 0, role: 'cat', text: CAT_GREETING };
+
+function readStored(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+function writeStored(key, value) {
+  try { if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, value); } catch { /* private mode or full */ }
+}
+
 export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice }) {
-  const [messages, setMessages] = useState([{ id: 0, role: 'cat', text: CAT_GREETING }]);
+  const seq = useRef(1);
+  const key = chatKey(user?.id ?? 'anon', route.projectId);
+  const load = (k) => [GREETING, ...parseChat(readStored(k), Date.now()).map((m) => ({ ...m, id: seq.current++ }))];
+  const [messages, setMessages] = useState(() => load(key));
+  const [chatFor, setChatFor] = useState(key);
+  const keyRef = useRef(key);
+  keyRef.current = key;
+  // The project (or the person) changed while the panel is open: show that conversation instead.
+  if (chatFor !== key) {
+    setChatFor(key);
+    setMessages(load(key));
+  }
   const [text, setText] = useState('');
   const [pending, setPending] = useState(false);
   const inputRef = useRef(null);
   const logRef = useRef(null);
-  const seq = useRef(1);
   const actions = catActions(route);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
@@ -27,6 +48,16 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
   useEffect(() => {
     if (notice) setMessages((m) => [...m, { id: seq.current++, role: 'cat', text: notice.text, href: notice.href }]);
   }, [notice]);
+
+  useEffect(() => {
+    if (chatFor === key) writeStored(key, serialiseChat(messages, Date.now()));
+  }, [messages, chatFor, key]);
+
+  const clearChat = () => {
+    writeStored(key, null);
+    setMessages([GREETING]);
+    inputRef.current?.focus();
+  };
 
   useEffect(() => {
     const el = logRef.current;
@@ -51,13 +82,26 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
     const meId = seq.current++;
     setMessages((all) => push(all, { id: meId, role: 'me', text: q }, { id: pendingId, role: 'cat', text: '', pending: true }));
     setPending(true);
-    const replace = (m) => setMessages((all) => all.map((x) => (x.id === pendingId ? { id: pendingId, role: 'cat', ...m } : x)));
+    const askedIn = keyRef.current;
+    // A reply that arrives after the person moved to another project goes into the conversation it was asked in.
+    const replace = (m) => {
+      if (keyRef.current !== askedIn) {
+        const stored = parseChat(readStored(askedIn), Date.now());
+        if (m.error) { // an unanswered question is not sent as history later
+          const last = stored.map((x) => x.role).lastIndexOf('me');
+          if (last >= 0) stored[last] = { ...stored[last], error: true };
+        }
+        writeStored(askedIn, serialiseChat([...stored, { role: 'cat', ...m }], Date.now()));
+        return;
+      }
+      setMessages((all) => all.map((x) => (x.id === pendingId ? { id: pendingId, role: 'cat', ...m } : x)));
+    };
     try {
       const r = await api.post('/api/assistant/chat', { question: q, projectId: route.projectId ?? undefined, history });
       replace({ text: String(r?.reply ?? ''), links: Array.isArray(r?.links) ? r.links.map((l) => (l?.id === 'new-session' ? { ...l, after: 'new-session' } : l)) : [] });
     } catch (err) {
       // The unanswered question stays on screen but is not sent as history (no two `me` entries in a row).
-      setMessages((all) => all.map((x) => (x.id === meId ? { ...x, error: true } : x)));
+      if (keyRef.current === askedIn) setMessages((all) => all.map((x) => (x.id === meId ? { ...x, error: true } : x)));
       const signIn = err?.data?.code === 'no_sign_in';
       replace({ text: describeAssistantError(err), error: true, links: signIn ? [{ id: 'sign-ins', label: 'Agent sign-ins', href: '#/config/sign-ins' }] : [] });
     } finally {
@@ -90,7 +134,10 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
     >
       <header className="cat-panel-head">
         <span className="cat-panel-title"><Icon name="sparkles" size={14} /> Chat with Agent</span>
-        <button type="button" className="cat-panel-close" aria-label="Close the cat assistant" onClick={() => onClose()}><Icon name="x" size={14} /></button>
+        <span className="cat-panel-tools">
+          <button type="button" className="cat-panel-close" aria-label="Clear chat" title="Clear chat" onClick={clearChat} disabled={pending || messages.length < 2}><Icon name="trash" size={14} /></button>
+          <button type="button" className="cat-panel-close" aria-label="Close the cat assistant" onClick={() => onClose()}><Icon name="x" size={14} /></button>
+        </span>
       </header>
       <div className="cat-panel-log" ref={logRef} role="log" aria-live="polite">
         {messages.map((m) => (
