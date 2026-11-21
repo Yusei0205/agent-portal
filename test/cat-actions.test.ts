@@ -2,7 +2,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 // @ts-expect-error — plain JS module without type declarations
-import { catActions, matchCatInput, normalizeQuery, fallbackReply, CAT_GREETING } from '../web/src/lib/cat-actions.js';
+import { catActions, matchCatInput, normalizeQuery, CAT_GREETING } from '../web/src/lib/cat-actions.js';
 
 const inProject = { projectId: 'p1', tab: 'sessions', rest: [] };
 const portal = { projectId: null, tab: 'projects', rest: [] };
@@ -86,8 +86,7 @@ describe('copy', () => {
     assert.equal(normalizeQuery('Take me to the Inbox!'), 'inbox');
     assert.equal(normalizeQuery('  Auto-fix '), 'auto fix');
   });
-  it('greets and falls back with the available names', () => {
+  it('greets', () => {
     assert.equal(CAT_GREETING, "Meow! I'm your portal assistant. What would you like to do?");
-    assert.equal(fallbackReply(catActions(portal)), "I can't answer questions yet, but I can take you to: What needs me?, Open a project.");
   });
 });

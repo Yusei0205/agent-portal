@@ -827,7 +827,7 @@ async function main() {
           if ((await panel.getAttribute('role')) !== 'dialog') throw new Error('The panel is not a dialog');
           if ((await panel.getAttribute('aria-modal')) !== null) throw new Error('The panel must not be modal');
           const text = await panel.innerText();
-          for (const want of ["Meow! I'm your portal assistant. What would you like to do?", 'Shortcuts only for now', 'Allow cat to roam']) {
+          for (const want of ["Meow! I'm your portal assistant. What would you like to do?", 'Answers use your own sign-in', 'Allow cat to roam']) {
             if (!text.includes(want)) throw new Error(`The panel lacks "${want}"`);
           }
           for (const chip of ['Start a session', 'What needs me?', 'Auto-fix', 'Pipelines', 'Search knowledge']) {
@@ -856,12 +856,12 @@ async function main() {
         });
       }, page);
 
-      await test('typing "inbox" opens the Inbox; a question gets the shortcut reply with the chips; Escape closes and focus returns to the cat', async () => {
+      await test('typing "inbox" opens the Inbox; a question is sent to the assistant and gets a reply or a friendly error, the chips stay; Escape closes and focus returns to the cat', async () => {
         await withCat({ prefs: SIT }, async (cp) => {
           await openPanel(cp);
           await cp.locator('.cat-panel-input').fill('what is the weather');
           await cp.keyboard.press('Enter');
-          await cp.locator('.cat-msg-cat').filter({ hasText: "I can't answer questions yet, but I can take you to:" }).waitFor({ timeout: 2000 });
+          await cp.locator('.cat-msg-cat').filter({ hasText: /sign-in|couldn't answer|lot of questions|too long/ }).waitFor({ timeout: 5000 });
           if (await cp.locator('.cat-chip').count() < 5) throw new Error('The chips are missing after the reply');
           if (!(await hashOf(cp)).includes('/sessions')) throw new Error('A question navigated');
           await cp.locator('.cat-panel-input').fill('inbox');

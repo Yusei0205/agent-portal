@@ -1,6 +1,6 @@
 /**
  * The cat's shortcut panel (phase B1): which actions it offers for the current page and how typed text is matched to an action or a page.
- * Pure functions; no model, no network. The panel (CatChatPanel.jsx) navigates to the chosen href.
+ * Pure functions; no model, no network (questions go through cat-assistant.js). The panel (CatChatPanel.jsx) navigates to the chosen href.
  */
 
 /**
@@ -62,12 +62,6 @@ export function matchCatInput(text, actions, pages) {
   for (const a of actions ?? []) consider('action', a, [a.label, ...(a.keywords ?? [])]);
   for (const pg of pages ?? []) if (pg && pg.href) consider('page', pg, [pg.label]);
   return best.score >= 45 ? { kind: best.kind, item: best.item } : { kind: 'none' };
-}
-
-/** The reply when nothing matched: it lists what the cat can take the person to. */
-export function fallbackReply(actions) {
-  const names = (actions ?? []).map((a) => a.label);
-  return `I can't answer questions yet, but I can take you to: ${names.join(', ')}.`;
 }
 
 export const CAT_GREETING = "Meow! I'm your portal assistant. What would you like to do?";

@@ -506,13 +506,16 @@
     "assistant": {
       "description": "The cat's read-only assistant: guide passages, prompt, limits, live summary and the chat route",
       "sources": [
-        "server/assistant/**"
+        "server/assistant/**",
+        "web/src/lib/cat-assistant.js",
+        "web/src/components/CatChatPanel.jsx"
       ],
       "tests": [
         "test/assistant-prompt.test.ts",
         "test/assistant-limits.test.ts",
         "test/assistant-summary.test.ts",
-        "test/assistant-routes.test.ts"
+        "test/assistant-routes.test.ts",
+        "test/cat-assistant.test.ts"
       ],
       "smokeIds": []
     },
