@@ -1412,9 +1412,11 @@ async function main() {
       await test('Pipelines tab: saving settings reloads the list; a failed status refresh keeps the test-message toast', async (p) => {
         let listCalls = 0;
         const countingList = (route: import('playwright').Route) => { listCalls++; return listHandler(route); };
-        let settingsGets = 0;
+        // The status refresh that follows "Send test message" must fail. Switch the failure on right before that
+        // click: counting GETs ("fail from the 2nd") was racy, because the panel can mount, and so load, twice.
+        let failSettingsGet = false;
         const flakySettings = (route: import('playwright').Route) => {
-          if (route.request().method() === 'GET' && ++settingsGets > 1) return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'boom' }) });
+          if (route.request().method() === 'GET' && failSettingsGet) return route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'boom' }) });
           return settingsHandler(route);
         };
         const testFilter = (url: URL) => url.pathname === `${listPath}/chat/test`;
@@ -1430,6 +1432,7 @@ async function main() {
           await p.getByText('Pipeline settings saved').first().waitFor({ timeout: 5000 });
           for (let i = 0; i < 20 && listCalls === before; i++) await p.waitForTimeout(100);
           if (listCalls === before) throw new Error('Saving the settings did not reload the list');
+          failSettingsGet = true;
           await p.getByRole('button', { name: 'Send test message' }).click();
           await p.getByText('Test message sent').first().waitFor({ timeout: 5000 });
           if (await p.getByText('boom').count() !== 0) throw new Error('The status refresh error replaced the toast');
