@@ -796,7 +796,15 @@ under **What the agent reads** (types: System overview, Architecture, API refere
 **Your own document types.** In **New document**, choose **+ New type…** in the type list, give it a name (for example "Data dictionary")
 and say what it should contain (for example "Every table and column: meaning, type, owner and example values"). The type is saved for
 the project: it is offered again in the type list (under "This project's types", where **Remove this type** deletes it) and in
-**Build from repositories**. Each document has an
+**Build from repositories**.
+
+**Suggested types for developers.** Under **+ New type…**, **Start from a suggestion** fills the name and contents in one click (you can
+still edit them): Technical design document, Deployment guide (resource inventory and relationships, backup and restore, disaster
+recovery), Developer onboarding guide, Configuration reference, Data model and dictionary, Integration specification, Testing strategy,
+Security overview and Architecture decision records. **Build from repositories** lists the same suggestions as checkboxes; the ones you
+tick are saved to the project when the build starts. How they fit with the built-in types: the **Deployment guide** says how the system is
+built, deployed and recovered, the **Runbook** covers day-to-day operation and alerts, **Architecture** the structure and its reasons,
+and a **Technical design document** one feature or change in depth. Each document has an
 **Add to Knowledge** button: it copies the document into Knowledge and keeps it current on every **Refresh**; **In Knowledge ✓** takes it
 out again. **Diagrams** (architecture diagrams from the selected repositories) and **Decks** are made the same way.
 

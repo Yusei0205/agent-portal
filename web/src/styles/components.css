@@ -2258,3 +2258,5 @@ button.status-filter.is-active { outline: 2px solid var(--accent); outline-offse
 .kb-from-code { margin-left: 6px; font-size: 0.72rem; vertical-align: 1px; }
 .kb-row-actions { white-space: nowrap; }
 .kb-writing { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; }
+.doc-type-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.doc-type-chip.is-on { border-color: var(--accent); color: var(--accent); }

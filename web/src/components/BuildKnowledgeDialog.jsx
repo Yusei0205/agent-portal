@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
 import { AiChoicePicker } from './AiChoicePicker.jsx';
+import { unsavedPresets } from '../lib/doc-type-presets.js';
 
 const TYPES = [
   { id: 'overview', label: 'System overview', hint: 'what the system does and its parts' },
@@ -53,7 +54,16 @@ export function BuildKnowledgeDialog({ projectId, onClose, onStarted }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.post(`/api/projects/${projectId}/knowledge/build`, { repoIds, types, ...ai });
+      // Suggested types that are ticked become the project's own types first, then they are built like any other.
+      const chosen = [];
+      for (const t of types) {
+        if (!t.startsWith('preset:')) { chosen.push(t); continue; }
+        const preset = unsavedPresets(customTypes).find((p) => `preset:${p.key}` === t);
+        if (!preset) continue;
+        const saved = await api.post(`/api/projects/${projectId}/doc-types`, { label: preset.label, guide: preset.guide });
+        chosen.push(`custom:${saved.type.id}`);
+      }
+      const r = await api.post(`/api/projects/${projectId}/knowledge/build`, { repoIds, types: chosen, ...ai });
       onStarted(r.docs || []);
       onClose();
     } catch (err) {
@@ -102,6 +112,13 @@ export function BuildKnowledgeDialog({ projectId, onClose, onStarted }) {
               <label key={t.id} className="context-item">
                 <input type="checkbox" checked={types.includes(`custom:${t.id}`)} onChange={() => toggle(setTypes, `custom:${t.id}`)} />
                 <span>{t.label}</span> <span className="muted small" title={t.guide}>this project's type</span>
+              </label>
+            ))}
+            {unsavedPresets(customTypes).length > 0 && <p className="muted small" style={{ margin: '4px 0 0' }}>Suggested for developers (saved to the project when used):</p>}
+            {unsavedPresets(customTypes).map((p) => (
+              <label key={p.key} className="context-item">
+                <input type="checkbox" checked={types.includes(`preset:${p.key}`)} onChange={() => toggle(setTypes, `preset:${p.key}`)} />
+                <span>{p.label}</span> <span className="muted small" title={p.guide}>suggested</span>
               </label>
             ))}
             <p className="muted small" style={{ margin: 0 }}>

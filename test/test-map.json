@@ -537,12 +537,14 @@
       "sources": [
         "server/knowledge-from-code.ts",
         "web/src/components/BuildKnowledgeDialog.jsx",
-        "server/doc-types.ts"
+        "server/doc-types.ts",
+        "web/src/lib/doc-type-presets.js"
       ],
       "tests": [
         "test/knowledge-from-code.test.ts",
         "test/generated-docs.test.ts",
-        "test/knowledge.test.ts"
+        "test/knowledge.test.ts",
+        "test/doc-type-presets.test.ts"
       ],
       "smokeIds": [
         "knowledge"

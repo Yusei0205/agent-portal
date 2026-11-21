@@ -1238,6 +1238,11 @@ async function main() {
       let rebuilt = '';
       const writing = { on: false };
       await p.route(`**/api/projects/${projectId}/repos`, (r) => r.fulfill({ json: { repos: [{ id: 'r1', name: 'billing-api', status: 'ready' }, { id: 'r2', name: 'web-app', status: 'ready' }] } }));
+      let savedPreset: any = null; // eslint-disable-line @typescript-eslint/no-explicit-any
+      await p.route(`**/api/projects/${projectId}/doc-types`, async (r) => {
+        if (r.request().method() === 'POST') { savedPreset = r.request().postDataJSON(); await r.fulfill({ json: { type: { id: 'ctp', ...savedPreset } } }); }
+        else await r.fulfill({ json: { builtIn: [], custom: [] } });
+      });
       await p.route(`**/api/projects/${projectId}/knowledge/build`, async (r) => {
         built = r.request().postDataJSON();
         writing.on = true;
@@ -1262,12 +1267,14 @@ async function main() {
         await dlg.waitFor({ timeout: 4000 });
         await dlg.getByLabel('web-app').uncheck();
         await dlg.getByLabel('Runbook').uncheck();
-        await dlg.getByRole('button', { name: 'Write 3 documents' }).click();
+        await dlg.getByLabel('Deployment guide').check();
+        await dlg.getByRole('button', { name: 'Write 4 documents' }).click();
         await dlg.waitFor({ state: 'detached', timeout: 4000 });
-        if (JSON.stringify({ repoIds: built?.repoIds, types: built?.types }) !== JSON.stringify({ repoIds: ['r1'], types: ['overview', 'architecture', 'api'] })) throw new Error(`Unexpected build request: ${JSON.stringify(built)}`);
+        if (JSON.stringify({ repoIds: built?.repoIds, types: built?.types }) !== JSON.stringify({ repoIds: ['r1'], types: ['overview', 'architecture', 'api', 'custom:ctp'] })) throw new Error(`Unexpected build request: ${JSON.stringify(built)}`);
+        if (savedPreset?.label !== 'Deployment guide' || !/Backup/.test(savedPreset?.guide)) throw new Error(`The suggested type was not saved first: ${JSON.stringify(savedPreset)}`);
         await p.locator('.kb-writing').filter({ hasText: 'System overview · billing-api' }).waitFor({ timeout: 4000 });
       } finally {
-        for (const u of ['repos', 'knowledge/build', 'generated-docs', 'generated-docs/g9/refresh', 'knowledge']) await p.unroute(`**/api/projects/${projectId}/${u}`).catch(() => {});
+        for (const u of ['repos', 'doc-types', 'knowledge/build', 'generated-docs', 'generated-docs/g9/refresh', 'knowledge']) await p.unroute(`**/api/projects/${projectId}/${u}`).catch(() => {});
       }
     }, page);
     } // end §4 knowledge
@@ -1302,6 +1309,9 @@ async function main() {
         await p.getByRole('button', { name: /New document/ }).first().click();
         await p.locator('#nd-name').fill('Billing data dictionary');
         await p.locator('#nd-type').selectOption('__new');
+        // A suggestion fills both fields; they can still be edited.
+        await p.getByRole('group', { name: 'Suggested types' }).getByRole('button', { name: 'Deployment guide' }).click();
+        if (!/Resource relationships/.test(await p.locator('#nd-new-guide').inputValue())) throw new Error('The suggestion did not fill the contents');
         await p.locator('#nd-new-type').fill('Data dictionary');
         await p.locator('#nd-new-guide').fill('Every table and column with its meaning and owner.');
         await p.locator('form').filter({ has: p.locator('#nd-name') }).evaluate((f: HTMLFormElement) => f.requestSubmit());

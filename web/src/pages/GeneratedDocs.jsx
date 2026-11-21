@@ -3,6 +3,7 @@ import { api } from '../lib/api.js';
 import { Icon } from '../components/Icon.jsx';
 import { AttachmentPicker } from '../components/AttachmentPicker.jsx';
 import { AiChoicePicker } from '../components/AiChoicePicker.jsx';
+import { unsavedPresets } from '../lib/doc-type-presets.js';
 import { CreateContextPicker } from '../components/CreateContextPicker.jsx';
 import { useFocusTrap } from '../lib/useFocusTrap.js';
 import { BulkActionBar } from '../components/BulkActionBar.jsx';
@@ -203,6 +204,17 @@ function NewDocModal({ projectId, onClose, onCreated }) {
           {isNewType && (
             <fieldset className="field context-picker" disabled={busy}>
               <legend>New document type</legend>
+              {unsavedPresets(customTypes).length > 0 && (
+                <div className="doc-type-presets" role="group" aria-label="Suggested types">
+                  <span className="muted small">Start from a suggestion:</span>
+                  {unsavedPresets(customTypes).map((p) => (
+                    <button key={p.key} type="button" className={`cat-chip doc-type-chip${newLabel === p.label ? ' is-on' : ''}`}
+                      onClick={() => { setNewLabel(p.label); setNewGuide(p.guide); }}>
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               <div className="field">
                 <label htmlFor="nd-new-type">Type name <span aria-hidden>*</span></label>
                 <input id="nd-new-type" type="text" value={newLabel} onChange={(e) => setNewLabel(e.target.value)} maxLength={60} placeholder="e.g. Data dictionary" />
