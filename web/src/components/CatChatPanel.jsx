@@ -54,7 +54,7 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
     const replace = (m) => setMessages((all) => all.map((x) => (x.id === pendingId ? { id: pendingId, role: 'cat', ...m } : x)));
     try {
       const r = await api.post('/api/assistant/chat', { question: q, projectId: route.projectId ?? undefined, history });
-      replace({ text: String(r?.reply ?? ''), links: Array.isArray(r?.links) ? r.links : [] });
+      replace({ text: String(r?.reply ?? ''), links: Array.isArray(r?.links) ? r.links.map((l) => (l?.id === 'new-session' ? { ...l, after: 'new-session' } : l)) : [] });
     } catch (err) {
       // The unanswered question stays on screen but is not sent as history (no two `me` entries in a row).
       setMessages((all) => all.map((x) => (x.id === meId ? { ...x, error: true } : x)));
