@@ -5411,6 +5411,18 @@ async function main() {
         await goto(p, '/dashboard', wait);
       };
 
+      // The Agent network is an on-demand <details> disclosure (closed by default, see
+      // test/web-dashboard-insights.test.ts). Open it and wait for the cards to render.
+      const openNetwork = async (p: Page) => {
+        const disclosure = p.locator('details.db-network-disclosure');
+        await disclosure.waitFor({ state: 'attached', timeout: 8_000 });
+        if (await p.locator('.db-network .db-agent-card').first().isVisible()) {
+          throw new Error('The Agent network should be collapsed until the disclosure is opened');
+        }
+        await disclosure.locator('> summary').click();
+        await p.locator('.db-network .db-agent-card').first().waitFor({ state: 'visible', timeout: 8_000 });
+      };
+
       // Shared mock payload — three agents, one running node, no active session.
       const dashMockData = {
         period: '7d',
@@ -5655,14 +5667,13 @@ async function main() {
         await p.route(dashApiPred, mockDash());
         try {
           await gotoDashboard(p);
-          // The SVG node for "orchestrator" has role="button" with aria-label starting with "orchestrator,"
+          await openNetwork(p);
+          // The agent card for "orchestrator" has role="button" with aria-label starting with "orchestrator,"
           await p.waitForSelector('[role="button"][aria-label^="orchestrator,"]', { timeout: 8000 });
           const node = p.locator('[role="button"][aria-label^="orchestrator,"]').first();
-          // force: true is required for SVG <g> elements. The "orchestrator" node is running=true,
-          // so its child .db-node-glow circle has an infinite scale(1.5) CSS animation. Playwright's
-          // "stable" actionability check sees the <g> bounding box changing every animation frame and
-          // waits forever. force: true bypasses the stability check; the click event still reaches
-          // React's onClick handler normally.
+          // force: true: the "orchestrator" card is running=true, so its .db-node-glow ring has an
+          // infinite CSS animation; Playwright's "stable" actionability check can wait on it.
+          // force: true bypasses that check; the click still reaches React's onClick handler.
           await node.click({ force: true, timeout: 8000 });
           await p.waitForSelector('[role="dialog"][aria-label="Runs for orchestrator"]', { timeout: 6000 });
         } finally {
@@ -5837,6 +5848,7 @@ async function main() {
         await p.route(dashApiPred, mockDash());
         try {
           await gotoDashboard(p);
+          await openNetwork(p);
           await p.waitForSelector('[role="button"][aria-label^="orchestrator,"]', { timeout: 8000 });
           const node = p.locator('[role="button"][aria-label^="orchestrator,"]').first();
           await node.focus();
@@ -5904,6 +5916,7 @@ async function main() {
         });
         try {
           await gotoDashboard(p);
+          await openNetwork(p);
           // The network is a set of agent cards (no SVG graph any more)
           await p.waitForSelector('[role="button"][aria-label^="probe-agent,"]', { timeout: 8_000 });
           const cards = p.locator('.db-network .db-agent-card');
@@ -5926,7 +5939,7 @@ async function main() {
         await p.route(dashApiPred, mockDash());
         try {
           await gotoDashboard(p);
-          await p.waitForSelector('.db-network .db-agent-card', { timeout: 8_000 });
+          await openNetwork(p);
           if (await p.locator('[role="toolbar"][aria-label="Graph controls"]').count()) {
             throw new Error('The Agent Network is cards now; it should have no graph zoom toolbar');
           }
