@@ -2253,6 +2253,27 @@ export function migrateCursorEngine(database: DatabaseSync): void {
 }
 
 /**
+ * Document types a project defines itself (doc-types.ts): generated_docs.doc_type may be 'custom'. Same in-place CHECK patch as
+ * migrateCursorEngine (no table rebuild, data and indexes untouched).
+ */
+export function migrateCustomDocType(database: DatabaseSync): void {
+  const before = "CHECK(doc_type IN ('overview','architecture','api','runbook','user-guide'))";
+  const after = "CHECK(doc_type IN ('overview','architecture','api','runbook','user-guide','custom'))";
+  const row = database.prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'generated_docs'").get() as { sql: string } | undefined;
+  if (!row || row.sql.includes(after)) return;
+  const normalised = row.sql.replace(/CHECK\s*\(\s*doc_type\s+IN\s*\([^)]*\)\s*\)/, before);
+  if (!normalised.includes(before)) throw new Error('Unexpected generated_docs doc_type constraint');
+  const sql = normalised.replace(before, after);
+  const version = Number((database.prepare('PRAGMA schema_version').get() as { schema_version: number }).schema_version);
+  database.exec('PRAGMA writable_schema = ON');
+  try {
+    database.prepare("UPDATE sqlite_schema SET sql = ? WHERE type = 'table' AND name = 'generated_docs'").run(sql);
+    database.exec('PRAGMA schema_version = ' + (version + 1));
+  } finally { database.exec('PRAGMA writable_schema = RESET'); }
+  if ((database.prepare('PRAGMA integrity_check').get() as { integrity_check: string }).integrity_check !== 'ok') throw new Error('Custom document type migration integrity check failed');
+}
+
+/**
  * API simulation tables (docs/plans/2026-11-10-api-simulation.md).
  */
 const M52_API_SIMULATION = `
@@ -2520,7 +2541,7 @@ function ensureApiSimSchema(database: DatabaseSync): void {
   `);
 }
 
-const MIGRATIONS: Array<string | ((database: DatabaseSync) => void)> = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY, M44_APPROVAL_BINDING, M45_RUN_LIMITS, M46_LOOP_STATE, M47_FEEDBACK, M48_KIRO_CREDITS, migrateCodexEngine, M50_CODEX_CLOUD, migrateCodexConfig, M52_API_SIMULATION, migrateCursorEngine];
+const MIGRATIONS: Array<string | ((database: DatabaseSync) => void)> = [M1_CORE, M2_PROJECTS, M3_SESSIONS, M4_PERMISSIONS, M5_REPOS, M6_SESSIONS, M7_KNOWLEDGE, M8_REVIEW_LOOPS, M9_DOCS_PRESENTATIONS, M10_ADMIN_INSIGHTS_LEARN, M11_INTEGRATIONS_AWS, M12_REVIEW_UPGRADE, M13_REVIEW_KIND_RAWOUTPUT, M14_ENGINE_CACHE_TOKENS, M15_SESSION_IDE, M16_SESSION_LIFECYCLE, M17_RUN_MODEL, M18_ENGINE_CREDENTIALS, M19_USER_CONFIG, M20_BRANCH_SCANS, M21_WORKDIR_CONSUMED, M22_TOKEN_SCOPES, M23_DELEGATION, M25_TESTS_MODULE, M26_DELEGATE_BIND, M27_FK_CASCADES, M28_THEMES, M29_AI_ATTACHMENTS, M30_WORKFLOW_MODEL, M31_GIT_CONNECTIONS_EXT, M32_TEST_GENERATION_WARNINGS, M33_DASHBOARD_INDEXES, M34_JIRA, M35_RUN_ERROR, M36_THEMES_BUILTIN_OVERRIDE, M37_SESSION_OUTPUTS, M38_ENGINE_SESSION, M39_WORKSPACE_DEFAULTS, M40_CASE_SETS, M41_TRACE_REQUEST_RESPONSE, M42_GENERATION_PROGRESS, M43_RESUME_RETRY, M44_APPROVAL_BINDING, M45_RUN_LIMITS, M46_LOOP_STATE, M47_FEEDBACK, M48_KIRO_CREDITS, migrateCodexEngine, M50_CODEX_CLOUD, migrateCodexConfig, M52_API_SIMULATION, migrateCursorEngine, migrateCustomDocType];
 
 MIGRATIONS.push(`CREATE TABLE IF NOT EXISTS automation_records (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,

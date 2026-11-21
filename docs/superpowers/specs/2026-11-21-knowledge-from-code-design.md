@@ -43,3 +43,13 @@ The owner wants a project's knowledge to be built from its repositories in one s
 
 - Default four types (the user guide type needs a running system, so it is not in the default set).
 - `on: false` deletes the copy (keeps Knowledge free of documents nobody maintains).
+
+## Addendum (owner's request, same day): model choice and the project's own document types
+
+- **Model.** The Build dialog has the same sign-in and model picker as New document; `POST /knowledge/build` takes `credentialId` and
+  `model` and passes them to every document. A sign-in or model that is not valid starts nothing (400 before the first document).
+- **Custom document types.** A project keeps its own types (`docs.custom_types.<projectId>` setting; `GET/POST/DELETE
+  /api/projects/:id/doc-types`; name 1-60 characters, contents 10-2,000, at most 30; saving an existing name updates it). A document of
+  such a type is `doc_type: 'custom'` with `sources.customType = { label, guide }` (kept for Refresh); the agent is told to write a
+  "<label>" whose content is the guide text, which never overrides the rules. The SQLite CHECK on `generated_docs.doc_type` gains
+  `'custom'` (migrateCustomDocType, the same in-place patch as migrateCursorEngine). The Build dialog lists saved types as `custom:<id>`.

@@ -536,7 +536,8 @@
       "description": "Knowledge built from a project's repositories: generated documents linked to Knowledge, Build from repositories, Add to Knowledge",
       "sources": [
         "server/knowledge-from-code.ts",
-        "web/src/components/BuildKnowledgeDialog.jsx"
+        "web/src/components/BuildKnowledgeDialog.jsx",
+        "server/doc-types.ts"
       ],
       "tests": [
         "test/knowledge-from-code.test.ts",

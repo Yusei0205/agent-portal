@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api.js';
+import { AiChoicePicker } from './AiChoicePicker.jsx';
 
 const TYPES = [
   { id: 'overview', label: 'System overview', hint: 'what the system does and its parts' },
@@ -18,6 +19,14 @@ export function BuildKnowledgeDialog({ projectId, onClose, onStarted }) {
   const [types, setTypes] = useState(TYPES.map((t) => t.id));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [ai, setAi] = useState({});
+  // The project's own document types (Create › New document › + New type…), offered next to the built-in ones.
+  const [customTypes, setCustomTypes] = useState([]);
+  useEffect(() => {
+    let live = true;
+    api.get(`/api/projects/${projectId}/doc-types`).then((r) => { if (live) setCustomTypes(r.custom || []); }).catch(() => {});
+    return () => { live = false; };
+  }, [projectId]);
 
   useEffect(() => {
     let live = true;
@@ -44,7 +53,7 @@ export function BuildKnowledgeDialog({ projectId, onClose, onStarted }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await api.post(`/api/projects/${projectId}/knowledge/build`, { repoIds, types });
+      const r = await api.post(`/api/projects/${projectId}/knowledge/build`, { repoIds, types, ...ai });
       onStarted(r.docs || []);
       onClose();
     } catch (err) {
@@ -89,7 +98,20 @@ export function BuildKnowledgeDialog({ projectId, onClose, onStarted }) {
                 <span>{t.label}</span> <span className="muted small">{t.hint}</span>
               </label>
             ))}
+            {customTypes.map((t) => (
+              <label key={t.id} className="context-item">
+                <input type="checkbox" checked={types.includes(`custom:${t.id}`)} onChange={() => toggle(setTypes, `custom:${t.id}`)} />
+                <span>{t.label}</span> <span className="muted small" title={t.guide}>this project's type</span>
+              </label>
+            ))}
+            <p className="muted small" style={{ margin: 0 }}>
+              Need another kind? Add it in Create › Documents › New document › <strong>+ New type…</strong>
+            </p>
           </fieldset>
+          <div className="field">
+            <AiChoicePicker onChange={setAi} disabled={busy} idPrefix="kb-ai" />
+            <p className="field-hint">Every document is written on this sign-in and model (one agent run each).</p>
+          </div>
           {error && <p className="error-note" role="alert">{error}</p>}
           <div className="modal-footer">
             <button type="button" className="btn" onClick={onClose} disabled={busy}>Cancel</button>

@@ -1264,7 +1264,7 @@ async function main() {
         await dlg.getByLabel('Runbook').uncheck();
         await dlg.getByRole('button', { name: 'Write 3 documents' }).click();
         await dlg.waitFor({ state: 'detached', timeout: 4000 });
-        if (JSON.stringify(built) !== JSON.stringify({ repoIds: ['r1'], types: ['overview', 'architecture', 'api'] })) throw new Error(`Unexpected build request: ${JSON.stringify(built)}`);
+        if (JSON.stringify({ repoIds: built?.repoIds, types: built?.types }) !== JSON.stringify({ repoIds: ['r1'], types: ['overview', 'architecture', 'api'] })) throw new Error(`Unexpected build request: ${JSON.stringify(built)}`);
         await p.locator('.kb-writing').filter({ hasText: 'System overview · billing-api' }).waitFor({ timeout: 4000 });
       } finally {
         for (const u of ['repos', 'knowledge/build', 'generated-docs', 'generated-docs/g9/refresh', 'knowledge']) await p.unroute(`**/api/projects/${projectId}/${u}`).catch(() => {});
@@ -1281,6 +1281,37 @@ async function main() {
       await assertNoPlaceholder(p);
       await p.waitForSelector('.tab-bar, [role="tablist"]', { timeout: 8000 });
       await assertTabsExist(p, ['Diagrams', 'Documents', 'Decks']);
+    }, page);
+
+    await test('Create › New document: "+ New type…" saves the project\'s own type and writes a custom document', async (p) => {
+      const sent: any = { type: null, doc: null }; // eslint-disable-line @typescript-eslint/no-explicit-any
+      await p.route(`**/api/projects/${projectId}/doc-types`, async (r) => {
+        if (r.request().method() === 'POST') {
+          sent.type = r.request().postDataJSON();
+          await r.fulfill({ json: { type: { id: 'ct1', ...sent.type } } });
+        } else await r.fulfill({ json: { builtIn: [], custom: [] } });
+      });
+      await p.route(`**/api/projects/${projectId}/generated-docs`, async (r) => {
+        if (r.request().method() === 'POST') { sent.doc = r.request().postDataJSON(); await r.fulfill({ json: { doc: { id: 'gx' }, workflowId: 'w' } }); }
+        else await r.fulfill({ json: { docs: [] } });
+      });
+      try {
+        await goto(p, '/projects', 300);
+        await goto(p, `/p/${projectId}/create`, 1000);
+        await p.getByRole('tab', { name: 'Documents' }).click();
+        await p.getByRole('button', { name: /New document/ }).first().click();
+        await p.locator('#nd-name').fill('Billing data dictionary');
+        await p.locator('#nd-type').selectOption('__new');
+        await p.locator('#nd-new-type').fill('Data dictionary');
+        await p.locator('#nd-new-guide').fill('Every table and column with its meaning and owner.');
+        await p.locator('form').filter({ has: p.locator('#nd-name') }).evaluate((f: HTMLFormElement) => f.requestSubmit());
+        for (let i = 0; i < 30 && !sent.doc; i++) await p.waitForTimeout(100);
+        if (sent.type?.label !== 'Data dictionary') throw new Error(`The type was not saved: ${JSON.stringify(sent.type)}`);
+        if (sent.doc?.docType !== 'custom' || sent.doc?.customType?.label !== 'Data dictionary' || !/meaning and owner/.test(sent.doc?.customType?.guide)) throw new Error(`Unexpected document request: ${JSON.stringify(sent.doc)}`);
+      } finally {
+        await p.unroute(`**/api/projects/${projectId}/doc-types`).catch(() => {});
+        await p.unroute(`**/api/projects/${projectId}/generated-docs`).catch(() => {});
+      }
     }, page);
     } // end §5 create
 

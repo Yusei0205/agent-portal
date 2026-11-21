@@ -5,7 +5,8 @@
  * the link is on, every finished version is written into one Knowledge document (created the first time, overwritten and re-indexed
  * after that), so Search, Ask and Kyu answer from it. Deleting the Knowledge copy turns the link off.
  *
- *   POST /api/projects/:id/knowledge/build                  { repoIds, types? }  one linked generated document per type   (editors)
+ *   POST /api/projects/:id/knowledge/build                  { repoIds, types?, credentialId?, model? }
+ *        one linked generated document per type (built-in ids, or "custom:<saved type id>"), on the chosen sign-in and model (editors)
  *   PUT  /api/projects/:id/generated-docs/:docId/knowledge  { on }               link one document, or unlink and delete  (editors)
  */
 
@@ -24,6 +25,7 @@ import { getGeneratedDocRepository } from './repositories/generated-docs-data.ts
 import { getGitReposRepository } from './repositories/git-repos.ts';
 import { onDocumentReady, onDocumentDeleted } from './knowledge-search.ts';
 import { DOC_TYPE_LABELS, DOC_LIMITS, type DocType } from './generated-doc-text.ts';
+import { listCustomTypes } from './doc-types.ts';
 
 /** The set "Build from repositories" makes when no types are given. The user guide needs a running system, so it is not in it. */
 export const BUILD_TYPES: DocType[] = ['overview', 'architecture', 'api', 'runbook'];
@@ -136,17 +138,24 @@ export function registerKnowledgeFromCodeRoutes(): void {
     const project = await editorProject(req, res, String(req.params.id));
     if (!project) return;
     const projectId = String(project.id);
-    const body = (req.body ?? {}) as { repoIds?: unknown; types?: unknown };
+    const body = (req.body ?? {}) as { repoIds?: unknown; types?: unknown; credentialId?: unknown; model?: unknown };
     const repoIds = Array.isArray(body.repoIds) ? [...new Set(body.repoIds.map(String))] : [];
     if (!repoIds.length) { sendJson(res, 400, { error: 'Choose at least one repository' }); return; }
     const repos = await getGitReposRepository().listByProject(projectId);
     const chosen = repoIds.map((id) => repos.find((r) => r.id === id));
     if (chosen.some((r) => !r)) { sendJson(res, 400, { error: 'A chosen repository is not in this project' }); return; }
-    const types = body.types === undefined ? BUILD_TYPES : Array.isArray(body.types) ? [...new Set(body.types.map(String))] : [];
-    if (!types.length || types.some((t) => !(t in DOC_TYPE_LABELS) || t === 'user-guide')) {
-      sendJson(res, 400, { error: `types must be some of: ${BUILD_TYPES.join(', ')}` });
+    const types: string[] = body.types === undefined ? BUILD_TYPES : Array.isArray(body.types) ? [...new Set(body.types.map(String))] : [];
+    const saved = listCustomTypes(projectId);
+    const customOf = (t: string) => (t.startsWith('custom:') ? saved.find((c) => c.id === t.slice(7)) : undefined);
+    if (!types.length || types.some((t) => !customOf(t) && (!(BUILD_TYPES as string[]).includes(t)))) {
+      sendJson(res, 400, { error: `types must be some of: ${BUILD_TYPES.join(', ')}, or custom:<id> of a saved document type` });
       return;
     }
+    // The sign-in and model the person chose (as in New document); without them their default sign-in is used.
+    const ai = {
+      ...(typeof body.credentialId === 'string' && body.credentialId ? { credentialId: body.credentialId } : {}),
+      ...(typeof body.model === 'string' && body.model ? { model: body.model } : {}),
+    };
     const count = await getGeneratedDocRepository().countByProject(projectId);
     if (count + types.length > DOC_LIMITS.perProject) {
       sendJson(res, 400, { error: `A project can hold at most ${DOC_LIMITS.perProject} generated documents; delete some first` });
@@ -155,10 +164,21 @@ export function registerKnowledgeFromCodeRoutes(): void {
     const repoNames = chosen.map((r) => r!.name).join(', ');
     const { createGeneratedDoc } = await import('./generated-docs.ts');
     const docs = [];
-    for (const t of types as DocType[]) {
-      const name = `${DOC_TYPE_LABELS[t]} · ${repoNames}`.slice(0, DOC_LIMITS.titleChars);
-      const r = await createGeneratedDoc(project, req.user!.id, { name, docType: t, sources: { repoIds } }, { knowledge: true });
-      docs.push({ ...r.doc, workflow_id: r.doc.workflow_id ?? r.workflowId });
+    for (const t of types) {
+      const custom = customOf(t);
+      const label = custom ? custom.label : DOC_TYPE_LABELS[t as DocType];
+      const name = `${label} · ${repoNames}`.slice(0, DOC_LIMITS.titleChars);
+      const docBody = custom
+        ? { ...ai, name, docType: 'custom', customType: { label: custom.label, guide: custom.guide }, sources: { repoIds } }
+        : { ...ai, name, docType: t, sources: { repoIds } };
+      try {
+        const r = await createGeneratedDoc(project, req.user!.id, docBody, { knowledge: true });
+        docs.push({ ...r.doc, workflow_id: r.doc.workflow_id ?? r.workflowId });
+      } catch (e) {
+        // A bad sign-in or model is the same for every type: report it before anything else is started.
+        if (!docs.length) { sendJson(res, 400, { error: e instanceof Error ? e.message : 'Could not start' }); return; }
+        throw e;
+      }
     }
     sendJson(res, 200, { docs });
   });

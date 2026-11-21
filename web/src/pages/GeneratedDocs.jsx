@@ -22,7 +22,8 @@ function formatDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-function DocTypeBadge({ type }) {
+function DocTypeBadge({ type, custom }) {
+  if (type === 'custom' && custom?.label) return <span className="badge badge-muted" title={custom.guide}>{custom.label}</span>;
   const labels = {
     overview: 'Overview',
     architecture: 'Architecture',
@@ -70,6 +71,24 @@ function NewDocModal({ projectId, onClose, onCreated }) {
   const [manualSignIn, setManualSignIn] = useState(false);
   const [perRole, setPerRole] = useState(false);
   const [manage, setManage]       = useState(false);
+  // The project's own document types (saved under /doc-types), and a new one being written ("+ New type…").
+  const [customTypes, setCustomTypes] = useState([]);
+  const [newLabel, setNewLabel] = useState('');
+  const [newGuide, setNewGuide] = useState('');
+  useEffect(() => {
+    let live = true;
+    api.get(`/api/projects/${projectId}/doc-types`).then((r) => { if (live) setCustomTypes(r.custom || []); }).catch(() => {});
+    return () => { live = false; };
+  }, [projectId]);
+  const chosenCustom = docType.startsWith('custom:') ? customTypes.find((t) => `custom:${t.id}` === docType) : null;
+  const isNewType = docType === '__new';
+  const removeType = async (t) => {
+    try {
+      await api.delete(`/api/projects/${projectId}/doc-types/${t.id}`);
+      setCustomTypes((all) => all.filter((x) => x.id !== t.id));
+      setDocType('overview');
+    } catch (err) { setError(err.message); }
+  };
 
   const handleAttachments = (ids, uploading) => {
     setAttachmentIds(ids);
@@ -89,9 +108,18 @@ function NewDocModal({ projectId, onClose, onCreated }) {
     if (!name.trim()) { setError('Name is required'); return; }
     if (isGuide && shots && !guideUrl.trim()) { setError('Give the address of the system to capture'); return; }
     if (uploadsBusy) return;
+    if (isNewType && (!newLabel.trim() || newGuide.trim().length < 10)) { setError('Name the new type and say what it should contain (at least a sentence)'); return; }
     setBusy(true);
     setError(null);
     try {
+      // A custom type is sent as docType "custom" with its name and contents; a new one is saved for the project first.
+      let typeFields = { docType };
+      if (isNewType) {
+        const saved = await api.post(`/api/projects/${projectId}/doc-types`, { label: newLabel.trim(), guide: newGuide.trim() });
+        typeFields = { docType: 'custom', customType: { label: saved.type.label, guide: saved.type.guide } };
+      } else if (chosenCustom) {
+        typeFields = { docType: 'custom', customType: { label: chosenCustom.label, guide: chosenCustom.guide } };
+      }
       // A large guide: one document per role, each its own session (and its own 40 screenshots), grouped by a shared tag.
       if (isGuide && shots && perRole && roles.length >= 2) {
         const setTag = { id: `set_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`, name: name.trim() };
@@ -113,7 +141,7 @@ function NewDocModal({ projectId, onClose, onCreated }) {
       }
       const r = await api.post(`/api/projects/${projectId}/generated-docs`, {
         name:          name.trim(),
-        docType,
+        ...typeFields,
         audience:      audience.trim() || undefined,
         description:   description.trim() || undefined,
         ...ai,
@@ -157,8 +185,36 @@ function NewDocModal({ projectId, onClose, onCreated }) {
               {DOC_TYPES.map((t) => (
                 <option key={t.id} value={t.id}>{t.label}</option>
               ))}
+              {customTypes.length > 0 && (
+                <optgroup label="This project's types">
+                  {customTypes.map((t) => <option key={t.id} value={`custom:${t.id}`}>{t.label}</option>)}
+                </optgroup>
+              )}
+              <option value="__new">+ New type…</option>
             </select>
+            {chosenCustom && (
+              <p className="field-hint">
+                {chosenCustom.guide}{' '}
+                <button type="button" className="link-btn" onClick={() => removeType(chosenCustom)} disabled={busy}>Remove this type</button>
+              </p>
+            )}
           </div>
+
+          {isNewType && (
+            <fieldset className="field context-picker" disabled={busy}>
+              <legend>New document type</legend>
+              <div className="field">
+                <label htmlFor="nd-new-type">Type name <span aria-hidden>*</span></label>
+                <input id="nd-new-type" type="text" value={newLabel} onChange={(e) => setNewLabel(e.target.value)} maxLength={60} placeholder="e.g. Data dictionary" />
+              </div>
+              <div className="field">
+                <label htmlFor="nd-new-guide">What it should contain <span aria-hidden>*</span></label>
+                <textarea id="nd-new-guide" rows={3} value={newGuide} onChange={(e) => setNewGuide(e.target.value)} maxLength={2000}
+                  placeholder="e.g. Every database table and column: its meaning, type, owner and example values. Sections: Overview, one section per table, Open questions." />
+                <p className="field-hint">Saved for this project, so it is offered again here and in Knowledge › Build from repositories.</p>
+              </div>
+            </fieldset>
+          )}
 
           {isGuide && (
             <fieldset className="field" style={{ border: '1px solid var(--line, #ddd)', borderRadius: 8, padding: 12 }}>
@@ -590,7 +646,7 @@ export function GeneratedDocs({ projectId }) {
                       </div>
                     )}
                   </td>
-                  <td><DocTypeBadge type={d.doc_type} /></td>
+                  <td><DocTypeBadge type={d.doc_type} custom={d.sources?.customType} /></td>
                   <td>
                     <StatusBadge stale={d.stale} hasVersion={Boolean(d.latest_version_id)} status={d.status} />
                   </td>

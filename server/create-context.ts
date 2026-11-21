@@ -24,6 +24,8 @@ export interface DocSources {
   diagramIds?: string[];
   /** A user guide written by using the running system (generated-docs.ts: parseGuide). Roles and hosts only, never a password. */
   guide?: DocGuide;
+  /** A project-defined document type (doc_type 'custom'): kept with the sources so a refresh writes the same kind. */
+  customType?: { label: string; guide: string };
 }
 
 

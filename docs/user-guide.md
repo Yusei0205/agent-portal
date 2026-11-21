@@ -780,16 +780,23 @@ When a project has few documents to upload, the portal can write its knowledge f
 **Build knowledge from repositories (one step).** Open the project's **Knowledge** › **Documents** and press **Build from repositories**:
 
 1. Tick the repositories to read (they must be added under Work › Workspaces › **Repositories** first).
-2. Tick the documents to write: **System overview**, **Architecture**, **API reference** and **Runbook** (all four by default).
-3. Press **Write N documents**. An agent reads the code and writes each one, usually in a few minutes; a line at the top of the list
+2. Tick the documents to write: **System overview**, **Architecture**, **API reference** and **Runbook** (all four by default), and any
+   of the project's own document types (see below).
+3. Choose the sign-in and model that write them (your default is selected; each document is one agent run on it).
+4. Press **Write N documents**. An agent reads the code and writes each one, usually in a few minutes; a line at the top of the list
    says what is still being written. Each document then appears in the list with a **From code** tag.
-4. After the code changes, press the **Rebuild** button (↻) on a document: the same Knowledge document is rewritten, never duplicated.
+5. After the code changes, press the **Rebuild** button (↻) on a document: the same Knowledge document is rewritten, never duplicated.
    **From code · out of date** means the sources changed since it was written.
 
 Deleting a **From code** document from Knowledge stops it being written there again (the document stays in Create).
 
 **One document at a time.** In **Create** › **Documents**, **New document** writes a single document from the repositories you tick
-under **What the agent reads** (types: System overview, Architecture, API reference, Runbook, User guide). Each document has an
+under **What the agent reads** (types: System overview, Architecture, API reference, Runbook, User guide, and the project's own types).
+
+**Your own document types.** In **New document**, choose **+ New type…** in the type list, give it a name (for example "Data dictionary")
+and say what it should contain (for example "Every table and column: meaning, type, owner and example values"). The type is saved for
+the project: it is offered again in the type list (under "This project's types", where **Remove this type** deletes it) and in
+**Build from repositories**. Each document has an
 **Add to Knowledge** button: it copies the document into Knowledge and keeps it current on every **Refresh**; **In Knowledge ✓** takes it
 out again. **Diagrams** (architecture diagrams from the selected repositories) and **Decks** are made the same way.
 

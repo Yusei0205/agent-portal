@@ -27,6 +27,7 @@ import {
   DOC_TYPE_LABELS,
   DOC_LIMITS,
   composeDocPrompt,
+  cleanCustomType,
   GUIDE_LIMITS,
   type DocType,
   type DocGuide,
@@ -236,6 +237,7 @@ async function prepareDocRun(
     decisions: false,
     diagrams: [],
     guide: sources.guide,
+    ...(doc.type === 'custom' && sources.customType ? { custom: sources.customType } : {}),
   });
   if (stagedAttachments.length) goal += buildAttachmentPromptBlock(stagedAttachments);
   return { goal, preWorkflowId, preWorkDir, repoIds, guide: sources.guide?.screenshots ? sources.guide : undefined };
@@ -409,6 +411,13 @@ export async function createGeneratedDoc(project: Row, userId: string, body: Rec
     const description = str((body.description as string) ?? '', 'description', { max: DOC_LIMITS.descriptionChars, optional: true });
     // Kept with the sources, so a refresh or retry writes from the same context.
     const sources: DocSources = { ...rawSources, ...(description ? { description } : {}) };
+    // A custom type carries its name and what it should contain; other types never keep one.
+    delete (sources as Record<string, unknown>).customType;
+    if (docType === 'custom') {
+      const custom = cleanCustomType(body.customType);
+      if ('error' in custom) throw badRequest(custom.error);
+      sources.customType = custom;
+    }
     // Knowledge link: only set by the portal itself (Build from repositories), never taken from the request body.
     delete (sources as Record<string, unknown>).knowledge;
     if (opts.knowledge) (sources as Record<string, unknown>).knowledge = { on: true };
