@@ -236,6 +236,10 @@ export const MCP_PRESETS = [
     hint: 'Jira and Confluence (Atlassian Rovo MCP v2). No token needed: you sign in with Atlassian when a session starts, from a card in the session. Leave "Allow writes" off for read-only search and reads.',
   },
   {
+    id: 'notion', name: 'Notion', url: 'https://mcp.notion.com/mcp', auth: 'oauth',
+    hint: 'Notion pages and databases. No token needed: you sign in with Notion when a session starts, from a card in the session. Leave "Allow writes" off for read-only search and reads.',
+  },
+  {
     id: 'atlassian-v1', name: 'Atlassian v1', url: 'https://mcp.atlassian.com/v1/mcp', header: 'Authorization',
     hint: 'Deprecated: Atlassian moves v1 to v2 on 1 March 2027. Value: "Basic " followed by base64 of "your-email:API-token". An Atlassian org admin must allow API-token authentication.',
   },
