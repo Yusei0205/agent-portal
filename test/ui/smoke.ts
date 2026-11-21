@@ -856,6 +856,16 @@ async function main() {
         });
       }, page);
 
+      const chatMock = async (cp: Page, respond: (n: number) => { status: number; body: any; wait?: Promise<void> }) => {
+        const hits = { n: 0 };
+        await cp.route('**/api/assistant/chat', async (route) => {
+          hits.n++;
+          const r = respond(hits.n);
+          if (r.wait) await r.wait;
+          await route.fulfill({ status: r.status, contentType: 'application/json', body: JSON.stringify(r.body) });
+        });
+        return hits;
+      };
       await test('typing "inbox" opens the Inbox; a question is sent to the assistant and gets its reply, the chips stay; Escape closes and focus returns to the cat', async () => {
         await withCat({ prefs: SIT }, async (cp) => {
           const hits = await chatMock(cp, () => ({ status: 200, body: { reply: 'Plain answer from the mock.', links: [] } }));
@@ -889,16 +899,6 @@ async function main() {
         fs.mkdirSync(SHOTS, { recursive: true });
         await cp.waitForTimeout(500); // the panel's pop-in
         await cp.screenshot({ path: path.join(SHOTS, `${name}.png`) });
-      };
-      const chatMock = async (cp: Page, respond: (n: number) => { status: number; body: any; wait?: Promise<void> }) => {
-        const hits = { n: 0 };
-        await cp.route('**/api/assistant/chat', async (route) => {
-          hits.n++;
-          const r = respond(hits.n);
-          if (r.wait) await r.wait;
-          await route.fulfill({ status: r.status, contentType: 'application/json', body: JSON.stringify(r.body) });
-        });
-        return hits;
       };
       const ask = async (cp: Page, q: string) => {
         await cp.locator('.cat-panel-input').fill(q);
