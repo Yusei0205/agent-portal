@@ -25,7 +25,8 @@ Thumbs.db
 compose.yml
 compose.aws.yml
 infra
-docs
+docs/*
+!docs/user-guide.md
 data-playwright-test
 **/node_modules
 .playwright-mcp
