@@ -1,5 +1,5 @@
 /**
- * POST /api/assistant/chat: the cat's read-only assistant. One model call per question, no tools, nothing is changed.
+ * POST /api/assistant/chat: Kyu's read-only assistant. Own subscription only, no tools, nothing is changed.
  * The question, the reply and the prompt are never logged.
  */
 
@@ -7,7 +7,7 @@ import { router, sendJson, requireAuth } from '../http.ts';
 import type { PortalRequest, PortalResponse } from '../http.ts';
 import { requireMember } from '../dashboard.ts';
 import { getProjectRepository } from '../repositories/projects.ts';
-import { callTextModel, pickTextEngine, textPromptLimit } from '../testing/model-provider.ts';
+import { generateAssistantAnswer, selectAssistantModel } from './provider.ts';
 import { retrieve } from '../knowledge-search.ts';
 import { projectMemoryNotes } from '../agentcore-memory.ts';
 import { loadGuide, rankGuide } from './guide.ts';
@@ -18,7 +18,7 @@ import { buildSummary } from './summary.ts';
 const MAX_QUESTION = 1000;
 const MAX_HISTORY = 8;
 const MAX_HISTORY_TEXT = 600;
-const TIMEOUT_MS = 25_000;
+const TIMEOUT_MS = 35_000;
 
 let timeoutOverride: number | null = null;
 export function setAssistantTimeoutForTest(ms: number | null): void { timeoutOverride = ms; }
@@ -34,7 +34,7 @@ type Fail = 'no_sign_in' | 'rate_limited' | 'too_long' | 'failed';
 const STATUS: Record<Fail, number> = { too_long: 400, no_sign_in: 402, rate_limited: 429, failed: 502 };
 const MESSAGE: Record<Fail, string> = {
   too_long: 'That question is too long. Please keep it under 1,000 characters.',
-  no_sign_in: 'Connect a Claude Code sign-in in Agent sign-ins to ask the cat.',
+  no_sign_in: 'Connect your Codex account or a Claude Code subscription in Agent setup to chat with Kyu.',
   rate_limited: 'You are asking too fast. Please wait a little and try again.',
   failed: 'The cat could not answer just now. Please try again.',
 };
@@ -73,10 +73,12 @@ export function registerAssistantRoutes(): void {
       const userId = req.user!.id;
 
       try {
-        // Sign-in first: a person who cannot ask must not use up the quota (and always sees "connect a sign-in").
-        let engine: string | null = null;
-        try { engine = await pickTextEngine(userId, null); } catch { engine = null; }
-        if (!engine) { fail(res, 'no_sign_in'); return; }
+        // Simple navigation guidance needs neither inference nor a subscription.
+        if (/\bfeedback\b/i.test(question) && /\b(how|where|open|view|find|show)\b/i.test(question)) {
+          sendJson(res,200,{reply:'Open Feedback in the Portal section of the left sidebar. You can also use the button below.',links:[{id:'feedback',label:'Open Feedback',href:'#/feedback'}],via:'navigation',provider:'Portal guide'}); return;
+        }
+        let selection = await withTimeout(selectAssistantModel(userId),15000);
+        if (!selection) { fail(res, 'no_sign_in'); return; }
         const lim = await checkAndCount(userId);
         if (!lim.ok) { fail(res, 'rate_limited'); return; }
 
@@ -101,13 +103,28 @@ export function registerAssistantRoutes(): void {
           }
         }
         const links = assistantLinks(projectId);
-        const maxChars = await textPromptLimit(userId, null);
+        const maxChars = 12000;
         const { system, user } = buildPrompt({ question, history, guide, knowledge, notes, summary, links, maxChars });
-        const raw = await withTimeout(callTextModel(system, user, { createdBy: userId, maxTokens: 700 }), timeoutOverride ?? TIMEOUT_MS);
+        const controller = new AbortController();
+        let raw: string;
+        const generate = async () => {
+          try { return await generateAssistantAnswer(system,user,userId,selection!,controller.signal); }
+          catch (error) {
+            // A saved subscription token may have expired. Try the person's other
+            // connected subscription within the same time budget, never an admin key.
+            if (controller.signal.aborted) throw error;
+            const alternate = await selectAssistantModel(userId,selection!.engine);
+            if (!alternate) throw error;
+            selection = alternate;
+            return generateAssistantAnswer(system,user,userId,alternate,controller.signal);
+          }
+        };
+        try { raw = await withTimeout(generate(),timeoutOverride ?? TIMEOUT_MS); }
+        finally { controller.abort(); }
         const parsed = parseReply(String(raw ?? ''), links);
         if (!parsed.reply && !parsed.links.length) { fail(res, 'failed'); return; }
         if (!parsed.reply) parsed.reply = 'These pages may help:';
-        sendJson(res, 200, { reply: parsed.reply, links: parsed.links, via: knowledge.length ? 'guide+knowledge' : 'guide' });
+        sendJson(res, 200, { reply: parsed.reply, links: parsed.links, via: knowledge.length ? 'guide+knowledge' : 'guide',provider:selection.label,model:selection.model });
       } catch {
         console.warn('[assistant] answer failed (code=failed)');
         fail(res, 'failed');

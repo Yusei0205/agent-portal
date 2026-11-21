@@ -58,11 +58,11 @@ describe('assistantLinks', () => {
     assert.ok(l.some((x) => x.id === 'inbox'));
     assert.ok(l.every((x) => !x.href.startsWith('#/p/')));
   });
-  it('with a project has the ten ids', () => {
+  it('with a project includes its pages and global feedback', () => {
     const l = assistantLinks('p1');
     assert.deepEqual(l.map((x) => x.id).sort(),
-      ['autofix', 'inbox', 'knowledge', 'new-session', 'pipelines', 'sessions', 'setup', 'usage', 'vault', 'workflows']);
-    for (const x of l) assert.ok(x.href.startsWith('#/p/p1/') || x.href === '#/inbox' || x.href === '#/usage', x.href);
+      ['autofix', 'feedback', 'inbox', 'knowledge', 'new-session', 'pipelines', 'sessions', 'setup', 'usage', 'vault', 'workflows']);
+    for (const x of l) assert.ok(x.href.startsWith('#/p/p1/') || x.href === '#/inbox' || x.href === '#/usage' || x.href === '#/feedback', x.href);
   });
 });
 

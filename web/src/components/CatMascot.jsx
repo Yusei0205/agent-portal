@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CatSprite } from './CatSprite.jsx';
 import { CatChatPanel } from './CatChatPanel.jsx';
+import { CAT_NAME } from '../lib/cat-actions.js';
 import { subscribeProject } from '../lib/events.js';
 import { loadCatPrefs, saveCatPrefs } from '../lib/cat-prefs.js';
 import { createReactionGate, isWorking, moodForEvent, pickMotion, roamPaused, trackRunning } from '../lib/cat-mood.js';
@@ -422,7 +423,7 @@ export function CatMascot({ projectId = null, inboxCount = 0, route = null, user
           notice={notice}
         />
       )}
-      {showLabel && <div className="cat-label" aria-hidden="true">Chat with Agent ✨</div>}
+      {showLabel && <div className="cat-label" aria-hidden="true">Chat with {CAT_NAME} ✨</div>}
       <div
         ref={bodyRef}
         className="cat-body"
@@ -432,7 +433,7 @@ export function CatMascot({ projectId = null, inboxCount = 0, route = null, user
           type="button"
           className={`cat-button${dragging ? ' is-dragging' : ''}`}
           ref={buttonRef}
-          aria-label="Chat with Agent"
+          aria-label={`Chat with ${CAT_NAME}`}
           aria-haspopup="dialog"
           aria-expanded={panelOpen}
           onClick={onClick}

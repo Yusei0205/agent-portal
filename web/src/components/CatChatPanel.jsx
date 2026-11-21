@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon.jsx';
 import { buildNavItems } from './CommandPalette.jsx';
 import { navigate } from '../lib/router.js';
-import { CAT_GREETING, catActions, matchCatInput } from '../lib/cat-actions.js';
+import { CAT_GREETING, CAT_NAME, catActions, matchCatInput } from '../lib/cat-actions.js';
 import { chatKey, describeAssistantError, parseChat, serialiseChat, shouldAsk, trimHistory } from '../lib/cat-assistant.js';
 import { api } from '../lib/api.js';
 
@@ -98,7 +98,7 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
     };
     try {
       const r = await api.post('/api/assistant/chat', { question: q, projectId: route.projectId ?? undefined, history });
-      replace({ text: String(r?.reply ?? ''), links: Array.isArray(r?.links) ? r.links.map((l) => (l?.id === 'new-session' ? { ...l, after: 'new-session' } : l)) : [] });
+      replace({ text: String(r?.reply ?? ''), provider: r?.provider, links: Array.isArray(r?.links) ? r.links.map((l) => (l?.id === 'new-session' ? { ...l, after: 'new-session' } : l)) : [] });
     } catch (err) {
       // The unanswered question stays on screen but is not sent as history (no two `me` entries in a row).
       if (keyRef.current === askedIn) setMessages((all) => all.map((x) => (x.id === meId ? { ...x, error: true } : x)));
@@ -128,23 +128,24 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
     <div
       className="cat-panel"
       role="dialog"
-      aria-label="Cat assistant"
+      aria-label={`Chat with ${CAT_NAME}`}
       data-testid="cat-panel"
       onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
     >
       <header className="cat-panel-head">
-        <span className="cat-panel-title"><Icon name="sparkles" size={14} /> Chat with Agent</span>
+        <span className="cat-panel-title"><Icon name="sparkles" size={14} /> Chat with {CAT_NAME}</span>
         <span className="cat-panel-tools">
           <button type="button" className="cat-panel-close" aria-label="Clear chat" title="Clear chat" onClick={clearChat} disabled={pending || messages.length < 2}><Icon name="trash" size={14} /></button>
-          <button type="button" className="cat-panel-close" aria-label="Close the cat assistant" onClick={() => onClose()}><Icon name="x" size={14} /></button>
+          <button type="button" className="cat-panel-close" aria-label="Close chat with Kyu" onClick={() => onClose()}><Icon name="x" size={14} /></button>
         </span>
       </header>
       <div className="cat-panel-log" ref={logRef} role="log" aria-live="polite">
         {messages.map((m) => (
           <div key={m.id} className={`cat-msg cat-msg-${m.role}`}>
             <p className={m.pending ? 'cat-msg-pending' : undefined}>
-              {m.pending && <span className="cat-typing" role="status" aria-label="The cat is thinking"><i /><i /><i /></span>}
+              {m.pending && <span className="cat-typing" role="status" aria-label="Kyu is thinking"><i /><i /><i /></span>}
               {m.text}{m.href && <> <a className="cat-bubble-link" href={m.href} onClick={() => onClose({ restoreFocus: false })}>Open</a></>}
+              {m.provider && <small className="cat-msg-provider">{m.provider}</small>}
             </p>
             {m.links?.length > 0 && (
               <div className="cat-msg-links">
@@ -167,7 +168,7 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Ask a question or type a page, like inbox"
-          aria-label="Tell the cat where to go"
+          aria-label="Ask Kyu"
           autoComplete="off"
           maxLength={1000}
           readOnly={pending}
@@ -176,7 +177,7 @@ export function CatChatPanel({ route, user, roam, onRoamChange, onClose, notice 
       </form>
       <footer className="cat-panel-foot">
         <label className="cat-panel-roam">
-          <input type="checkbox" checked={roam} onChange={(e) => onRoamChange(e.target.checked)} /> Allow cat to roam
+          <input type="checkbox" checked={roam} onChange={(e) => onRoamChange(e.target.checked)} /> Allow Kyu to roam
         </label>
         <span className="cat-panel-note">Answers use your own sign-in</span>
       </footer>

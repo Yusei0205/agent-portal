@@ -95,6 +95,6 @@ describe('copy', () => {
     assert.equal(normalizeQuery('  Auto-fix '), 'auto fix');
   });
   it('greets', () => {
-    assert.equal(CAT_GREETING, "Meow! I'm your portal assistant. What would you like to do?");
+    assert.equal(CAT_GREETING, "Meow! I'm Kyu, your Kyuubit assistant. What would you like to do?");
   });
 });
