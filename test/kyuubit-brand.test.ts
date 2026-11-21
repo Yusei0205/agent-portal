@@ -62,7 +62,25 @@ describe('Kyuubit template', () => {
       assert.ok(contrast(m.ink, m.canvas) >= 4.5, `ink/canvas ${contrast(m.ink, m.canvas)}`);
       assert.ok(contrast(m['accent-ink'], m.accent) >= 4.5, `accent-ink/accent ${contrast(m['accent-ink'], m.accent)}`);
     });
+    it(`${mode}: accent-ink on accent-2 is at least 4.5:1`, () => {
+      const m = kyuubit().modes[mode];
+      assert.ok(contrast(m['accent-ink'], m['accent-2']) >= 4.5, `accent-ink/accent-2 ${contrast(m['accent-ink'], m['accent-2'])}`);
+    });
   }
+
+  it('light: ink-3 is at least 4.5:1 on canvas, rail, raised and panel', () => {
+    const m = kyuubit().modes.light;
+    for (const bg of ['canvas', 'rail', 'raised', 'panel']) {
+      assert.ok(contrast(m['ink-3'], m[bg]) >= 4.5, `ink-3/${bg} ${contrast(m['ink-3'], m[bg])}`);
+    }
+  });
+
+  it('light: link is at least 4.5:1 on canvas and rail', () => {
+    const m = kyuubit().modes.light;
+    for (const bg of ['canvas', 'rail']) {
+      assert.ok(contrast(m.link, m[bg]) >= 4.5, `link/${bg} ${contrast(m.link, m[bg])}`);
+    }
+  });
 });
 
 describe('Kyuubit default', () => {
