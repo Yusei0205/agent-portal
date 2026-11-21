@@ -503,6 +503,19 @@
       ],
       "smokeIds": []
     },
+    "assistant": {
+      "description": "The cat's read-only assistant: guide passages, prompt, limits, live summary and the chat route",
+      "sources": [
+        "server/assistant/**"
+      ],
+      "tests": [
+        "test/assistant-prompt.test.ts",
+        "test/assistant-limits.test.ts",
+        "test/assistant-summary.test.ts",
+        "test/assistant-routes.test.ts"
+      ],
+      "smokeIds": []
+    },
     "usage": {
       "description": "Usage page: dollars (Claude), credits (Kiro) and tokens by person, project and day",
       "sources": [

@@ -196,4 +196,9 @@ if (!webOnly) {
     logLevel: 'warning',
   });
   console.log('tool: dist/preflight.mjs');
+
+  // The cat assistant reads the user guide at run time (loadGuide checks dist/assistant/user-guide.md).
+  fs.mkdirSync(path.join(out, 'assistant'), { recursive: true });
+  fs.copyFileSync(path.join(root, 'docs/user-guide.md'), path.join(out, 'assistant', 'user-guide.md'));
+  console.log('guide: dist/assistant/user-guide.md');
 }

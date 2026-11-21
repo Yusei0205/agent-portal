@@ -48,6 +48,7 @@ import { registerAutomationRoutes } from './automations/routes.ts';
 import { recoverLocalAutomations, stopLocalAutomationTimers } from './automations/engine.ts';
 import { registerInsightsRoutes } from './insights.ts';
 import { registerUsageRoutes } from './usage.ts';
+import { registerAssistantRoutes } from './assistant/routes.ts';
 import { registerAgentCoreRoutes } from './agentcore-metrics.ts';
 import { registerAgentCoreIdleRoutes } from './agentcore-idle.ts';
 import { registerAgentCoreEvalRoutes } from './agentcore-eval.ts';
@@ -296,6 +297,7 @@ export async function startServer(
   registerAutomationRoutes();
   registerInsightsRoutes();
   registerUsageRoutes();
+  registerAssistantRoutes();
   registerAgentCoreRoutes();
   registerAgentCoreIdleRoutes();
   registerAgentCoreEvalRoutes();
