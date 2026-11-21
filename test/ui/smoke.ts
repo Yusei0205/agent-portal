@@ -4622,9 +4622,6 @@ async function main() {
         await reviewsLink.waitFor({ timeout: 3000 });
         const href = await reviewsLink.getAttribute('href');
         if (!href?.includes('/reviews/code')) {
-        // The heading toggle collapses the section again
-        await p.locator('.rail .rail-section-toggle').filter({ hasText: /^Connect$/i }).first().click();
-        await connectionsLink.waitFor({ state: 'hidden', timeout: 3000 });
           throw new Error(`Reviews link should point to /reviews/code, got: ${href}`);
         }
       }, page);
