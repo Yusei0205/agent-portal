@@ -4,7 +4,7 @@ import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
 import { getDb } from '../server/db.ts';
 import { config } from '../server/config.ts';
 import { encrypt } from '../server/secrets.ts';
-import { setCallTextModelOverride } from '../server/testing/model-provider.ts';
+import { setAssistantGenerationForTest as setCallTextModelOverride, setAssistantClaudeInvokeForTest } from '../server/assistant/provider.ts';
 import { setGuidePathForTest } from '../server/assistant/guide.ts';
 import { resetLimitsForTest } from '../server/assistant/limits.ts';
 import { setAssistantTimeoutForTest, setAssistantRetrieveForTest, setAssistantNotesForTest } from '../server/assistant/routes.ts';
@@ -25,7 +25,7 @@ const ask = (cookie: string | undefined, body: unknown) =>
 function addCredential(userId: string): void {
   const ts = new Date().toISOString();
   getDb().prepare(`INSERT INTO engine_credentials (id, user_id, engine, name, mode, secret_enc, extra_config, is_default, last4, created_at, updated_at, updated_by)
-    VALUES (?, ?, 'claude-code', 'Key', 'api_key', ?, '{}', 1, 'fake', ?, ?, ?)`)
+      VALUES (?, ?, 'claude-code', 'Subscription', 'subscription_token', ?, '{}', 1, 'fake', ?, ?, ?)`)
     .run(`cred-${userId}`, userId, encrypt('sk-ant-fake', config.secretKey), ts, ts, userId);
 }
 
@@ -64,6 +64,38 @@ beforeEach(() => {
 });
 
 describe('POST /api/assistant/chat', () => {
+  it('runs Haiku through Claude Code using the requesting person’s subscription, with tools blocked', async () => {
+    const previous=process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN;
+    process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN='arn:aws:bedrock-agentcore:ap-southeast-1:123456789012:runtime/fixture';
+    setCallTextModelOverride(null);
+    const sent:any[]=[];
+    setAssistantClaudeInvokeForTest((async function* (_arn:any,_session:any,payload:any) {
+      sent.push(payload);
+      yield {type:'assistant-text',text:'Use Feedback in the sidebar.\nLINKS: feedback'};
+      yield {type:'result',subtype:'success',metrics:{}};
+    }) as any);
+    try {
+      const r=await ask(member,{question:'What can I do in the portal?',projectId});
+      assert.equal(r.status,200);
+      assert.equal((r.body as any).model,'claude-haiku-5-5');
+      assert.equal(sent.length,1);
+      assert.deepEqual(sent[0].auth,{kind:'oauth_token',secret:'sk-ant-fake'});
+      assert.equal(sent[0].trustTools,false);
+      assert.equal(sent[0].maxTurns,1);
+      assert.equal(sent[0].rules[0].action,'block');
+      assert.equal(sent[0].rules[0].pattern,'.*');
+    } finally {
+      setAssistantClaudeInvokeForTest(null);
+      if(previous===undefined)delete process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN; else process.env.PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN=previous;
+    }
+  });
+  it('answers the feedback navigation question without a model or subscription', async () => {
+    const r=await ask(noCred,{question:'how do i view feedback page',projectId});
+    assert.equal(r.status,200);
+    assert.match((r.body as any).reply,/Feedback.*left sidebar/);
+    assert.deepEqual((r.body as any).links,[{id:'feedback',label:'Open Feedback',href:'#/feedback'}]);
+    assert.equal(calls.length,0);
+  });
   it('401 when signed out', async () => {
     const r = await ask(undefined, { question: 'hi' });
     assert.equal(r.status, 401);

@@ -181,7 +181,7 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
           signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]), allowed: new Set(), emit: () => {},
           awaitInput: async () => ({ decision: 'deny', remember: false, message: 'Portal AI generation cannot approve tools.' }),
         }, { managedAuth: false, openClient: () => open(home, environment(), workDir, auth), refreshAuth,
-          config: { 'features.shell_tool': false, 'features.multi_agent': false } });
+          config: { 'features.shell_tool': false, 'features.multi_agent': false, 'features.apps': false, web_search: 'disabled', mcp_servers: {} } });
         send({ type: 'result', exitCode: 0, text: result.text });
       } else if (body.mode === 'codex-limits') {
         client = await open(home, environment(), workDir, auth);

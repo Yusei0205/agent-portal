@@ -71,4 +71,5 @@ export function matchCatInput(text, actions, pages) {
   return { kind: best.kind, item: best.item };
 }
 
-export const CAT_GREETING = "Meow! I'm your portal assistant. What would you like to do?";
+export const CAT_NAME = 'Kyu';
+export const CAT_GREETING = "Meow! I'm Kyu, your Kyuubit assistant. What would you like to do?";

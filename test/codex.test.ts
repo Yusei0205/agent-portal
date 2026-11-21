@@ -13,6 +13,7 @@ import { config } from '../server/config.ts';
 import { insert, one, migrateCodexEngine } from '../server/db.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { getEngineModels } from '../server/models.ts';
+import { selectAssistantModel } from '../server/assistant/provider.ts';
 import { now, generateId } from '../server/util.ts';
 
 describe('Codex integration', () => {
@@ -180,6 +181,18 @@ describe('Codex integration', () => {
     const models = await getEngineModels('codex', userId, null, false);
     assert.equal(models.models[0].id, 'fixture-model');
     assert.equal(models.source, 'codex');
+  });
+
+  it('answers Kyu questions through the signed-in Codex account and its own model catalogue', async () => {
+    const selected = await selectAssistantModel(userId);
+    assert.equal(selected?.engine, 'codex');
+    assert.equal(selected?.model, 'fixture-model');
+    const answer = await fetchJson(baseUrl, '/api/assistant/chat', { method: 'POST', cookie,
+      body: { question: 'What does this portal do?' } });
+    assert.equal(answer.status, 200);
+    assert.equal((answer.body as any).model, 'fixture-model');
+    assert.match((answer.body as any).provider, /your Codex subscription/);
+    assert.ok((answer.body as any).reply.length > 0);
   });
 
   it('only lets admins explicitly import the host sign-in, without returning its secrets', async () => {

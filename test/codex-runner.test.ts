@@ -151,6 +151,21 @@ describe('Codex AgentCore runner HTTP contract', () => {
     assert.equal(completed.exitCode, 0);
     assert.match(completed.text, /No portal_pr tool/);
   });
+  it('handles native MCP confirmations with nullable turn ids through trust or a visible approval', async () => {
+    for(const trusted of [true,false]) {
+      let asked=0;
+      const output=await events(await post({...payload('REQUEST_MCP_CONFIRMATION'),trusted}),async event=>{
+        if(event.type!=='approval-request')return;
+        asked++;
+        assert.equal(event.toolName,'mcp__codex_apps__notion-delete-pages');
+        assert.deepEqual(event.input.arguments,{pages:['fixture-only']});
+        const answer=await post({mode:'answer',runId:'run-fixture',requestId:event.requestId,inputHash:event.inputHash,decision:'allow'});
+        assert.equal(answer.status,200); await answer.body?.cancel();
+      });
+      assert.equal(asked,trusted?0:1);
+      assert.equal(output.find(event=>event.type==='result').text,'MCP approved');
+    }
+  });
   it('binds approvals to the exact command and accepts only the matching answer', async () => {
     let asked = false;
     const output = await events(await post(payload('ASK_PERMISSION')), async event => {

@@ -3,6 +3,7 @@ import type { CodexClient, RpcParams } from '../codex-client.ts';
 import { decideToolCall, rememberKey, type PolicyRule } from './tool-policy.ts';
 import type { ChatgptAuthTokens } from '../codex-device-protocol.ts';
 import { createCodexAgentTracker } from './codex-agents.ts';
+import { approveCodexMcpPrompt, isCodexMcpPrompt } from './codex-mcp-approval.ts';
 
 export interface CodexSessionContext {
   run: { workDir: string; goal: string; trusted: boolean; model: string | null; engineSessionId: string | null; permissions: { rules: readonly PolicyRule[] } };
@@ -20,6 +21,7 @@ const abortError = () => new DOMException('Run cancelled', 'AbortError');
 export async function approveCodexRequest(
   ctx: CodexSessionContext, method: string, params: RpcParams, items: Map<string, RpcParams>,
 ): Promise<unknown> {
+  if (isCodexMcpPrompt(method)) return approveCodexMcpPrompt(ctx, method, params, items);
   if (ctx.signal?.aborted) return { decision: 'cancel' };
   const fileChange = method === 'item/fileChange/requestApproval';
   if (!fileChange && method !== 'item/commandExecution/requestApproval') {
@@ -139,7 +141,8 @@ export async function driveCodexTurn(ctx: CodexSessionContext, options: CodexTur
     client.onClose = error => rejectTurn?.(signal?.aborted ? abortError() : error);
     client.onRequest = async (method, params) => {
       if (method === 'account/chatgptAuthTokens/refresh' && options.refreshAuth) return options.refreshAuth(params.previousAccountId);
-      if (params.threadId !== threadId || (turnId && params.turnId !== turnId)) throw new Error('Mismatched Codex approval');
+      const uncorrelatedMcp = method === 'mcpServer/elicitation/request' && params.turnId == null;
+      if (params.threadId !== threadId || (turnId && !uncorrelatedMcp && params.turnId !== turnId)) throw new Error('Mismatched Codex approval');
       return approveCodexRequest(ctx, method, params, items);
     };
     client.subscribe((method, params) => {

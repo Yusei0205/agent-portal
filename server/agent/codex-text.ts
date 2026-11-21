@@ -8,9 +8,9 @@ import { invokeAgentCoreOneShot, agentCoreControlSender } from './kiro-agentcore
 import { driveCodexTurn } from './codex-session.ts';
 
 /** Short, isolated generation request using only the requesting person's Codex connection. */
-export async function callCodexText(prompt: string, userId: string, model?: string | null): Promise<string> {
+export async function callCodexText(prompt: string, userId: string, model?: string | null, parentSignal?: AbortSignal): Promise<string> {
   if (!await hasCodexLogin(userId)) throw new Error('Connect your ChatGPT account in Connect > Agent sign-ins to use the Codex provider.');
-  const signal = AbortSignal.timeout(120_000);
+  const signal = parentSignal ? AbortSignal.any([parentSignal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000);
   if (codexUsesCloud()) {
     const arn = process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN;
     if (!arn) throw new Error('The Codex AgentCore runner is not configured.');
@@ -32,7 +32,7 @@ export async function callCodexText(prompt: string, userId: string, model?: stri
   try {
     const result = await driveCodexTurn({ run: { workDir, goal: prompt, trusted: false, model: model || null, engineSessionId: null, permissions: { rules: [] } },
       signal, allowed: new Set(), emit: () => {}, awaitInput: async () => ({ decision: 'deny', remember: false, message: 'Tools requiring approval are unavailable for portal AI generation.' }) },
-    { managedAuth: true, openClient: () => openUserCodex(userId, workDir), config: { 'features.shell_tool': false, 'features.multi_agent': false } });
+    { managedAuth: true, openClient: () => openUserCodex(userId, workDir), config: { 'features.shell_tool': false, 'features.multi_agent': false, 'features.apps': false, web_search: 'disabled', mcp_servers: {} } });
     return result.text;
   } finally { await fs.rm(workDir, { recursive: true, force: true }); }
 }

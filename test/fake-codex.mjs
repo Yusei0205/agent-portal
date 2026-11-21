@@ -74,6 +74,18 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     }
     if (prompt.includes('EXIT_PROCESS')) { process.exit(7); }
     if (prompt.includes('HANG_FOREVER')) return;
+    if (prompt.includes('REQUEST_MCP_CONFIRMATION')) {
+      const item={id:'notion-call',type:'mcpToolCall',status:'inProgress',server:'codex_apps',tool:'notion-delete-pages',arguments:{pages:['fixture-only']}};
+      notify('item/started',{...scope,item});
+      approvalReply=result=>{
+        const accepted=result?.action==='accept';
+        notify('item/completed',{...scope,item:{...item,status:accepted?'completed':'failed',...(accepted?{result:{ok:true}}:{error:{message:'user rejected MCP tool call'}})}});
+        notify('item/agentMessage/delta',{...scope,itemId:'answer',delta:accepted?'MCP approved':'MCP declined'});
+        notify('turn/completed',{threadId:thread,turn:{id:scope.turnId,status:'completed'}});
+      };
+      send({id:900,method:'mcpServer/elicitation/request',params:{threadId:thread,turnId:null,serverName:'codex_apps',mode:'form',message:'Allow the fixture Notion action?',requestedSchema:{type:'object',properties:{}},_meta:{codex_approval_kind:'mcp_tool_call'}}});
+      return;
+    }
     if (prompt.includes('MCP_FAILURE')) {
       notify('item/completed', { ...scope, item: { id: 'mcp-failure', type: 'mcpToolCall', tool: 'create_pull_request', status: 'failed', error: { message: 'user rejected MCP tool call' } } });
       notify('turn/completed', { threadId: thread, turn: { id: scope.turnId, status: 'completed' } }); return;

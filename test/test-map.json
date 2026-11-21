@@ -515,6 +515,8 @@
         "test/assistant-limits.test.ts",
         "test/assistant-summary.test.ts",
         "test/assistant-routes.test.ts",
+        "test/assistant-provider.test.ts",
+        "test/web-kyu-chat.test.ts",
         "test/cat-assistant.test.ts"
       ],
       "smokeIds": []
@@ -1916,6 +1918,7 @@
         "codex-runner/src/device-auth.ts",
         "server/repositories/codex-store.ts",
         "server/agent/codex-session.ts",
+        "server/agent/codex-mcp-approval.ts",
         "server/agent/codex-agents.ts",
         "server/agent/codex-agentcore.ts",
         "server/agent/codex-pr-tool.ts",
@@ -1926,6 +1929,7 @@
       ],
       "tests": [
         "test/codex.test.ts",
+        "test/codex-mcp-approval.test.ts",
         "test/codex-oauth.test.ts",
         "test/codex-device.test.ts",
         "test/codex-runner.test.ts",
