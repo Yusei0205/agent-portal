@@ -59,7 +59,7 @@
    Every nav link still meets the 28 px minimum hit-target requirement. */
 .rail-collapsed .rail {
   padding: 6px;
-  gap: 4px;
+  gap: 2px;
 }
 
 /* Centre icons when collapsed */
@@ -74,13 +74,18 @@
   min-height: 28px;
   gap: 0;
 }
-/* Thinner gap around the section-divider line. */
+/* Thinner gap around the section-divider line. The rail now has eight sections (21 links for an admin),
+   so every pixel counts to keep it scroll-free at 800 px. */
 .rail-collapsed .rail-section-divider {
-  margin: 2px 4px;
+  margin: 1px 4px;
 }
-/* Tighter inter-section spacing in collapsed mode. */
+/* Nothing above the first section: its divider is just dead space. */
+.rail-collapsed .rail-section:first-child .rail-section-divider {
+  display: none;
+}
+/* The divider already separates sections in collapsed mode. */
 .rail-collapsed .rail-section + .rail-section {
-  margin-top: 2px;
+  margin-top: 0;
 }
 /* No bottom padding inside the scrollable nav region when collapsed. */
 .rail-collapsed .rail-nav-wrap nav {

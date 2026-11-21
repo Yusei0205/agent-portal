@@ -4682,7 +4682,7 @@ async function main() {
         await p.waitForTimeout(400);
       }, page);
 
-      await test('Collapsed rail fits without scroll at 1280x800 (no more than 14 links)', async (p) => {
+      await test('Collapsed rail shows every link and fits without scroll at 1280x800', async (p) => {
         await goto(p, `/p/${projectId}/sessions`, 800);
         await p.setViewportSize({ width: 1280, height: 800 });
         await p.waitForSelector('.rail', { timeout: 5000 });
@@ -4690,10 +4690,16 @@ async function main() {
           await p.locator('.rail-collapse-btn').first().click();
           await p.waitForTimeout(400);
         }
-        const railLinks = await p.locator('.rail-collapsed .rail-link').count();
-        // New rail has ~14 items (admins see Users too); check count is reasonable
-        if (railLinks < 10 || railLinks > 20) {
-          throw new Error(`Unexpected rail link count in collapsed mode: ${railLinks}`);
+        // Icon-only mode has no disclosure toggles: every link (secondary sections included) is shown,
+        // admins see Users and AgentCore too. 19 links for a non-admin, 21 for an admin.
+        const railLinks = await p.locator('.rail-collapsed .rail-link:visible').count();
+        if (railLinks < 19) {
+          throw new Error(`Collapsed rail should show every link (19+ for an admin), found ${railLinks}`);
+        }
+        // The nav region must not need its own scrollbar: that is what the compact collapsed spacing is for.
+        const nav = await p.locator('.rail-collapsed .rail-nav-wrap').evaluate((el) => ({ scroll: el.scrollHeight, client: el.clientHeight }));
+        if (nav.scroll > nav.client) {
+          throw new Error(`Collapsed rail scrolls at 1280x800 (${railLinks} links): scrollHeight ${nav.scroll} > clientHeight ${nav.client}`);
         }
         // Restore
         await p.locator('.rail-collapse-btn').first().click();
