@@ -48,16 +48,19 @@ Enter your email and password on the sign-in screen. If you do not have an accou
 The portal has three main areas.
 
 **Rail (left side)**
-The rail is the navigation sidebar. It contains four flat sections — no dropdowns:
+The rail is the navigation sidebar. Some sections are always open; the ones marked "collapsible" show only their heading until you click it (a section also opens by itself when you are on one of its pages, and stays open afterwards):
 
 | Section | Pages |
 |---------|-------|
-| **Work** | Sessions, Workspaces, Knowledge, Create, Insights |
-| **Connect** | Connections, Repositories, Integrations, Vault |
-| **Quality** | Reviews, Tests |
-| **Account** | Credentials, Configuration, Users (admin only), API access, Settings |
+| *(top, no heading)* | Dashboard, Inbox (with unread count), Usage |
+| **Work** | Sessions, Workflows, Workspaces, Reviews |
+| **Project tools** (collapsible) | Tests, Tickets, Mail |
+| **Knowledge** | Knowledge, Create, Vault |
+| **Connect** (collapsible) | Connections |
+| **Agents** (collapsible) | Agent setup |
+| **Portal** (collapsible) | Settings, Users and AgentCore (admin only), API access, Feedback, Help |
 
-Work and Quality items require an active project to be selected. Vault (in Connect) is also project-scoped. All items are always visible; nothing expands or collapses.
+Work, Project tools and Knowledge items need a project to be selected. Inbox is also available as the bell icon in the top bar.
 
 **Project picker**
 Below the brand mark is a compact card showing the current project name (or "Choose a project"). Clicking it opens a **Switch project** dialog with a search field, your project list, an **All projects** link, a **New project** link, and — when a project is selected — a **Project settings** link. Project settings opens the project overview, repositories, team, and permissions pages. Use **↑ / ↓** to navigate, **Enter** to select, **Esc** to close. The rail remembers the last chosen project so project items stay linked even when you browse global pages (Credentials, Settings…).
@@ -67,7 +70,7 @@ Click **Collapse** at the bottom of the rail to switch to icon-only mode (56 px)
 
 When the rail is **collapsed** to icon-only mode:
 - Every icon has a tooltip that appears on hover or keyboard focus.
-- Section headings become thin dividers.
+- Section headings become thin dividers and every page is shown (nothing is collapsed).
 - The project picker becomes an avatar button showing the project's initials.
 
 **Mobile**
