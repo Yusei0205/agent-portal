@@ -146,6 +146,49 @@ describe('POST /api/assistant/chat', () => {
     assert.equal(calls.length, 8);
   });
 
+  it('502 failed when the model reply is empty and no link survives; links alone give a fallback line', async () => {
+    reply = '   ';
+    let r = await ask(member, { question: 'q' });
+    assert.equal(r.status, 502);
+    assert.equal((r.body as { code: string }).code, 'failed');
+    reply = 'LINKS: admin-secrets';
+    r = await ask(member, { question: 'q' });
+    assert.equal(r.status, 502);
+    reply = 'LINKS: inbox';
+    r = await ask(member, { question: 'q' });
+    assert.equal(r.status, 200);
+    const b = r.body as { reply: string; links: Array<{ id: string }> };
+    assert.equal(b.reply, 'These pages may help:');
+    assert.deepEqual(b.links.map((l) => l.id), ['inbox']);
+  });
+
+  it('a person with no sign-in asking 20 times always gets 402, never 429', async () => {
+    for (let i = 0; i < 20; i++) assert.equal((await ask(noCred, { question: 'q' })).status, 402, `ask ${i + 1}`);
+    assert.equal(calls.length, 0);
+  });
+
+  it('a missing guide file still answers, via guide', async () => {
+    setGuidePathForTest(path.join(os.tmpdir(), 'ar-no-such-dir', 'missing.md'));
+    try {
+      const r = await ask(member, { question: 'auto-fix?' });
+      assert.equal(r.status, 200);
+      assert.equal((r.body as { via: string }).via, 'guide');
+    } finally { setGuidePathForTest(guideFile); }
+  });
+
+  it('the 101st question of a day is 429 and the model is not called', async () => {
+    const users = ((await fetchJson(baseUrl, '/api/users', { cookie: admin })).body as { users: { id: string; email: string }[] }).users;
+    const uid = users.find((u) => u.email === 'mem@ar.test')!.id;
+    const key = `assistant.count.${uid}.${new Date().toISOString().slice(0, 10)}`;
+    getDb().prepare("INSERT INTO settings (key, value) VALUES (?, '100') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key);
+    try {
+      const r = await ask(member, { question: 'q' });
+      assert.equal(r.status, 429);
+      assert.equal((r.body as { code: string }).code, 'rate_limited');
+      assert.equal(calls.length, 0);
+    } finally { getDb().prepare('DELETE FROM settings WHERE key = ?').run(key); }
+  });
+
   it('502 failed when the model throws, error text not echoed', async () => {
     setCallTextModelOverride(async () => { throw new Error('TOP-SECRET-PROVIDER-ERROR'); });
     const r = await ask(member, { question: 'q' });

@@ -69,11 +69,12 @@ export function registerAssistantRoutes(): void {
       const userId = req.user!.id;
 
       try {
-        const lim = await checkAndCount(userId);
-        if (!lim.ok) { fail(res, 'rate_limited'); return; }
+        // Sign-in first: a person who cannot ask must not use up the quota (and always sees "connect a sign-in").
         let engine: string | null = null;
         try { engine = await pickTextEngine(userId, null); } catch { engine = null; }
         if (!engine) { fail(res, 'no_sign_in'); return; }
+        const lim = await checkAndCount(userId);
+        if (!lim.ok) { fail(res, 'rate_limited'); return; }
 
         const history = cleanHistory(body.history);
         const guide = rankGuide(loadGuide(), question, 4);
@@ -94,6 +95,8 @@ export function registerAssistantRoutes(): void {
         const { system, user } = buildPrompt({ question, history, guide, knowledge, summary, links, maxChars });
         const raw = await withTimeout(callTextModel(system, user, { createdBy: userId, maxTokens: 700 }), timeoutOverride ?? TIMEOUT_MS);
         const parsed = parseReply(String(raw ?? ''), links);
+        if (!parsed.reply && !parsed.links.length) { fail(res, 'failed'); return; }
+        if (!parsed.reply) parsed.reply = 'These pages may help:';
         sendJson(res, 200, { reply: parsed.reply, links: parsed.links, via: knowledge.length ? 'guide+knowledge' : 'guide' });
       } catch {
         console.warn('[assistant] answer failed (code=failed)');

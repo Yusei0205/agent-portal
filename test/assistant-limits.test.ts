@@ -41,8 +41,12 @@ describe('assistant limits', () => {
     assert.deepEqual(await checkAndCount('u2', T0), { ok: true });
   });
   it('a throwing settings store still allows the call', async () => {
-    const orig = getDb().prepare;
     const db = getDb();
+    // Seeded at the limit: with a working store this call would be refused, so ok:true proves the store error is what let it through.
+    db.prepare("INSERT INTO settings (key, value) VALUES ('assistant.count.u3.2026-11-21', '100') ON CONFLICT(key) DO UPDATE SET value = excluded.value").run();
+    assert.deepEqual(await checkAndCount('u3', T0), { ok: false, reason: 'day' });
+    resetLimitsForTest();
+    const orig = db.prepare;
     db.prepare = (() => { throw new Error('store down'); }) as typeof db.prepare;
     try {
       assert.deepEqual(await checkAndCount('u3', T0), { ok: true });
