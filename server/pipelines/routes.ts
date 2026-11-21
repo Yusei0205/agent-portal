@@ -82,6 +82,6 @@ export function registerPipelineRoutes(): void {
     const projectId = req.params.id;
     if (!await requireProjectOwnerOrAdmin(req, res, projectId)) return;
     if (!await getChatTarget(projectId)) throw badRequest('No chat URL is set');
-    sendJson(res, 200, { ok: await sendChat(projectId, 'Test message from Agent Portal') });
+    sendJson(res, 200, { ok: await sendChat(projectId, 'Test message from Kyuubit') });
   });
 }

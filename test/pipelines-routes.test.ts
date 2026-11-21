@@ -189,7 +189,7 @@ describe('pipelines routes', () => {
     assert.deepEqual((s.body as { chat: { hint: unknown } }).chat.hint, { host: 'hooks.slack.com', last4: 'WXYZ' });
     const t = await api('/chat/test', owner, 'POST', {});
     assert.deepEqual(t.body, { ok: true });
-    assert.deepEqual(sent, ['Test message from Agent Portal']);
+    assert.deepEqual(sent, ['Test message from Kyuubit']);
     const audit = JSON.stringify(await getAuditRepository().query({ limit: 50 } as never));
     assert.equal(audit.includes('T000'), false);
     assert.equal((await api('/chat', owner, 'PUT', { url: null })).status, 200);
