@@ -772,6 +772,17 @@ The page lists all available MCP tools grouped by the scope required to call the
 | **Documents** | Generate written documents using AI. |
 | **Decks** | Generate presentation slide decks. |
 
+### Generating documentation or knowledge from your repositories
+
+The portal can write documents from your code. Open the project, then **Create** (rail › Knowledge › Create):
+
+1. Make sure the repository is added to the project (Work › Workspaces › **Repositories** tab).
+2. On **Documents**, press **New document**, give it a name and choose a type: **System overview**, **Architecture**, **API reference**, **Runbook** or **User guide**.
+3. Under **What the agent reads**, tick the **Repositories** to read (read-only copies of the code) and, if you like, **Project documents** from Knowledge. You can also attach files.
+4. Press **Create**. The document is generated as a Word file; **Refresh** regenerates it after the code changes.
+
+**Diagrams** (architecture diagrams from the selected repositories) and **Decks** work the same way. To make a generated document searchable in **Knowledge** (and available to the cat and to **Ask**), download it and upload it under Knowledge › **Documents**. For a one-off write-up in a session instead, start a session and ask for it (for example "Write a runbook for this repository").
+
 #### Attaching files to Create actions
 
 When creating or refreshing a diagram, document, or presentation, you can attach up to 5 files (10 MB each) to provide the AI with additional context — for example architecture diagrams, requirement documents, existing content, or reference images.

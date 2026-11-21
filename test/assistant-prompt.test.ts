@@ -42,6 +42,20 @@ describe('guide', () => {
     assert.equal(rankGuide(ps, 'turn on auto-fix pipelines deploys', 1).length, 1);
   });
 
+  it('matches word forms and short names: "repo" finds repositories, "generate" finds generating', () => {
+    const ps = splitGuide('## Generating documentation from your repositories\nCreate writes documents from the code.\n\n## Vault\nSecrets live here.\n\n## Sessions\nStart a session.');
+    const r = rankGuide(ps, 'Can you generate knowledge based on the repo', 3);
+    assert.equal(r[0]!.heading, 'Generating documentation from your repositories');
+    assert.equal(rankGuide(ps, 'where are my docs', 1)[0]!.heading, 'Generating documentation from your repositories');
+    assert.equal(rankGuide(ps, 'vaults', 1)[0]!.heading, 'Vault');
+  });
+
+  it('the real guide answers "generate knowledge based on the repo" with the Create section', () => {
+    setGuidePathForTest(null);
+    const r = rankGuide(loadGuide(), 'Can you generate knowledge based on the repo', 4);
+    assert.ok(r.some((x) => /repositories/i.test(x.heading) && /Create/.test(x.text)), r.map((x) => x.heading).join(' | '));
+  });
+
   it('returns [] for a missing file and reads a present one', () => {
     setGuidePathForTest('/nonexistent/guide.md');
     assert.deepEqual(loadGuide(), []);
