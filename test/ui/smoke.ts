@@ -6436,10 +6436,11 @@ async function main() {
     await test('Demo session at 390 px: page does not scroll vertically; composer pinned within viewport', async (p) => {
       if (!demoSessionId) throw new Error('No demo session available — skipping');
       await p.setViewportSize({ width: 390, height: 844 });
-      await goto(p, `/p/${projectId}/sessions/${demoSessionId}`, 2000);
+      await goto(p, `/p/${projectId}/sessions/${demoSessionId}`, 0);
       await p.waitForSelector('.ide-workspace', { timeout: 8_000 });
-      // Allow mobile layout and CSS to settle
-      await p.waitForTimeout(600);
+      await p.locator('.ws-composer').first().waitFor({ state: 'visible', timeout: 8_000 });
+      // Settle on events, not a timer: web fonts loaded, then two animation frames so layout has been applied.
+      await p.evaluate(`document.fonts.ready.then(function () { return new Promise(function (r) { requestAnimationFrame(function () { requestAnimationFrame(r); }); }); })`);
 
       const innerHeight = await p.evaluate(() => window.innerHeight);
 
@@ -6460,6 +6461,16 @@ async function main() {
         throw new Error(
           `.ws-composer bottom (${composerBottom}) is below innerHeight (${innerHeight}). ` +
           `The composer is not pinned at the bottom of the viewport.`,
+        );
+      }
+
+      // Check 3: the composer must not be clipped by the workspace body (overflow: hidden). An empty
+      // conversation's placeholder used to keep its full height and push the composer out of view.
+      const bodyBottom = await p.locator('.ide-body').first().evaluate((el) => Math.round(el.getBoundingClientRect().bottom));
+      if (composerBottom > bodyBottom + 1) {
+        throw new Error(
+          `.ws-composer bottom (${composerBottom}) is clipped by the workspace body (bottom ${bodyBottom}). ` +
+          `The conversation area must shrink, not push the composer out.`,
         );
       }
     }, page);
