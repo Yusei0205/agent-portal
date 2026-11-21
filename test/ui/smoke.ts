@@ -3478,6 +3478,7 @@ async function main() {
 
     await test('Project memory: an owner adds a note and edits a fact in place; summaries have no Edit', async (p) => {
       const state = {
+        enabled: false,
         records: [
           { id: 'r-fact', text: 'Tests run with npm test', kind: 'fact', status: 'pending', createdAt: null as string | null, edited: false },
           { id: 'r-sum', text: 'Session summary', kind: 'summary', status: 'pending', createdAt: null as string | null, edited: false },
@@ -3492,18 +3493,31 @@ async function main() {
           state.records.unshift({ id: 'r-new', text: body.text, kind: 'fact', status: 'approved', createdAt: null, edited: true });
           return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'r-new', text: body.text, status: 'approved' }) });
         }
+        if (req.method() === 'PUT' && typeof body?.enabled === 'boolean' && !req.url().includes('/records')) {
+          state.enabled = body.enabled;
+          return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ enabled: state.enabled }) });
+        }
         if (req.method() === 'PUT' && body?.text) {
           const r = state.records.find((x) => req.url().includes(`/records/${x.id}`))!;
           Object.assign(r, { text: body.text, status: 'approved', edited: true });
           return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: r.id, text: body.text, status: 'approved' }) });
         }
-        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ available: true, enabled: true, canManage: true, records: state.records, error: null }) });
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ available: true, enabled: state.enabled, canManage: true, records: state.records, error: null }) });
       });
       try {
         await goto(p, '/agentcore', 1200);
         const panel = p.locator('section[aria-label="Project memory"]');
         await panel.waitFor({ timeout: 8000 });
         await panel.scrollIntoViewIfNeeded();
+        // Memory off: one clear message, and the switch says what it does; the Add button is in view.
+        if (await panel.getByText(/Memory is off for this project/).count() !== 1) throw new Error('The "memory is off" message is not shown exactly once');
+        const box = panel.getByLabel('Use project memory (learn from this project\'s sessions)');
+        const addBtn = await panel.getByRole('button', { name: 'Add', exact: true }).boundingBox();
+        if (!addBtn || addBtn.x + addBtn.width > 1280) throw new Error('The Add button is off screen');
+        await box.click();
+        await panel.getByText(/Memory is off for this project/).waitFor({ state: 'detached', timeout: 4000 });
+        if (!(await box.isChecked())) throw new Error('The memory switch did not turn on');
+        if (!sent.some((x) => x.method === 'PUT' && x.body?.enabled === true)) throw new Error('Turning memory on sent no request');
         // Add a note
         await panel.getByLabel(/Add a note the agents/).fill('Deploys go through main_v3');
         await panel.getByRole('button', { name: 'Add', exact: true }).click();
@@ -3521,7 +3535,7 @@ async function main() {
         await panel.getByRole('button', { name: 'Save', exact: true }).click();
         await panel.getByLabel('Note text').waitFor({ state: 'detached', timeout: 4000 });
         await panel.locator('td').filter({ hasText: 'Tests run with pnpm vitest' }).filter({ hasText: 'edited by an owner' }).waitFor({ timeout: 4000 });
-        const put = sent.find((x) => x.method === 'PUT');
+        const put = sent.find((x) => x.method === 'PUT' && x.body?.text);
         if (!put || !put.url.includes('/records/r-fact') || put.body.text !== 'Tests run with pnpm vitest' || 'status' in put.body) throw new Error(`Unexpected edit request: ${JSON.stringify(put)}`);
         const post = sent.find((x) => x.method === 'POST');
         if (!post || !/\/memory\/records$/.test(new URL(post.url).pathname) || post.body.text !== 'Deploys go through main_v3') throw new Error(`Unexpected add request: ${JSON.stringify(post)}`);

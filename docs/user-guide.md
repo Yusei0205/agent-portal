@@ -790,7 +790,7 @@ Metrics shown: total cost, total runs, failure rate, average run duration. Chart
 
 **Project memory** (rail › Portal › AgentCore, the **Project memory** panel; portal admins) keeps what the agents learn about a project (how its tests run, its conventions) so later sessions and the cat can use it. It needs the cloud portal and is off by default for each project.
 
-- **Turn it on** for a project with **Learn from this project's sessions**. A few minutes after a session finishes, AgentCore pulls notes out of it. They arrive as **pending**.
+- **Turn it on** for a project by ticking **Use project memory (learn from this project's sessions)** next to the project picker. A few minutes after a session finishes, AgentCore pulls notes out of it. They arrive as **pending**.
 - **Review**: **Approve** a note to use it, **Reject** it to keep it out, or **Delete** it. Only approved notes reach an agent (at the start of a session) or the cat (when it answers about the project).
 - **Correct a note**: **Edit** on a fact opens it in place; change the wording and **Save** (Esc cancels). The note keeps its place, becomes approved and is tagged "edited by an owner". Session summaries cannot be edited.
 - **Add a note**: type a fact in **Add a note** (for example "Tests run with pnpm vitest") and press **Add**. It is saved as approved. While memory is off for the project the note is kept but not used.

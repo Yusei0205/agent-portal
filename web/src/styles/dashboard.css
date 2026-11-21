@@ -834,7 +834,10 @@
 
 /* Project memory panel (AgentCore page): add a note, edit a fact in place. */
 .mem-add { display: grid; gap: 6px; margin: 4px 0 12px; }
-.mem-add-row { display: flex; gap: 8px; align-items: flex-start; }
+.mem-add { max-width: 720px; }
+.mem-add-row { display: flex; gap: 8px; align-items: flex-end; }
+.mem-add-row .btn { flex-shrink: 0; }
+.mem-off { margin: 4px 0 8px; }
 .mem-add-row textarea, .mem-edit textarea { flex: 1; min-width: 0; width: 100%; resize: vertical; font: inherit; }
 .mem-edit { display: grid; gap: 6px; }
 .mem-edit-actions { display: flex; gap: 6px; }

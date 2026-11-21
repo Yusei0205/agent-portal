@@ -133,11 +133,14 @@ function MemoryPanel({ projects }) {
         {mem && mem.available && (
           <label className="muted" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <input type="checkbox" checked={mem.enabled} disabled={busy || !mem.canManage} onChange={(e) => toggle(e.target.checked)} />
-            Learn from this project's sessions
+            Use project memory (learn from this project's sessions)
           </label>
         )}
       </div>
       {error && <p className="error-note" role="alert">{error}</p>}
+      {mem && mem.available && !mem.enabled && (
+        <p className="muted mem-off">Memory is off for this project. Tick <strong>Use project memory</strong> to turn it on; notes you add now are kept but not used until then.</p>
+      )}
       {mem && mem.available && mem.canManage && (
         <form className="mem-add" onSubmit={add} aria-label="Add a note">
           <label className="muted" htmlFor="mem-add-text">Add a note the agents and the cat should know (saved as approved)</label>
@@ -146,13 +149,12 @@ function MemoryPanel({ projects }) {
               placeholder="For example: Tests run with pnpm vitest" disabled={busy} />
             <button type="submit" className="btn btn-sm btn-primary" disabled={busy || !draft.trim()}>Add</button>
           </div>
-          {!mem.enabled && <p className="muted" style={{ margin: 0 }}>Memory is off for this project: notes are kept but not used until you turn it on.</p>}
         </form>
       )}
       {mem && !mem.available && <p className="muted us-empty">Project memory is not available here (it needs the cloud portal).</p>}
       {mem && mem.available && mem.error && <p className="error-note" role="alert">{mem.error}</p>}
       {mem && mem.available && !mem.error && mem.records.length === 0 && (
-        <p className="muted us-empty">{mem.enabled ? 'No notes yet. They appear a few minutes after a session finishes.' : 'Memory is off for this project.'}</p>
+        <p className="muted us-empty">{mem.enabled ? 'No notes yet. Add one above, or they appear a few minutes after a session finishes.' : 'No notes yet.'}</p>
       )}
       {mem && mem.records.length > 0 && (
         <div className="table-wrap">
