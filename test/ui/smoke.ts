@@ -2336,14 +2336,20 @@ async function main() {
       if (!demoSessionId) throw new Error('Could not create demo session');
       await goto(p, `/p/${projectId}/sessions/${demoSessionId}`, 2000);
       await p.waitForSelector('.ide-workspace', { timeout: 8_000 });
-      // Click the explorer activity button
+      // The Explorer button toggles: on a wide window the session opens with Files already showing.
       const explorerBtn = p.locator('.ide-activity-btn[title*="Explorer"]').first();
       await explorerBtn.waitFor({ timeout: 5000 });
+      const explorerSidebar = p.locator('aside.ide-sidebar[aria-label="Explorer"]');
+      const pressed = (v: boolean) => p.locator(`.ide-activity-btn[title*="Explorer"][aria-pressed="${v}"]`);
+      if (await explorerBtn.getAttribute('aria-pressed') === 'true') {
+        // Already open: the button closes it
+        await explorerBtn.click();
+        await pressed(false).waitFor({ timeout: 3000 });
+        await explorerSidebar.waitFor({ state: 'detached', timeout: 3000 });
+      }
       await explorerBtn.click();
-      await p.waitForTimeout(600);
-      // Sidebar should appear with explorer header
-      const sidebar = await p.locator('.ide-sidebar').count();
-      if (sidebar === 0) throw new Error('Sidebar did not open after clicking explorer button');
+      await pressed(true).waitFor({ timeout: 3000 });
+      await explorerSidebar.waitFor({ state: 'visible', timeout: 3000 });
     }, page);
 
     await test('Source control panel opens via activity button', async (p) => {
