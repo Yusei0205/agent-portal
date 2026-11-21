@@ -1,22 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-
-const STATE_TEXT = {
-  idle: 'idle',
-  running: 'agents are running',
-  success: 'the last run succeeded',
-  failed: 'a run failed',
-};
-
-let webgl;
-function hasWebgl() {
-  if (webgl === undefined) {
-    try {
-      const c = document.createElement('canvas');
-      webgl = Boolean(c.getContext('webgl2') || c.getContext('webgl'));
-    } catch { webgl = false; }
-  }
-  return webgl;
-}
+import { useEffect, useState } from 'react';
+import { CLOVER_PIXELS, LIVES, coreLabel, lifeDots } from '../lib/nine-lives.js';
 
 function usePrefersReducedMotion() {
   const [reduced, setReduced] = useState(() => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false);
@@ -30,54 +13,48 @@ function usePrefersReducedMotion() {
   return reduced;
 }
 
+// Nine lives on a circle of radius 10 around the centre of a 24-unit box, the first at the top, going clockwise.
+const RING = Array.from({ length: LIVES }, (_, i) => {
+  const a = (i / LIVES) * Math.PI * 2 - Math.PI / 2;
+  return { x: +(12 + Math.cos(a) * 10 - 0.9).toFixed(2), y: +(12 + Math.sin(a) * 10 - 0.9).toFixed(2) };
+});
+
 /**
- * The portal's AI core. It shows a state the portal really is in: idle (slow breathing), running (fast spin, rings turning),
- * success or failed. A CSS orb is drawn first (and kept when WebGL is not available); the 3D core replaces it once it has loaded.
- * With motion off (the person's setting or `animated={false}`) the 3D core is one still frame.
+ * The portal's core, the "nine lives ring": a pixel four-leaf clover inside nine pixel lives, coloured from the theme.
+ * idle: one life brightens in turn round the ring; running: one life per running agent (`active`, three when unknown), pulsing, the ring
+ * turning; success: all nine lit; failed: one life, a leaf and the centre turn red. No motion when `animated` is false or the person
+ * asks for reduced motion.
  *
- * @param {{ state?: 'idle'|'running'|'success'|'failed', size?: number, animated?: boolean, className?: string }} props
+ * @param {{ state?: 'idle'|'running'|'success'|'failed', active?: number, size?: number, animated?: boolean, className?: string }} props
  */
-export function AiCore({ state = 'idle', size = 120, animated = true, className = '' }) {
-  const hostRef = useRef(null);
-  const canvasRef = useRef(null);
-  const ctrlRef = useRef(null);
-  const [ready, setReady] = useState(false);
+export function AiCore({ state = 'idle', active, size = 120, animated = true, className = '' }) {
   const reduced = usePrefersReducedMotion();
   const live = animated && !reduced;
-  const use3d = hasWebgl();
-
-  // The first state and motion setting are read when the scene is made; later changes go through the two effects below.
-  const initial = useRef({ state, live });
-  initial.current = { state, live };
-
-  useEffect(() => {
-    if (!use3d) return undefined;
-    let cancelled = false;
-    let ctrl = null;
-    import('./ai-core-scene.js').then(({ createCore }) => {
-      if (cancelled || !canvasRef.current || !hostRef.current) return;
-      try {
-        ctrl = createCore(canvasRef.current, hostRef.current, { state: initial.current.state, animated: initial.current.live });
-        ctrlRef.current = ctrl;
-        setReady(true);
-      } catch { /* WebGL could not start: the CSS orb stays */ }
-    }).catch(() => { /* the 3D chunk did not load: the CSS orb stays */ });
-    return () => { cancelled = true; ctrl?.dispose(); ctrlRef.current = null; setReady(false); };
-  }, [use3d]);
-
-  useEffect(() => { ctrlRef.current?.setState(state); }, [state, ready]);
-  useEffect(() => { ctrlRef.current?.setAnimated(live); }, [live, ready]);
-
+  const known = ['idle', 'running', 'success', 'failed'].includes(state) ? state : 'idle';
+  const dots = lifeDots(known, active);
   return (
     <div
-      ref={hostRef}
-      className={`ai-core ai-core--${state}${ready ? ' is-3d' : ''}${live ? ' is-live' : ''}${className ? ` ${className}` : ''}`}
+      className={`ai-core ai-core--${known}${live ? ' is-live' : ''}${className ? ` ${className}` : ''}`}
       style={{ width: size, height: size }}
       role="img"
-      aria-label={`AI core: ${STATE_TEXT[state] ?? STATE_TEXT.idle}`}
+      aria-label={coreLabel(known, active)}
+      data-lit={dots.filter((d) => d === 'on').length}
     >
-      <span className="ai-core-orb" aria-hidden="true" />
-      {use3d && <canvas ref={canvasRef} className="ai-core-canvas" aria-hidden="true" />}
+      <svg className="ai-core-svg" viewBox="0 0 24 24" shape-rendering="crispEdges" aria-hidden="true">
+        <g className="ai-core-ring">
+          {RING.map((p, i) => (
+            <rect key={i} className={`ai-core-life is-${dots[i]}`} x={p.x} y={p.y} width="1.8" height="1.8" style={{ '--i': i }} />
+          ))}
+        </g>
+        {/* The position sits on the outer group: the breathing animation sets `transform` on the inner one. */}
+        <g transform="translate(6.5 6.5)">
+          <g className="ai-core-clover">
+            {CLOVER_PIXELS.map((p) => (
+              <rect key={`${p.x}-${p.y}-${p.part}`} className={`ai-core-px ai-core-${p.part}`} x={p.x} y={p.y} width="1.02" height="1.02" />
+            ))}
+          </g>
+        </g>
+      </svg>
     </div>
   );
 }

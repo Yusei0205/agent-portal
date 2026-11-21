@@ -521,6 +521,17 @@
       ],
       "smokeIds": []
     },
+    "ai-core": {
+      "description": "The portal core (nine lives ring) on the dashboard and session Execution view",
+      "sources": [
+        "web/src/lib/nine-lives.js",
+        "web/src/components/AiCore.jsx"
+      ],
+      "tests": [
+        "test/nine-lives.test.ts"
+      ],
+      "smokeIds": []
+    },
     "usage": {
       "description": "Usage page: dollars (Claude), credits (Kiro) and tokens by person, project and day",
       "sources": [
@@ -2272,7 +2283,12 @@
         "web/src/components/ArtifactCard.jsx",
         "web/src/lib/artifact-reveal.js"
       ],
-      "affects": ["create", "sessions", "generated-docs", "presentations"],
+      "affects": [
+        "create",
+        "sessions",
+        "generated-docs",
+        "presentations"
+      ],
       "part": "ui",
       "rationale": "Shared generation status and result reveal used by Create and session outputs."
     },

@@ -1,25 +1,29 @@
 /* Motion and the extra session/dashboard polish: AI core, KPI highlights and sparklines, rail marker, focus mode,
    session stars, stage strip, artifact reveal. Every animation is off under prefers-reduced-motion. */
 
-/* ── AI core ─────────────────────────────────────────────────────────────── */
-.ai-core { position: relative; flex: none; --core: var(--accent); }
-.ai-core--running { --core: var(--info, var(--accent)); }
-.ai-core--success { --core: var(--ok); }
-.ai-core--failed { --core: var(--danger); }
-.ai-core-canvas { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; transition: opacity 0.5s ease; }
-.ai-core.is-3d .ai-core-canvas { opacity: 1; }
-.ai-core-orb {
-  position: absolute; inset: 18%; border-radius: 50%;
-  background: radial-gradient(circle at 38% 34%, color-mix(in srgb, var(--core) 85%, #fff) 0%, var(--core) 38%, color-mix(in srgb, var(--core) 30%, transparent) 70%, transparent 100%);
-  box-shadow: 0 0 28px color-mix(in srgb, var(--core) 55%, transparent), inset 0 0 14px color-mix(in srgb, #fff 25%, transparent);
-  transition: opacity 0.5s ease, background 0.4s ease;
-}
-.ai-core.is-3d .ai-core-orb { opacity: 0; }
-.ai-core.is-live .ai-core-orb { animation: ai-core-breathe 4.5s ease-in-out infinite; }
-.ai-core--running.is-live .ai-core-orb { animation-duration: 1.4s; }
-.ai-core--failed.is-live .ai-core-orb { animation: ai-core-alarm 1.1s ease-in-out infinite; }
-@keyframes ai-core-breathe { 50% { transform: scale(1.08); filter: brightness(1.15); } }
-@keyframes ai-core-alarm { 50% { transform: scale(1.04); filter: brightness(0.7) saturate(1.4); } }
+/* ── AI core: the nine lives ring (pixel clover inside nine lives, AiCore.jsx) ── */
+.ai-core { position: relative; flex: none; --core: var(--accent); --core-gold: var(--warn, #F2B33C); }
+.ai-core-svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--core) 35%, transparent)); }
+.ai-core-px { fill: var(--core); }
+.ai-core-centre { fill: var(--core-gold); }
+.ai-core-life { fill: var(--core); opacity: 0.25; }
+.ai-core-life.is-on { opacity: 1; }
+.ai-core-life.is-walk { opacity: 0.9; }
+.ai-core-life.is-bad { fill: var(--danger); opacity: 1; }
+.ai-core--failed .ai-core-l1, .ai-core--failed .ai-core-centre { fill: var(--danger); }
+.ai-core--failed .ai-core-l2, .ai-core--failed .ai-core-l3, .ai-core--failed .ai-core-l4 { fill: color-mix(in srgb, var(--danger) 30%, var(--core) 20%); }
+.ai-core--failed .ai-core-svg { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--danger) 35%, transparent)); }
+/* Motion: the ring turns, lit lives pulse, an idle highlight walks round; nothing moves without .is-live. */
+.ai-core.is-live .ai-core-ring { transform-origin: 12px 12px; animation: ai-core-turn 24s linear infinite; }
+.ai-core--running.is-live .ai-core-ring { animation-duration: 8s; }
+.ai-core.is-live .ai-core-life.is-on { animation: ai-core-pulse 1.2s ease-in-out infinite; animation-delay: calc(var(--i) * 0.13s); }
+.ai-core--idle.is-live .ai-core-life { animation: ai-core-walk 4.5s steps(1) infinite; animation-delay: calc(var(--i) * 0.5s); }
+.ai-core--idle.is-live .ai-core-life.is-walk { opacity: 0.25; }
+.ai-core--idle.is-live .ai-core-clover, .ai-core--success.is-live .ai-core-clover { transform-origin: 5.5px 5.5px; animation: ai-core-breathe 4.5s ease-in-out infinite; }
+@keyframes ai-core-turn { to { transform: rotate(360deg); } }
+@keyframes ai-core-pulse { 50% { opacity: 0.6; } }
+@keyframes ai-core-walk { 0% { opacity: 0.95; } 11%, 100% { opacity: 0.25; } }
+@keyframes ai-core-breathe { 50% { transform: scale(1.05); } }
 
 /* ── Dashboard header with the core ──────────────────────────────────────── */
 .db-header-core { display: flex; align-items: center; gap: 14px; min-width: 0; }
@@ -97,6 +101,6 @@
 @keyframes artifact-shine { to { transform: translateX(100%); } }
 
 @media (prefers-reduced-motion: reduce) {
-  .ai-core-orb, .stage-item.is-active .stage-dot::after, .run-outputs-card-item.is-new::after, .run-outputs-card-item.is-new, .main-enter { animation: none; }
+  .ai-core *, .stage-item.is-active .stage-dot::after, .run-outputs-card-item.is-new::after, .run-outputs-card-item.is-new, .main-enter { animation: none; }
   .db-anim .kpi-spark-line { animation: none; stroke-dasharray: none; stroke-dashoffset: 0; }
 }

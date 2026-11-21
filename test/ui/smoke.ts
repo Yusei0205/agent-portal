@@ -5526,6 +5526,47 @@ async function main() {
       // requests reliably across Playwright versions (glob patterns like **/api/dashboard*
       // can have edge-case behaviour with query strings and sub-paths in some versions).
       const dashApiPred = (url: URL) => url.href.includes('/api/dashboard');
+      // A screenshot of the core for a person to look at (CORE_SHOTS=<folder>), not an assertion.
+      const coreShots = async (p: Page, name: string) => {
+        const box = (await p.locator('.db-header .ai-core').boundingBox())!;
+        await p.screenshot({ path: `${process.env.CORE_SHOTS}/dashboard-${name}.png`, clip: { x: Math.max(0, box.x - 20), y: Math.max(0, box.y - 20), width: 520, height: box.height + 40 } });
+      };
+
+      await test('the dashboard core is the nine lives ring: nine lives round a pixel clover, idle with no agents running', async (p) => {
+        await goto(p, '/dashboard', 1500);
+        const core = p.locator('.db-header .ai-core');
+        await core.waitFor({ timeout: 8000 });
+        if (await core.locator('.ai-core-life').count() !== 9) throw new Error('The ring does not have nine lives');
+        if (await core.locator('.ai-core-px').count() < 40) throw new Error('No pixel clover in the ring');
+        const label = await core.getAttribute('aria-label');
+        if (!/^AI core: (idle|\d+ agents? running)$/.test(label ?? '')) throw new Error(`Unexpected label: ${label}`);
+        if (await p.locator('.ai-core canvas').count() !== 0) throw new Error('The old 3D canvas is still drawn');
+        const box = await core.boundingBox();
+        if (!box || Math.abs(box.width - 84) > 1) throw new Error(`The core is not 84 px wide (${box?.width})`);
+        // The clover sits in the middle of the ring.
+        const clover = await core.locator('.ai-core-clover').boundingBox();
+        if (!clover || Math.abs(clover.x + clover.width / 2 - (box.x + box.width / 2)) > 4 || Math.abs(clover.y + clover.height / 2 - (box.y + box.height / 2)) > 4) throw new Error('The clover is not centred in the ring');
+        if (process.env.CORE_SHOTS) await coreShots(p, 'idle');
+      }, page);
+
+      await test('the dashboard core lights one life per running agent', async (p) => {
+        await p.route(dashApiPred, async (route) => {
+          const res = await route.fetch();
+          const body = await res.json();
+          if (body && typeof body === 'object' && body.summary) body.summary.runningSessions = 4;
+          await route.fulfill({ response: res, json: body });
+        });
+        try {
+          await goto(p, '/projects', 300);
+          await goto(p, '/dashboard', 1500);
+          const core = p.locator('.db-header .ai-core');
+          await p.waitForFunction(() => document.querySelector('.db-header .ai-core')?.getAttribute('aria-label') === 'AI core: 4 agents running', null, { timeout: 8000 });
+          if (await core.locator('.ai-core-life.is-on').count() !== 4) throw new Error('Not four lit lives');
+          if (process.env.CORE_SHOTS) await coreShots(p, 'running');
+        } finally {
+          await p.unroute(dashApiPred);
+        }
+      }, page);
 
       // Hash-only same-URL navigation (e.g. #/dashboard → #/dashboard) is a browser
       // no-op: the React component never remounts and never refetches. Always navigate

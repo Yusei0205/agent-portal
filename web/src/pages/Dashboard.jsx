@@ -1044,7 +1044,7 @@ export function Dashboard({ user, projects }) {
       {/* ── Header ── */}
       <section className="db-header" aria-label="Dashboard header">
         <div className="db-header-core">
-          <AiCore state={coreState} size={84} animated={animated} />
+          <AiCore state={coreState} active={summary.runningSessions ?? 0} size={84} animated={animated} />
           <div>
             <span className="db-eyebrow">Operations overview</span>
             <h1 className="db-greeting">{greetText}</h1>
