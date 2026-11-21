@@ -394,6 +394,17 @@ async function createReviewApi(pid: string, baseRef: string, headRef: string): P
 
 // ── Page helpers ──────────────────────────────────────────────────────────────
 
+/**
+ * Secondary rail sections (Project tools, Connect, Agents, Portal) are collapsed disclosures
+ * unless the current route lives inside them. Expand one by its label and wait for it to open.
+ */
+async function expandRailSection(page: Page, label: string): Promise<void> {
+  const toggle = page.locator('.rail .rail-section-toggle').filter({ hasText: new RegExp(`^${label}$`, 'i') }).first();
+  await toggle.waitFor({ state: 'visible', timeout: 5000 });
+  if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
+  await page.waitForSelector(`.rail .rail-section-toggle[aria-expanded="true"]:text-is("${label}")`, { timeout: 3000 });
+}
+
 async function goto(page: Page, hash: string, wait = 800): Promise<void> {
   await page.goto(`${BASE}/#${hash}`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(wait);
@@ -1392,6 +1403,10 @@ async function main() {
           await p.unroute(projectFilter, projectState);
           await p.unroute(listFilter, listHandler);
           await p.unroute(settingsFilter, settingsHandler);
+          // The shell keeps the mocked non-admin user until it loads again. Reload with the mocks gone and wait for the
+          // admin-only Users link, or every later test that needs an admin (Users, Settings > Code review...) fails.
+          await p.reload({ waitUntil: 'domcontentloaded' });
+          await p.waitForSelector('.rail a[href="#/users"]', { state: 'attached', timeout: 8000 });
         }
       }, page);
       await test('Pipelines tab: saving settings reloads the list; a failed status refresh keeps the test-message toast', async (p) => {
@@ -3122,11 +3137,13 @@ async function main() {
     await test('Nav includes Connections and Agent setup links', async (p) => {
       await goto(p, '/projects', 600);
       await p.waitForSelector('.rail', { timeout: 5000 });
-      // New flat nav: links are always visible without expanding any group
+      // Flat sections; the secondary ones (Connect, Agents) open from their heading toggle
+      await expandRailSection(p, 'Connect');
       const credLink = p.locator('.rail a[href*="/connect/"]').first();
-      await credLink.waitFor({ timeout: 5000 });
+      await credLink.waitFor({ state: 'visible', timeout: 5000 });
+      await expandRailSection(p, 'Agents');
       const configLink = p.locator('.rail [href="#/config"]').first();
-      await configLink.waitFor({ timeout: 3000 });
+      await configLink.waitFor({ state: 'visible', timeout: 3000 });
       // No Portal group dropdown button should exist
       const oldPortalBtn = await p.locator('.rail-group-btn').count();
       if (oldPortalBtn > 0) {
@@ -4537,7 +4554,7 @@ async function main() {
       console.log('\n44. Rail navigation — Work/Connect/Quality/Account sections, project picker');
       currentSectionId = '44';
 
-      await test('Rail: Work/Knowledge/Connect/Agents/Portal sections visible, no Inbox in rail', async (p) => {
+      await test('Rail: Work/Knowledge/Connect/Agents/Portal sections visible; Inbox sits with Dashboard and Usage', async (p) => {
         await goto(p, `/p/${projectId}/sessions`, 800);
         await p.waitForSelector('.rail', { timeout: 5000 });
         const railText = await p.locator('.rail').textContent();
@@ -4546,9 +4563,11 @@ async function main() {
         for (const s of sections) {
           if (!railText?.includes(s)) throw new Error(`Rail section "${s}" not found`);
         }
-        // Inbox NOT in rail (moved to top bar)
-        const inboxLinks = await p.locator('.rail .rail-link').filter({ hasText: /^Inbox$/i }).count();
-        if (inboxLinks > 0) throw new Error('Inbox should NOT be in the rail (moved to top bar)');
+        // Inbox is a rail item in the unlabelled top section (with Dashboard and Usage), also reachable from the top bar
+        const inboxLink = p.locator('.rail .rail-link').filter({ hasText: /^Inbox$/i });
+        if ((await inboxLink.count()) !== 1) throw new Error('Expected exactly one Inbox link in the rail');
+        const inboxHref = await inboxLink.first().getAttribute('href');
+        if (inboxHref !== '#/inbox') throw new Error(`Inbox rail link should point to #/inbox, got: ${inboxHref}`);
         // Work items
         const workItems = ['Dashboard', 'Sessions', 'Workspaces', 'Knowledge', 'Create'];
         for (const item of workItems) {
@@ -4575,11 +4594,16 @@ async function main() {
         await goto(p, `/p/${projectId}/sessions`, 800);
         await p.waitForSelector('.rail', { timeout: 5000 });
         const connectionsLink = p.locator('.rail .rail-link').filter({ hasText: /^Connections$/i }).first();
-        await connectionsLink.waitFor({ timeout: 3000 });
+        // Connect is a disclosure (open or closed depending on earlier navigation in this tab): make sure it is open
+        await expandRailSection(p, 'Connect');
+        await connectionsLink.waitFor({ state: 'visible', timeout: 3000 });
         const href = await connectionsLink.getAttribute('href');
         if (!href?.includes('/connect/code-hosts')) {
           throw new Error(`Connections link should point to /connect/code-hosts, got: ${href}`);
         }
+        // The heading toggle collapses the section again
+        await p.locator('.rail .rail-section-toggle').filter({ hasText: /^Connect$/i }).first().click();
+        await connectionsLink.waitFor({ state: 'hidden', timeout: 3000 });
       }, page);
 
       await test('Reviews rail item links to /p/:pid/reviews/code', async (p) => {
@@ -4589,6 +4613,9 @@ async function main() {
         await reviewsLink.waitFor({ timeout: 3000 });
         const href = await reviewsLink.getAttribute('href');
         if (!href?.includes('/reviews/code')) {
+        // The heading toggle collapses the section again
+        await p.locator('.rail .rail-section-toggle').filter({ hasText: /^Connect$/i }).first().click();
+        await connectionsLink.waitFor({ state: 'hidden', timeout: 3000 });
           throw new Error(`Reviews link should point to /reviews/code, got: ${href}`);
         }
       }, page);
