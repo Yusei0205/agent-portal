@@ -274,7 +274,7 @@ Click **Sync** on any repo to trigger a fresh clone/pull. Click **Branches** to 
 
 ### Repositories
 
-**Repositories** (rail › Connect, project-scoped) is a quick link to the **Repositories tab** of your current project's settings page (`#/p/:id/setup/repositories`). Click it to add, sync, or remove git repositories for the project without navigating through the project picker.
+**Repositories** (rail › Work › Workspaces › **Repositories** tab, project-scoped; `#/p/:id/workspaces/repositories`) is where you add, sync, or remove git repositories for the current project. The old address `#/p/:id/setup/repositories` still opens it.
 
 When a project has no repositories:
 - The **Workspaces** page shows a note with a direct link to add repositories.
@@ -333,7 +333,7 @@ Once configured, the **Sign in with GitHub** option becomes available in the New
 
 ### Integrations
 
-**Integrations** (rail › Connect) opens the current project's integrations, or the portal-wide list when no project is selected.
+**Integrations** (rail › Connect › Connections › **Tools & services** tab, `#/connect/tools`) shows the current project's integrations, or the portal-wide list when no project is selected. The old `#/integrations` address still opens it.
 
 - **HTTP integrations**: an MCP server reachable at a URL (`https://...`).
 - **Stdio integrations**: an MCP server launched by command (e.g. `npx my-mcp-server`).
@@ -356,7 +356,7 @@ Upload files from the **Upload file** button. Download individual files or all f
 
 ## 5. Credentials
 
-**Credentials** (rail › Account) stores your own sign-ins for Kiro and Claude Code. Your sessions use these first; without one they fall back to the portal AI provider (configured in **Settings › Portal AI provider**). Secrets are write-only: after saving, only the last four characters are shown.
+**Agent sign-ins** (rail › Agents › Agent setup, `#/config/sign-ins`; formerly Credentials, and the old `#/credentials` address still opens it) stores your own sign-ins for Kiro and Claude Code. Your sessions use these first; without one they fall back to the portal AI provider (configured in **Settings › Portal AI provider**). Secrets are write-only: after saving, only the last four characters are shown.
 
 ### Kiro credentials
 
@@ -410,7 +410,7 @@ If you start a session with an engine but have no matching credential, the porta
 
 ## 6. Configuration
 
-**Configuration** (rail › Account) lets you manage your personal `~/.kiro`, `~/.claude`, and `~/.aws` folders — exactly as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards. Sign-ins belong in **Credentials**, not here.
+**Configuration** (rail › Agents › Agent setup) lets you manage your personal `~/.kiro`, `~/.claude`, and `~/.aws` folders — exactly as the engines and their tools see them in every session you start. Changes apply to sessions started or resumed afterwards. Sign-ins belong in **Agent sign-ins**, not here.
 
 The page header shows **Import Zip** and **Export Zip** buttons on the right for the currently active folder.
 
@@ -424,7 +424,7 @@ The page header shows **Import Zip** and **Export Zip** buttons on the right for
 
 A one-line description of the selected tab appears next to the tabs.
 
-The `~/.aws` tab carries a warning: keys stored here are plaintext in zip exports — handle with care. For engine sign-ins, **Credentials** or **Connections › AWS accounts** is the safer place.
+The `~/.aws` tab carries a warning: keys stored here are plaintext in zip exports — handle with care. For engine sign-ins, **Agent sign-ins** or the project's **Workspaces › AWS** tab is the safer place.
 
 ### Files panel and editor
 
@@ -693,7 +693,7 @@ Requests to cloud-metadata endpoints (e.g. `169.254.169.254`) and all link-local
 
 ## 9. API access and MCP
 
-**API access** (rail › Account) manages personal access tokens and shows the MCP connection details.
+**API access** (rail › Portal) manages personal access tokens and shows the MCP connection details.
 
 ### Creating tokens
 
@@ -782,13 +782,13 @@ Attach files by dragging and dropping onto the drop zone in the creation form, c
 
 ### Insights
 
-**Insights** (rail › Work, per project; portal-wide at `#/insights`) shows usage metrics with a period selector: **Today**, **7 days**, or **30 days**.
+**Insights** is now part of the **Dashboard** (rail, top group); the old `#/insights` and `#/p/:id/insights` addresses open the Dashboard, with that project selected. It shows usage metrics with a period selector: **Today**, **7 days**, or **30 days**.
 
 Metrics shown: total cost, total runs, failure rate, average run duration. Charts: daily cost line chart, runs by status pie chart, cost by project bar chart (portal-wide only). Admins also see a cost-by-user table.
 
 ### Inbox
 
-**Inbox** (top bar icon) shows all items that require a person to act on, across all projects. A numeric badge on the Inbox icon in the top bar updates every 30 seconds. Navigate to Inbox by clicking the icon or pressing **g b**.
+**Inbox** (rail, top group, and the top bar icon) shows all items that require a person to act on, across all projects. A numeric badge on the Inbox icon in the top bar updates every 30 seconds. Navigate to Inbox by clicking the icon or pressing **g b**.
 
 | Group | Description | Action |
 |-------|-------------|--------|
@@ -858,7 +858,7 @@ For the **Named AWS profile** option, SSO-backed profiles also work — run `aws
 
 **Kiro CLI panel**
 
-The Kiro CLI panel shows whether the CLI is installed on the server and the current sign-in status (not installed, not signed in, or signed in with AWS Builder ID / IAM Identity Center including the email address). Click **Sign in** to start a device-code flow; choose **AWS Builder ID** (free personal account) or **IAM Identity Center** (organization SSO — provide start URL and select the region from the dropdown). The CLI session is portal-wide: all Kiro runs on this server share the same identity. Individual users can still use their own Kiro credential from the **Credentials** page to override it. An optional **Kiro API key** field is available as an alternative to the CLI sign-in.
+The Kiro CLI panel shows whether the CLI is installed on the server and the current sign-in status (not installed, not signed in, or signed in with AWS Builder ID / IAM Identity Center including the email address). Click **Sign in** to start a device-code flow; choose **AWS Builder ID** (free personal account) or **IAM Identity Center** (organization SSO — provide start URL and select the region from the dropdown). The CLI session is portal-wide: all Kiro runs on this server share the same identity. Individual users can still use their own Kiro credential from **Agent sign-ins** to override it. An optional **Kiro API key** field is available as an alternative to the CLI sign-in.
 
 #### Tools tab
 
@@ -1024,7 +1024,7 @@ Press **?** anywhere (outside a text field) to open the shortcuts sheet. All sho
 
 **Cause**: You have no credential for that engine and the portal's server-wide provider does not cover it.
 
-**Fix**: Click the "Set up a credential" link to go to **Credentials** and add one, or ask your admin to configure the portal provider in **Settings › Portal AI provider**.
+**Fix**: Click the "Set up a credential" link to go to **Agent sign-ins** and add one, or ask your admin to configure the portal provider in **Settings › Portal AI provider**.
 
 ---
 
