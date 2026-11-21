@@ -21,7 +21,7 @@ import type { PortalRequest, PortalResponse } from './http.ts';
 import { getDb } from './db.ts';
 import { getSetting, setSetting, getSettings } from './settings.ts';
 import { getThemesRepository } from './repositories/themes.ts';
-import { getSettingsRepository, _updateSnapshotKey } from './repositories/settings.ts';
+import { getSettingsRepository, _updateSnapshotKeys } from './repositories/settings.ts';
 import { appendAudit } from './audit.ts';
 import { emitGlobal } from './events.ts';
 import { generateId, now, notFound, badRequest, forbidden } from './util.ts';
@@ -559,7 +559,7 @@ export async function applyKyuubitDefaultOnce(): Promise<void> {
     const pairs: Array<[string, string]> = [[KYUUBIT_MARKER, '"1"']];
     if (active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify(DEFAULT_THEME_ID)]);
     await repo.setKeys(pairs);
-    for (const [k, v] of pairs) _updateSnapshotKey(k, v);
+    _updateSnapshotKeys(pairs);
   } catch (err) {
     console.warn(`[themes] Kyuubit default step skipped, will retry next start: ${(err as Error)?.message ?? 'unknown error'}`);
   }
