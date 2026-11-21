@@ -142,9 +142,11 @@ export function reviewHandoffHref(event, workflowId, projectId) {
 }
 
 /**
- * What the session shows for each repository: the pending question (answerable here and in the Inbox), progress, PR links
- * and results. Only the latest state per repository counts, so an answered question never leaves an old card behind.
+ * What the session shows for each repository: publication progress, PR links and results.
+ * Only the latest state per repository counts; publication suggestions are hidden.
  */
 export function sessionPullRequestCards(events) {
-  return latestPullRequestStates(events);
+  // Historical proposals stay in the activity log, but do not ask the user to
+  // publish. Chat is the entry point; keep outcomes of actual publication visible.
+  return latestPullRequestStates(events).filter(ev => !['asked', 'available', 'declined'].includes(ev.state));
 }

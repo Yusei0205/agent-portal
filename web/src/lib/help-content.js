@@ -257,7 +257,7 @@ export const HELP_TOPICS = [
         heading: 'Pull requests from sessions',
         items: [
           'Sessions started from a Jira ticket open a pull request on their own when they finish and start a draft code review.',
-          'Other sessions ask first: approve **Open a pull request for <repo>?** in the Inbox or on the session.',
+          'For other sessions, ask the agent in chat to open a pull request when you need one. The portal does not suggest it automatically.',
           'Nothing is pushed if nothing changed, the portal never force-pushes, and protected branches (`main`, `master`, `develop`, `release/*` by default) are never pushed to. Change these in **Project settings › Pull requests**.',
           'Supported hosts: GitHub and AWS CodeCommit.',
         ],

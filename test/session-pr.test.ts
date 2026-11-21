@@ -45,6 +45,15 @@ function makeSession(opts: { jiraKey?: string; summary?: string } = {}): Session
 const ctxOf = (s: Session) => ({ workflowId: s.workflowId, runId: s.runId, projectId: s.projectId, userId, engine: 'claude-code' as const });
 const change = { repo: 'shop', base: 'main', commits: 2, files: 5 };
 
+// Approval endpoints remain compatible with questions saved before suggestions were removed.
+function legacyQuestion(s: Session): void {
+  const id = generateId();
+  run(`INSERT INTO p6_inbox (id, project_id, workflow_id, run_id, type, payload, created_at) VALUES (?,?,?,?,?,?,?)`,
+    id, s.projectId, s.workflowId, s.runId, 'push', JSON.stringify({ repo: 'shop', repoId: s.repoId }), now());
+  run(`INSERT INTO p6_events (run_id, type, payload, created_at) VALUES (?,?,?,?)`,
+    s.runId, 'pull-request', JSON.stringify({ repo: 'shop', repoId: s.repoId, state: 'asked', inboxId: id, base: 'main' }), now());
+}
+
 function prEvents(s: Session): Array<Record<string, any>> {
   return all<{ payload: string }>(`SELECT payload FROM p6_events WHERE run_id = ? AND type = 'pull-request' ORDER BY id`, s.runId)
     .map((r) => JSON.parse(r.payload));
@@ -155,20 +164,16 @@ describe('session pull requests', () => {
     assert.deepEqual([wf.engine, wf.credential_id, wf.model], ['kiro', credId, 'claude-sonnet-4-5']);
   });
 
-  it('a session without a ticket creates one Inbox item and nothing else', async () => {
+  it('a session without a ticket records changes without suggesting or opening a pull request', async () => {
     const s = makeSession();
     await handleRepoChanges(ctxOf(s), [change]);
     await handleRepoChanges(ctxOf(s), [change]);
-    assert.deepEqual(states(s), ['asked']);
-    assert.equal(inboxCount(s), 1);
+    assert.ok(states(s).every(state => state === 'available'));
+    assert.equal(inboxCount(s), 0);
     assert.equal(finalizeCalls.length, 0);
     assert.equal(ghCalls.length, 0);
-    const item = one<Record<string, any>>('SELECT * FROM p6_inbox WHERE workflow_id = ?', s.workflowId)!;
-    assert.equal(item.type, 'push');
-    const pl = JSON.parse(item.payload);
-    assert.equal(pl.title, 'Open a pull request for shop?');
-    assert.equal(pl.body, '5 files changed in 2 commit(s) in shop. Approve to push a new branch and open a pull request.');
-    assert.equal(prEvents(s)[0].inboxId, item.id);
+    await createRequestedSessionPullRequest(ctxOf(s), { repo: 'shop', base: 'main' });
+    assert.equal(finalizeCalls.length, 1, 'an explicit chat request still publishes');
   });
 
   it('can open a fresh main_v3 PR after the previous GitHub PR has merged', async () => {
@@ -211,7 +216,7 @@ describe('session pull requests', () => {
 
   it('approving the Inbox question opens the pull request from the first line of the goal', async () => {
     const s = makeSession();
-    await handleRepoChanges(ctxOf(s), [change]);
+    legacyQuestion(s);
     const item = one<{ id: string }>('SELECT id FROM p6_inbox WHERE workflow_id = ?', s.workflowId)!;
     const r = await fetchJson(baseUrl, `/api/inbox/${item.id}/resolve`, { method: 'POST', body: { response: 'approve' }, cookie });
     assert.equal(r.status, 200);
@@ -223,7 +228,7 @@ describe('session pull requests', () => {
 
   it('declining the Inbox question writes declined and pushes nothing', async () => {
     const s = makeSession();
-    await handleRepoChanges(ctxOf(s), [change]);
+    legacyQuestion(s);
     const item = one<{ id: string }>('SELECT id FROM p6_inbox WHERE workflow_id = ?', s.workflowId)!;
     const r = await fetchJson(baseUrl, `/api/inbox/${item.id}/resolve`, { method: 'POST', body: { response: 'decline' }, cookie });
     assert.equal(r.status, 200);
