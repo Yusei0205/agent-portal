@@ -393,7 +393,9 @@ export class AgentPortalCloudStack extends cdk.Stack {
     });
     fn.addEnvironment('PORTAL_MEMORY_ID', memory.attrMemoryId);
     fn.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:ListMemoryRecords', 'bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:GetMemoryRecord', 'bedrock-agentcore:DeleteMemoryRecord', 'bedrock-agentcore:BatchDeleteMemoryRecords'],
+      actions: ['bedrock-agentcore:CreateEvent', 'bedrock-agentcore:ListEvents', 'bedrock-agentcore:ListMemoryRecords', 'bedrock-agentcore:RetrieveMemoryRecords', 'bedrock-agentcore:GetMemoryRecord', 'bedrock-agentcore:DeleteMemoryRecord', 'bedrock-agentcore:BatchDeleteMemoryRecords',
+        // Owners correct a note (update) and add their own (create) from the Project memory panel.
+        'bedrock-agentcore:BatchUpdateMemoryRecords', 'bedrock-agentcore:BatchCreateMemoryRecords'],
       resources: [memory.attrMemoryArn],
     }));
     // Session quality scores (AgentCore Evaluations, on demand): the built-in evaluators are AWS-owned, so no resource ARN fits.

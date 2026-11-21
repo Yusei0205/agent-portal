@@ -152,6 +152,7 @@ describe('project memory', () => {
   });
 
   describe('routes', () => {
+    let createFails = false;
     beforeEach(() => {
       // restore the working client after the failing one above
       _setMemoryClient({
@@ -160,15 +161,81 @@ describe('project memory', () => {
             if (cmd.name === 'ListMemoryRecords') return { memoryRecordSummaries: [...records.values()].filter((r) => r.ns.startsWith(cmd.input.namespacePath)).map((r) => ({ memoryRecordId: r.id, content: { text: r.text }, namespaces: [r.ns], createdAt: new Date() })) };
             if (cmd.name === 'GetMemoryRecord') { const r = records.get(cmd.input.memoryRecordId); if (!r) throw new Error('nf'); return { memoryRecord: { namespaces: [r.ns] } }; }
             if (cmd.name === 'DeleteMemoryRecord') { records.delete(cmd.input.memoryRecordId); return {}; }
+            if (cmd.name === 'RetrieveMemoryRecords') return { memoryRecordSummaries: [...records.values()].filter((r) => r.ns === cmd.input.namespace).map((r) => ({ memoryRecordId: r.id, content: { text: r.text }, namespaces: [r.ns] })) };
+            if (cmd.name === 'BatchUpdateMemoryRecords') {
+              calls.push({ cmd: cmd.name, input: cmd.input });
+              for (const u of cmd.input.records) { const r = records.get(u.memoryRecordId); if (r) r.text = u.content.text; }
+              return { successfulRecords: cmd.input.records.map((u: any) => ({ memoryRecordId: u.memoryRecordId, status: 'SUCCEEDED' })), failedRecords: [] }; // eslint-disable-line @typescript-eslint/no-explicit-any
+            }
+            if (cmd.name === 'BatchCreateMemoryRecords') {
+              calls.push({ cmd: cmd.name, input: cmd.input });
+              if (createFails) return { successfulRecords: [], failedRecords: [{ requestIdentifier: cmd.input.records[0].requestIdentifier, status: 'FAILED', errorMessage: 'nope' }] };
+              const c = cmd.input.records[0];
+              const id = `r-new-${records.size}`;
+              records.set(id, { id, text: c.content.text, ns: c.namespaces[0] });
+              return { successfulRecords: [{ memoryRecordId: id, requestIdentifier: c.requestIdentifier, status: 'SUCCEEDED' }], failedRecords: [] };
+            }
             return {};
           },
         },
-        cmds: { ListMemoryRecords: mk('ListMemoryRecords'), GetMemoryRecord: mk('GetMemoryRecord'), DeleteMemoryRecord: mk('DeleteMemoryRecord'), CreateEvent: mk('CreateEvent'), RetrieveMemoryRecords: mk('RetrieveMemoryRecords') },
+        cmds: { ListMemoryRecords: mk('ListMemoryRecords'), GetMemoryRecord: mk('GetMemoryRecord'), DeleteMemoryRecord: mk('DeleteMemoryRecord'), CreateEvent: mk('CreateEvent'), RetrieveMemoryRecords: mk('RetrieveMemoryRecords'), BatchUpdateMemoryRecords: mk('BatchUpdateMemoryRecords'), BatchCreateMemoryRecords: mk('BatchCreateMemoryRecords') },
       });
       records.set('r-a', { id: 'r-a', text: 'Note for A', ns: '/project/proj-mem-a/facts' });
       records.set('r-b', { id: 'r-b', text: 'Note for B', ns: '/project/proj-mem-b/facts' });
+      createFails = false;
     });
     const url = (p: string, rest = '') => `/api/projects/${p}/memory${rest}`;
+
+    test('an owner corrects a fact: the text changes in place, secrets are masked, it becomes approved and is marked edited', async () => {
+      const r = await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { text: '  Tests run with pnpm vitest, token=abc123  ' } });
+      assert.equal(r.status, 200);
+      assert.equal(records.get('r-a')!.text, 'Tests run with pnpm vitest, token=[removed]');
+      assert.equal(recordStatus('r-a'), 'approved');
+      const u = calls.filter((c) => c.cmd === 'BatchUpdateMemoryRecords').at(-1)!;
+      assert.equal(u.input.memoryId, 'mem-test');
+      assert.equal(u.input.records[0].memoryRecordId, 'r-a');
+      assert.ok(u.input.records[0].timestamp instanceof Date);
+      const list = (await fetchJson(baseUrl, url('proj-mem-a'), { cookie: ownerCookie })).body as { records: Array<{ id: string; edited?: boolean; status: string }> };
+      const row = list.records.find((x) => x.id === 'r-a')!;
+      assert.equal(row.edited, true);
+      assert.equal(row.status, 'approved');
+    });
+
+    test('editing is refused for members, other projects\' notes, summaries, empty or over-long text, and text with a status', async () => {
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: memberCookie, body: { text: 'x' } })).status, 403);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-b'), { method: 'PUT', cookie: ownerCookie, body: { text: 'x' } })).status, 404);
+      records.set('r-sum', { id: 'r-sum', text: 'Summary of a session', ns: '/project/proj-mem-a/summaries/wf-1' });
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-sum'), { method: 'PUT', cookie: ownerCookie, body: { text: 'x' } })).status, 400);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { text: '   ' } })).status, 400);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { text: 'x'.repeat(1001) } })).status, 400);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { text: 'x', status: 'approved' } })).status, 400);
+      assert.equal(records.get('r-a')!.text, 'Note for A');
+      assert.equal(records.get('r-b')!.text, 'Note for B');
+    });
+
+    test('an owner adds a fact: written to the project\'s facts, approved, edited, and used by projectMemoryNotes when memory is on', async () => {
+      const r = await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: ownerCookie, body: { text: 'Deploys go through main_v3' } });
+      assert.equal(r.status, 200);
+      const b = r.body as { id: string; text: string; status: string };
+      assert.equal(b.status, 'approved');
+      assert.equal(b.text, 'Deploys go through main_v3');
+      const c = calls.filter((x) => x.cmd === 'BatchCreateMemoryRecords').at(-1)!;
+      assert.deepEqual(c.input.records[0].namespaces, ['/project/proj-mem-a/facts']);
+      assert.equal(c.input.records[0].content.text, 'Deploys go through main_v3');
+      assert.equal(recordStatus(b.id), 'approved');
+      await on('proj-mem-a');
+      assert.ok((await projectMemoryNotes('proj-mem-a', 'deploy')).includes('Deploys go through main_v3'));
+    });
+
+    test('adding is refused for members and non-members and for bad text; an AgentCore failure is 502', async () => {
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: memberCookie, body: { text: 'x' } })).status, 403);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-b', '/records'), { method: 'POST', cookie: memberCookie, body: { text: 'x' } })).status, 403);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: ownerCookie, body: { text: '' } })).status, 400);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: ownerCookie, body: {} })).status, 400);
+      createFails = true;
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: ownerCookie, body: { text: 'A fact' } })).status, 502);
+      assert.equal(calls.filter((x) => x.cmd === 'BatchCreateMemoryRecords').length, 1);
+    });
 
     test('a member sees only their project\'s notes as pending, and cannot manage', async () => {
       const r = await fetchJson(baseUrl, url('proj-mem-a'), { cookie: memberCookie });

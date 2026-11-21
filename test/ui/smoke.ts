@@ -90,6 +90,7 @@ const SECTIONS: ReadonlyArray<{ id: string; label: string; modules: string[] }> 
   { id: '34',  label: 'Branch scans',                                   modules: ['branch-scans'] },
   { id: '35',  label: 'Review filters in URL',                          modules: ['reviews'] },
   { id: '36',  label: 'Code review settings — PR comment mode',         modules: ['settings', 'reviews'] },
+  { id: '36b', label: 'Project memory — add and edit notes',           modules: ['agentcore', 'memory'] },
   { id: '37',  label: 'API Access — scope checkboxes + MCP section',    modules: ['api-access', 'api-tokens'] },
   { id: '38',  label: 'Branch scans in command palette',                modules: ['branch-scans', 'shell'] },
   { id: '39',  label: 'Delegate dialog + Agents activity',              modules: ['delegation', 'sessions'] },
@@ -3471,6 +3472,65 @@ async function main() {
     } // end §36 settings/reviews
 
     // ── 37. API Access — scope checkboxes + MCP section (F11) ─────────────
+    if (sectionEnabled('agentcore', 'memory')) {
+    console.log('\n36b. Project memory — add a note and correct a fact (routes mocked)');
+    currentSectionId = '36b';
+
+    await test('Project memory: an owner adds a note and edits a fact in place; summaries have no Edit', async (p) => {
+      const state = {
+        records: [
+          { id: 'r-fact', text: 'Tests run with npm test', kind: 'fact', status: 'pending', createdAt: null as string | null, edited: false },
+          { id: 'r-sum', text: 'Session summary', kind: 'summary', status: 'pending', createdAt: null as string | null, edited: false },
+        ],
+      };
+      const sent: Array<{ method: string; url: string; body: any }> = []; // eslint-disable-line @typescript-eslint/no-explicit-any
+      await p.route(/\/api\/projects\/[^/]+\/memory(\/records(\/[^/?]+)?)?(\?.*)?$/, async (route) => {
+        const req = route.request();
+        const body = req.postDataJSON?.() ?? null;
+        if (req.method() !== 'GET') sent.push({ method: req.method(), url: req.url(), body });
+        if (req.method() === 'POST') {
+          state.records.unshift({ id: 'r-new', text: body.text, kind: 'fact', status: 'approved', createdAt: null, edited: true });
+          return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: 'r-new', text: body.text, status: 'approved' }) });
+        }
+        if (req.method() === 'PUT' && body?.text) {
+          const r = state.records.find((x) => req.url().includes(`/records/${x.id}`))!;
+          Object.assign(r, { text: body.text, status: 'approved', edited: true });
+          return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ id: r.id, text: body.text, status: 'approved' }) });
+        }
+        return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ available: true, enabled: true, canManage: true, records: state.records, error: null }) });
+      });
+      try {
+        await goto(p, '/agentcore', 1200);
+        const panel = p.locator('section[aria-label="Project memory"]');
+        await panel.waitFor({ timeout: 8000 });
+        await panel.scrollIntoViewIfNeeded();
+        // Add a note
+        await panel.getByLabel(/Add a note the agents/).fill('Deploys go through main_v3');
+        await panel.getByRole('button', { name: 'Add', exact: true }).click();
+        await panel.locator('td').filter({ hasText: 'Deploys go through main_v3' }).filter({ hasText: 'edited by an owner' }).waitFor({ timeout: 4000 });
+        if ((await panel.getByLabel(/Add a note the agents/).inputValue()) !== '') throw new Error('The add box was not cleared');
+        // Summaries cannot be edited
+        if (await panel.getByRole('button', { name: /^Edit note: Session summary/ }).count() !== 0) throw new Error('A summary has an Edit button');
+        // Edit, Escape cancels
+        await panel.getByRole('button', { name: /^Edit note: Tests run with npm test/ }).click();
+        await panel.getByLabel('Note text').press('Escape');
+        if (await panel.getByLabel('Note text').count() !== 0) throw new Error('Escape did not cancel the edit');
+        // Edit and save
+        await panel.getByRole('button', { name: /^Edit note: Tests run with npm test/ }).click();
+        await panel.getByLabel('Note text').fill('Tests run with pnpm vitest');
+        await panel.getByRole('button', { name: 'Save', exact: true }).click();
+        await panel.getByLabel('Note text').waitFor({ state: 'detached', timeout: 4000 });
+        await panel.locator('td').filter({ hasText: 'Tests run with pnpm vitest' }).filter({ hasText: 'edited by an owner' }).waitFor({ timeout: 4000 });
+        const put = sent.find((x) => x.method === 'PUT');
+        if (!put || !put.url.includes('/records/r-fact') || put.body.text !== 'Tests run with pnpm vitest' || 'status' in put.body) throw new Error(`Unexpected edit request: ${JSON.stringify(put)}`);
+        const post = sent.find((x) => x.method === 'POST');
+        if (!post || !/\/memory\/records$/.test(new URL(post.url).pathname) || post.body.text !== 'Deploys go through main_v3') throw new Error(`Unexpected add request: ${JSON.stringify(post)}`);
+      } finally {
+        await p.unroute(/\/api\/projects\/[^/]+\/memory(\/records(\/[^/?]+)?)?(\?.*)?$/);
+      }
+    }, page);
+    }
+
     if (sectionEnabled('api-access', 'api-tokens')) {
     console.log('\n37. API Access — scope checkboxes + MCP section (F11)');
     currentSectionId = '37';

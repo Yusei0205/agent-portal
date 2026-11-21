@@ -15,6 +15,8 @@
  *   GET    /api/projects/:id/memory                 { available, enabled, canManage, records[] }          (project members)
  *   PUT    /api/projects/:id/memory                 { enabled }                                           (owner / admin)
  *   PUT    /api/projects/:id/memory/records/:rid    { status: approved | rejected | pending }             (owner / admin)
+ *   PUT    /api/projects/:id/memory/records/:rid    { text } corrects a fact; it becomes approved            (owner / admin)
+ *   POST   /api/projects/:id/memory/records         { text } adds a fact, approved                           (owner / admin)
  *   DELETE /api/projects/:id/memory/records/:rid                                                          (owner / admin)
  */
 
@@ -37,6 +39,8 @@ export const memoryId = (): string | null => process.env.PORTAL_MEMORY_ID || nul
 const enabledKey = (projectId: string): string => `agentcore.memory.enabled.${projectId}`;
 const sentKey = (workflowId: string): string => `agentcore.memory.sent.${workflowId}`;
 const statusKey = (recordId: string): string => `agentcore.memory.status.${recordId}`;
+const byKey = (recordId: string): string => `agentcore.memory.by.${recordId}`;
+const MAX_NOTE_TEXT = 1000;
 export const factsNamespace = (projectId: string): string => `/project/${projectId}/facts`;
 const projectPrefix = (projectId: string): string => `/project/${projectId}/`;
 
@@ -73,6 +77,7 @@ async function sdk(): Promise<{ client: MemClient; cmds: Record<string, new (inp
     cmds: {
       CreateEvent: m.CreateEventCommand, RetrieveMemoryRecords: m.RetrieveMemoryRecordsCommand, ListMemoryRecords: m.ListMemoryRecordsCommand,
       GetMemoryRecord: m.GetMemoryRecordCommand, DeleteMemoryRecord: m.DeleteMemoryRecordCommand,
+      BatchUpdateMemoryRecords: m.BatchUpdateMemoryRecordsCommand, BatchCreateMemoryRecords: m.BatchCreateMemoryRecordsCommand,
     } as unknown as Record<string, new (input: unknown) => unknown>,
   };
 }
@@ -119,7 +124,7 @@ export async function sweepMemoryWrites(nowMs = Date.now()): Promise<number> {
 
 // ── Read ──────────────────────────────────────────────────────────────────────
 
-export interface MemoryRecord { id: string; text: string; kind: 'fact' | 'summary' | 'other'; status: RecordStatus; createdAt: string | null }
+export interface MemoryRecord { id: string; text: string; kind: 'fact' | 'summary' | 'other'; status: RecordStatus; createdAt: string | null; edited?: boolean }
 
 const kindOf = (namespaces: string[] | undefined): MemoryRecord['kind'] => {
   const ns = (namespaces ?? []).join(' ');
@@ -137,7 +142,8 @@ export async function listProjectRecords(projectId: string): Promise<MemoryRecor
     for (const s of r.memoryRecordSummaries ?? []) {
       const text = String(s.content?.text ?? '');
       if (!text) continue;
-      out.push({ id: String(s.memoryRecordId), text, kind: kindOf(s.namespaces), status: recordStatus(String(s.memoryRecordId)), createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : null });
+      out.push({ id: String(s.memoryRecordId), text, kind: kindOf(s.namespaces), status: recordStatus(String(s.memoryRecordId)), createdAt: s.createdAt ? new Date(s.createdAt).toISOString() : null,
+        ...(getSetting(getDb(), byKey(String(s.memoryRecordId))) ? { edited: true } : {}) });
     }
     token = r.nextToken;
     if (!token) break;
@@ -232,11 +238,58 @@ export function registerAgentCoreMemoryRoutes(): void {
     sendJson(res, 200, { enabled });
   }));
 
+  router.post('/api/projects/:id/memory/records', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
+    const projectId = String(req.params.id);
+    if (!(await requireMember(req, res, projectId))) return;
+    if (!(await canManage(req, projectId))) { sendJson(res, 403, { error: 'Only a project owner can add notes' }); return; }
+    if (!memoryId()) { sendJson(res, 400, { error: 'Project memory is not available here' }); return; }
+    const text = noteText((req.body as { text?: unknown } | undefined)?.text);
+    if (typeof text !== 'string') { sendJson(res, 400, { error: text.error }); return; }
+    const { client, cmds } = await sdk();
+    const requestIdentifier = `add-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      const r = await client.send(new cmds.BatchCreateMemoryRecords({
+        memoryId: memoryId()!,
+        records: [{ requestIdentifier, namespaces: [factsNamespace(projectId)], content: { text }, timestamp: new Date() }],
+      }));
+      const ok = (r.successfulRecords ?? [])[0];
+      if (!ok?.memoryRecordId) { sendJson(res, 502, { error: 'Memory did not save the note. Try again.' }); return; }
+      const id = String(ok.memoryRecordId);
+      await setSetting(getDb(), statusKey(id), 'approved');
+      await setSetting(getDb(), byKey(id), req.user!.id);
+      sendJson(res, 200, { id, text, status: 'approved' });
+    } catch {
+      sendJson(res, 502, { error: 'Memory did not save the note. Try again.' });
+    }
+  }));
+
   router.put('/api/projects/:id/memory/records/:rid', requireAuth(async (req: PortalRequest, res: PortalResponse) => {
     const projectId = String(req.params.id);
     if (!(await requireMember(req, res, projectId))) return;
     if (!(await canManage(req, projectId))) { sendJson(res, 403, { error: 'Only a project owner can review notes' }); return; }
-    const status = (req.body as { status?: unknown } | undefined)?.status;
+    const body = (req.body ?? {}) as { status?: unknown; text?: unknown };
+    if (body.text !== undefined) {
+      if (body.status !== undefined) { sendJson(res, 400, { error: 'Send either text or status, not both' }); return; }
+      const text = noteText(body.text);
+      if (typeof text !== 'string') { sendJson(res, 400, { error: text.error }); return; }
+      const rid = String(req.params.rid);
+      const where = await recordNamespaces(rid);
+      if (!where.some((n) => n.startsWith(projectPrefix(projectId)))) { sendJson(res, 404, { error: 'Note not found in this project' }); return; }
+      if (!where.includes(factsNamespace(projectId))) { sendJson(res, 400, { error: 'Only facts can be edited' }); return; }
+      const { client, cmds } = await sdk();
+      try {
+        const r = await client.send(new cmds.BatchUpdateMemoryRecords({ memoryId: memoryId()!, records: [{ memoryRecordId: rid, content: { text }, timestamp: new Date() }] }));
+        if ((r.failedRecords ?? []).length || !(r.successfulRecords ?? []).length) { sendJson(res, 502, { error: 'Memory did not save the change. Try again.' }); return; }
+      } catch {
+        sendJson(res, 502, { error: 'Memory did not save the change. Try again.' });
+        return;
+      }
+      await setSetting(getDb(), statusKey(rid), 'approved');
+      await setSetting(getDb(), byKey(rid), req.user!.id);
+      sendJson(res, 200, { id: rid, text, status: 'approved' });
+      return;
+    }
+    const status = body.status;
     if (status !== 'approved' && status !== 'rejected' && status !== 'pending') { sendJson(res, 400, { error: 'status must be approved, rejected or pending' }); return; }
     const rid = String(req.params.rid);
     // The record must belong to this project: an owner of one project must not approve another project's notes.
@@ -258,12 +311,23 @@ export function registerAgentCoreMemoryRoutes(): void {
   }));
 }
 
-async function recordInProject(projectId: string, recordId: string): Promise<boolean> {
-  if (!memoryId()) return false;
+async function recordNamespaces(recordId: string): Promise<string[]> {
+  if (!memoryId()) return [];
   try {
     const { client, cmds } = await sdk();
     const r = await client.send(new cmds.GetMemoryRecord({ memoryId: memoryId()!, memoryRecordId: recordId }));
-    const namespaces: string[] = r.memoryRecord?.namespaces ?? [];
-    return namespaces.some((n) => n.startsWith(projectPrefix(projectId)));
-  } catch { return false; }
+    return r.memoryRecord?.namespaces ?? [];
+  } catch { return []; }
+}
+
+async function recordInProject(projectId: string, recordId: string): Promise<boolean> {
+  return (await recordNamespaces(recordId)).some((n) => n.startsWith(projectPrefix(projectId)));
+}
+
+/** A note an owner typed: trimmed, 1-1,000 characters, secrets masked. */
+function noteText(raw: unknown): string | { error: string } {
+  if (typeof raw !== 'string' || !raw.trim()) return { error: 'Write the note first' };
+  const text = raw.trim();
+  if (text.length > MAX_NOTE_TEXT) return { error: `A note can be at most ${MAX_NOTE_TEXT} characters` };
+  return redactSecrets(text);
 }

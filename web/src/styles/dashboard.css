@@ -831,3 +831,12 @@
 
 /* AgentCore page */
 .us-hints { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+
+/* Project memory panel (AgentCore page): add a note, edit a fact in place. */
+.mem-add { display: grid; gap: 6px; margin: 4px 0 12px; }
+.mem-add-row { display: flex; gap: 8px; align-items: flex-start; }
+.mem-add-row textarea, .mem-edit textarea { flex: 1; min-width: 0; width: 100%; resize: vertical; font: inherit; }
+.mem-edit { display: grid; gap: 6px; }
+.mem-edit-actions { display: flex; gap: 6px; }
+.mem-edited { font-size: 0.85em; }
+@media (max-width: 600px) { .mem-add-row { flex-direction: column; align-items: stretch; } }

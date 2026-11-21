@@ -89,6 +89,8 @@ function MemoryPanel({ projects }) {
   const [mem, setMem] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [editing, setEditing] = useState(null); // { id, text }
 
   useEffect(() => { if (!projectId && projects?.length) setProjectId(projects[0].id); }, [projects, projectId]);
 
@@ -100,19 +102,29 @@ function MemoryPanel({ projects }) {
 
   const act = async (fn) => {
     setBusy(true);
-    try { await fn(); await load(); } catch (e) { setError(e.message); } finally { setBusy(false); }
+    try { await fn(); await load(); return true; } catch (e) { setError(e.message); return false; } finally { setBusy(false); }
   };
   const base = `/api/projects/${encodeURIComponent(projectId)}/memory`;
   const toggle = (enabled) => act(() => api.put(base, { enabled }));
   const setStatus = (id, status) => act(() => api.put(`${base}/records/${encodeURIComponent(id)}`, { status }));
   const remove = (id) => act(() => api.delete(`${base}/records/${encodeURIComponent(id)}`));
+  const add = async (e) => {
+    e.preventDefault();
+    if (!draft.trim()) return;
+    if (await act(() => api.post(`${base}/records`, { text: draft }))) setDraft('');
+  };
+  const saveEdit = async () => {
+    if (!editing?.text.trim()) return;
+    if (await act(() => api.put(`${base}/records/${encodeURIComponent(editing.id)}`, { text: editing.text }))) setEditing(null);
+  };
 
   return (
     <section className="us-panel" aria-label="Project memory">
       <div className="us-panel-head"><strong>Project memory</strong><span className="muted">reviewed before an agent sees it</span></div>
       <p className="muted us-lead">
         When a project turns this on, the agents' last exchange in each finished session is sent to AgentCore Memory (secrets masked), which
-        extracts notes about the project. Notes start as pending. Only approved notes are shown to an agent at the start of a session.
+        extracts notes about the project. Notes start as pending. Only approved notes are shown to an agent at the start of a session and
+        to the cat when it answers. Edit a fact to correct it, or add one yourself; both count as approved.
       </p>
       <div className="us-controls" role="group" aria-label="Project memory controls">
         <select value={projectId} onChange={(e) => setProjectId(e.target.value)} aria-label="Project" style={{ width: 'auto' }}>
@@ -126,6 +138,17 @@ function MemoryPanel({ projects }) {
         )}
       </div>
       {error && <p className="error-note" role="alert">{error}</p>}
+      {mem && mem.available && mem.canManage && (
+        <form className="mem-add" onSubmit={add} aria-label="Add a note">
+          <label className="muted" htmlFor="mem-add-text">Add a note the agents and the cat should know (saved as approved)</label>
+          <div className="mem-add-row">
+            <textarea id="mem-add-text" rows={2} maxLength={1000} value={draft} onChange={(e) => setDraft(e.target.value)}
+              placeholder="For example: Tests run with pnpm vitest" disabled={busy} />
+            <button type="submit" className="btn btn-sm btn-primary" disabled={busy || !draft.trim()}>Add</button>
+          </div>
+          {!mem.enabled && <p className="muted" style={{ margin: 0 }}>Memory is off for this project: notes are kept but not used until you turn it on.</p>}
+        </form>
+      )}
       {mem && !mem.available && <p className="muted us-empty">Project memory is not available here (it needs the cloud portal).</p>}
       {mem && mem.available && mem.error && <p className="error-note" role="alert">{mem.error}</p>}
       {mem && mem.available && !mem.error && mem.records.length === 0 && (
@@ -138,12 +161,27 @@ function MemoryPanel({ projects }) {
             <tbody>
               {mem.records.map((r) => (
                 <tr key={r.id}>
-                  <td style={{ whiteSpace: 'normal', maxWidth: 520 }}>{r.text}</td>
+                  <td style={{ whiteSpace: 'normal', maxWidth: 520 }}>
+                    {editing?.id === r.id ? (
+                      <div className="mem-edit">
+                        <textarea rows={3} maxLength={1000} value={editing.text} aria-label="Note text"
+                          onChange={(e) => setEditing({ id: r.id, text: e.target.value })}
+                          onKeyDown={(e) => { if (e.key === 'Escape') setEditing(null); }} disabled={busy} autoFocus />
+                        <div className="mem-edit-actions">
+                          <button type="button" className="btn btn-sm btn-primary" disabled={busy || !editing.text.trim()} onClick={saveEdit}>Save</button>
+                          <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>{r.text}{r.edited && <span className="muted mem-edited"> · edited by an owner</span>}</>
+                    )}
+                  </td>
                   <td>{r.kind}</td>
                   <td><span className={`pill ${r.status === 'approved' ? 'pill-running' : 'pill-stopped'}`}>{r.status}</span></td>
                   <td className="us-num">
                     {mem.canManage && (
                       <>
+                        {r.kind === 'fact' && editing?.id !== r.id && <button type="button" className="btn btn-sm" disabled={busy} style={{ marginRight: 6 }} onClick={() => setEditing({ id: r.id, text: r.text })} aria-label={`Edit note: ${r.text.slice(0, 40)}`}>Edit</button>}
                         {r.status !== 'approved' && <button type="button" className="btn btn-sm" disabled={busy} onClick={() => setStatus(r.id, 'approved')} aria-label={`Approve note: ${r.text.slice(0, 40)}`}>Approve</button>}
                         {r.status !== 'rejected' && <button type="button" className="btn btn-sm" disabled={busy} style={{ marginLeft: 6 }} onClick={() => setStatus(r.id, 'rejected')} aria-label={`Reject note: ${r.text.slice(0, 40)}`}>Reject</button>}
                         <button type="button" className="btn btn-sm" disabled={busy} style={{ marginLeft: 6 }} onClick={() => remove(r.id)} aria-label={`Delete note: ${r.text.slice(0, 40)}`}>Delete</button>

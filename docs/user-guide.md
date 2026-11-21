@@ -786,6 +786,16 @@ Attach files by dragging and dropping onto the drop zone in the creation form, c
 
 Metrics shown: total cost, total runs, failure rate, average run duration. Charts: daily cost line chart, runs by status pie chart, cost by project bar chart (portal-wide only). Admins also see a cost-by-user table.
 
+### Project memory
+
+**Project memory** (rail › Portal › AgentCore, the **Project memory** panel; portal admins) keeps what the agents learn about a project (how its tests run, its conventions) so later sessions and the cat can use it. It needs the cloud portal and is off by default for each project.
+
+- **Turn it on** for a project with **Learn from this project's sessions**. A few minutes after a session finishes, AgentCore pulls notes out of it. They arrive as **pending**.
+- **Review**: **Approve** a note to use it, **Reject** it to keep it out, or **Delete** it. Only approved notes reach an agent (at the start of a session) or the cat (when it answers about the project).
+- **Correct a note**: **Edit** on a fact opens it in place; change the wording and **Save** (Esc cancels). The note keeps its place, becomes approved and is tagged "edited by an owner". Session summaries cannot be edited.
+- **Add a note**: type a fact in **Add a note** (for example "Tests run with pnpm vitest") and press **Add**. It is saved as approved. While memory is off for the project the note is kept but not used.
+- Notes are at most 1,000 characters, and anything that looks like a password, key or token is masked before it is saved. A later session can still produce a note that contradicts yours; it arrives as pending and is not used unless you approve it.
+
 ### Inbox
 
 **Inbox** (rail, top group, and the top bar icon) shows all items that require a person to act on, across all projects. A numeric badge on the Inbox icon in the top bar updates every 30 seconds. Navigate to Inbox by clicking the icon or pressing **g b**.
