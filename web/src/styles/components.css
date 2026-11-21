@@ -2253,3 +2253,8 @@ button.status-filter.is-active { outline: 2px solid var(--accent); outline-offse
   .cm-core-aura { animation: none; }
   .cm-link, .cm-cluster, .cm-pill-ring, .cm-kid-bg { transition: none; }
 }
+
+/* Knowledge built from the code (Knowledge › Documents) */
+.kb-from-code { margin-left: 6px; font-size: 0.72rem; vertical-align: 1px; }
+.kb-row-actions { white-space: nowrap; }
+.kb-writing { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0; }

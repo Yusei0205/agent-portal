@@ -1232,6 +1232,44 @@ async function main() {
       await p.waitForSelector('.tab-bar, [role="tablist"]', { timeout: 8000 });
       await assertTabsExist(p, ['Documents', 'Search', 'Ask', 'Decisions', 'Learn']);
     }, page);
+
+    await test('Knowledge: Build from repositories writes the chosen documents; a generated document shows "From code" and Rebuild', async (p) => {
+      let built: any = null; // eslint-disable-line @typescript-eslint/no-explicit-any
+      let rebuilt = '';
+      const writing = { on: false };
+      await p.route(`**/api/projects/${projectId}/repos`, (r) => r.fulfill({ json: { repos: [{ id: 'r1', name: 'billing-api', status: 'ready' }, { id: 'r2', name: 'web-app', status: 'ready' }] } }));
+      await p.route(`**/api/projects/${projectId}/knowledge/build`, async (r) => {
+        built = r.request().postDataJSON();
+        writing.on = true;
+        await r.fulfill({ json: { docs: [{ id: 'g1', name: 'System overview · billing-api', sources: { knowledge: { on: true } } }] } });
+      });
+      await p.route(`**/api/projects/${projectId}/generated-docs`, (r) => r.fulfill({ json: { docs: writing.on ? [{ id: 'g1', name: 'System overview · billing-api', status: 'generating', sources: { knowledge: { on: true } } }] : [] } }));
+      await p.route(`**/api/projects/${projectId}/generated-docs/g9/refresh`, async (r) => { rebuilt = 'g9'; await r.fulfill({ json: { ok: true } }); });
+      await p.route(`**/api/projects/${projectId}/knowledge`, (r) => r.fulfill({ json: { docs: [
+        { id: 'k9', name: 'Runbook · billing-api.md', mime_type: 'text/markdown', size_bytes: 900, status: 'ready', created_at: new Date().toISOString(), generated: { id: 'g9', name: 'Runbook · billing-api', status: 'ready', stale: false } },
+      ] } }));
+      try {
+        await goto(p, '/projects', 300);
+        await goto(p, `/p/${projectId}/knowledge`, 1200);
+        const row = p.locator('table[aria-label="Knowledge documents"] tr').filter({ hasText: 'Runbook · billing-api.md' });
+        await row.locator('.kb-from-code', { hasText: 'From code' }).waitFor({ timeout: 6000 });
+        await row.getByRole('button', { name: /Rebuild .* from the code/ }).click();
+        for (let i = 0; i < 20 && !rebuilt; i++) await p.waitForTimeout(100);
+        if (rebuilt !== 'g9') throw new Error('Rebuild did not refresh the generated document');
+
+        await p.getByRole('button', { name: 'Build from repositories' }).click();
+        const dlg = p.getByRole('dialog', { name: 'Build knowledge from repositories' });
+        await dlg.waitFor({ timeout: 4000 });
+        await dlg.getByLabel('web-app').uncheck();
+        await dlg.getByLabel('Runbook').uncheck();
+        await dlg.getByRole('button', { name: 'Write 3 documents' }).click();
+        await dlg.waitFor({ state: 'detached', timeout: 4000 });
+        if (JSON.stringify(built) !== JSON.stringify({ repoIds: ['r1'], types: ['overview', 'architecture', 'api'] })) throw new Error(`Unexpected build request: ${JSON.stringify(built)}`);
+        await p.locator('.kb-writing').filter({ hasText: 'System overview · billing-api' }).waitFor({ timeout: 4000 });
+      } finally {
+        for (const u of ['repos', 'knowledge/build', 'generated-docs', 'generated-docs/g9/refresh', 'knowledge']) await p.unroute(`**/api/projects/${projectId}/${u}`).catch(() => {});
+      }
+    }, page);
     } // end §4 knowledge
 
     // ── 5. Create ────────────────────────────────────────────────────────

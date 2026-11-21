@@ -532,6 +532,21 @@
       ],
       "smokeIds": []
     },
+    "knowledge-from-code": {
+      "description": "Knowledge built from a project's repositories: generated documents linked to Knowledge, Build from repositories, Add to Knowledge",
+      "sources": [
+        "server/knowledge-from-code.ts",
+        "web/src/components/BuildKnowledgeDialog.jsx"
+      ],
+      "tests": [
+        "test/knowledge-from-code.test.ts",
+        "test/generated-docs.test.ts",
+        "test/knowledge.test.ts"
+      ],
+      "smokeIds": [
+        "knowledge"
+      ]
+    },
     "usage": {
       "description": "Usage page: dollars (Claude), credits (Kiro) and tokens by person, project and day",
       "sources": [

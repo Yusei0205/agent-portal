@@ -386,38 +386,17 @@ export async function processDocOutput(workflowId: string, runId: string, workDi
     status: 'ready',
     error: null,
   });
+
+  // Linked to Knowledge (Build from repositories, or Add to Knowledge): keep the Knowledge copy current. Never fails the run.
+  const { syncGeneratedDocToKnowledge } = await import('./knowledge-from-code.ts');
+  await syncGeneratedDocToKnowledge(String(d.project_id), String(d.id));
 }
 
-// ── Routes ────────────────────────────────────────────────────────────────────
-
-export function registerGeneratedDocRoutes(): void {
-  // GET /api/projects/:id/generated-docs
-  router.get('/api/projects/:id/generated-docs', async (req: PortalRequest, res: PortalResponse) => {
-    const project = await requireProjectAccess(req, res, req.params.id);
-    if (!project) return;
-
-    const docs = (await getGeneratedDocRepository().listByProject(String(project.id))) as unknown as Row[];
-
-    const result = await Promise.all(docs.map(async (d) => {
-      const v = d.latest_version_id
-        ? await latestVersion(String(d.id))
-        : null;
-      return await docView(d, v);
-    }));
-
-    sendJson(res, 200, {
-      docs: result,
-      doc_types: DOC_TYPES.map((id) => ({ id, label: DOC_TYPE_LABELS[id] })),
-      limits: { perProject: DOC_LIMITS.perProject },
-    });
-  });
-
-  // POST /api/projects/:id/generated-docs
-  router.post('/api/projects/:id/generated-docs', async (req: PortalRequest, res: PortalResponse) => {
-    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
-    if (!project) return;
-
-    const body = req.body as Record<string, unknown>;
+/**
+ * Create a generated document and start its run. Shared by POST /generated-docs and by Knowledge's "Build from repositories"
+ * (knowledge-from-code.ts), which also links the document to Knowledge (`opts.knowledge`).
+ */
+export async function createGeneratedDoc(project: Row, userId: string, body: Record<string, unknown>, opts: { knowledge?: boolean } = {}): Promise<{ doc: Awaited<ReturnType<typeof docView>>; workflowId: string }> {
     const name = str(body.name as string, 'Name', { max: DOC_LIMITS.titleChars });
     const docType = body.docType as string;
     if (!DOC_TYPES.includes(docType as DocType)) {
@@ -430,6 +409,9 @@ export function registerGeneratedDocRoutes(): void {
     const description = str((body.description as string) ?? '', 'description', { max: DOC_LIMITS.descriptionChars, optional: true });
     // Kept with the sources, so a refresh or retry writes from the same context.
     const sources: DocSources = { ...rawSources, ...(description ? { description } : {}) };
+    // Knowledge link: only set by the portal itself (Build from repositories), never taken from the request body.
+    delete (sources as Record<string, unknown>).knowledge;
+    if (opts.knowledge) (sources as Record<string, unknown>).knowledge = { on: true };
     const diagramStyle = (body.diagramStyle as string) ?? 'mermaid';
     const diagramCloud = (body.diagramCloud as string | undefined) ?? null;
     const audience = str((body.audience as string) ?? '', 'audience', { max: DOC_LIMITS.audienceChars, optional: true });
@@ -452,7 +434,7 @@ export function registerGeneratedDocRoutes(): void {
     }
 
     // Which sign-in and model run it (checked before anything is created), then the prompt and the staged inputs.
-    const ai = await resolveCreateAi(req.user!.id, body);
+    const ai = await resolveCreateAi(userId, body);
     const guide = await parseGuide(body.guide, docType, String(project.id), ai.engine);
     if (guide) sources.guide = guide;
     // A large guide is several documents (one per role) that share a set: only a well-formed tag is kept, and only on a user guide.
@@ -483,7 +465,7 @@ export function registerGeneratedDocRoutes(): void {
       latest_version_id: null,
       stale: 0,
       attachment_ids: JSON.stringify(rawAttachmentIds),
-      created_by: req.user!.id,
+      created_by: userId,
       created_at: ts,
     });
 
@@ -491,7 +473,7 @@ export function registerGeneratedDocRoutes(): void {
       String(project.id),
       id,
       goal,
-      req.user!.id,
+      userId,
       leadAgent,
       trustAllTools,
       { workflowId: preWorkflowId, workDir: preWorkDir ?? undefined, repoIds, guide },
@@ -504,7 +486,38 @@ export function registerGeneratedDocRoutes(): void {
     }
 
     const d = (await getDoc(id, String(project.id)));
-    sendJson(res, 200, { doc: await docView(d, null), workflowId });
+    return { doc: await docView(d, null), workflowId };
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────────
+
+export function registerGeneratedDocRoutes(): void {
+  // GET /api/projects/:id/generated-docs
+  router.get('/api/projects/:id/generated-docs', async (req: PortalRequest, res: PortalResponse) => {
+    const project = await requireProjectAccess(req, res, req.params.id);
+    if (!project) return;
+
+    const docs = (await getGeneratedDocRepository().listByProject(String(project.id))) as unknown as Row[];
+
+    const result = await Promise.all(docs.map(async (d) => {
+      const v = d.latest_version_id
+        ? await latestVersion(String(d.id))
+        : null;
+      return await docView(d, v);
+    }));
+
+    sendJson(res, 200, {
+      docs: result,
+      doc_types: DOC_TYPES.map((id) => ({ id, label: DOC_TYPE_LABELS[id] })),
+      limits: { perProject: DOC_LIMITS.perProject },
+    });
+  });
+
+  // POST /api/projects/:id/generated-docs
+  router.post('/api/projects/:id/generated-docs', async (req: PortalRequest, res: PortalResponse) => {
+    const project = await requireProjectAccess(req, res, req.params.id, 'editor');
+    if (!project) return;
+    sendJson(res, 200, await createGeneratedDoc(project, req.user!.id, req.body as Record<string, unknown>));
   });
 
   // GET /api/projects/:id/generated-docs/:docId

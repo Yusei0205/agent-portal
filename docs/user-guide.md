@@ -774,14 +774,26 @@ The page lists all available MCP tools grouped by the scope required to call the
 
 ### Generating documentation or knowledge from your repositories
 
-The portal can write documents from your code. Open the project, then **Create** (rail › Knowledge › Create):
+When a project has few documents to upload, the portal can write its knowledge from the code, and keep it in **Knowledge** so
+**Search**, **Ask** and Kyu answer from it straight away.
 
-1. Make sure the repository is added to the project (Work › Workspaces › **Repositories** tab).
-2. On **Documents**, press **New document**, give it a name and choose a type: **System overview**, **Architecture**, **API reference**, **Runbook** or **User guide**.
-3. Under **What the agent reads**, tick the **Repositories** to read (read-only copies of the code) and, if you like, **Project documents** from Knowledge. You can also attach files.
-4. Press **Create**. The document is generated as a Word file; **Refresh** regenerates it after the code changes.
+**Build knowledge from repositories (one step).** Open the project's **Knowledge** › **Documents** and press **Build from repositories**:
 
-**Diagrams** (architecture diagrams from the selected repositories) and **Decks** work the same way. To make a generated document searchable in **Knowledge** (and available to the cat and to **Ask**), download it and upload it under Knowledge › **Documents**. For a one-off write-up in a session instead, start a session and ask for it (for example "Write a runbook for this repository").
+1. Tick the repositories to read (they must be added under Work › Workspaces › **Repositories** first).
+2. Tick the documents to write: **System overview**, **Architecture**, **API reference** and **Runbook** (all four by default).
+3. Press **Write N documents**. An agent reads the code and writes each one, usually in a few minutes; a line at the top of the list
+   says what is still being written. Each document then appears in the list with a **From code** tag.
+4. After the code changes, press the **Rebuild** button (↻) on a document: the same Knowledge document is rewritten, never duplicated.
+   **From code · out of date** means the sources changed since it was written.
+
+Deleting a **From code** document from Knowledge stops it being written there again (the document stays in Create).
+
+**One document at a time.** In **Create** › **Documents**, **New document** writes a single document from the repositories you tick
+under **What the agent reads** (types: System overview, Architecture, API reference, Runbook, User guide). Each document has an
+**Add to Knowledge** button: it copies the document into Knowledge and keeps it current on every **Refresh**; **In Knowledge ✓** takes it
+out again. **Diagrams** (architecture diagrams from the selected repositories) and **Decks** are made the same way.
+
+For a one-off write-up instead, start a session and ask for it (for example "Write a runbook for this repository").
 
 #### Attaching files to Create actions
 

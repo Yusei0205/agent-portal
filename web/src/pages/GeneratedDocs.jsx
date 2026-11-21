@@ -460,6 +460,18 @@ export function GeneratedDocs({ projectId }) {
     setRefreshingDoc(doc);
   };
 
+  // Keep this document in Knowledge (Search, Ask and Kyu use it; every new version replaces the copy), or take it out again.
+  const toggleKnowledge = async (d) => {
+    const on = !d.sources?.knowledge?.on;
+    try {
+      await api.put(`/api/projects/${projectId}/generated-docs/${d.id}/knowledge`, { on });
+      toast(on ? `"${d.name}" is in Knowledge and stays current when you refresh it.` : `"${d.name}" was taken out of Knowledge.`, 'success');
+      load();
+    } catch (err) {
+      toast(err.message || 'Could not change Knowledge', 'error');
+    }
+  };
+
   const handleRetryDoc = async (id) => {
     setRetryingIds((prev) => { const s = new Set(prev); s.add(id); return s; });
     try {
@@ -638,6 +650,15 @@ export function GeneratedDocs({ projectId }) {
                           )}
                         </>
                       )}
+                      <button
+                        type="button"
+                        className={`btn btn-sm ${d.sources?.knowledge?.on ? 'btn-ghost is-on' : 'btn-ghost'}`}
+                        onClick={() => toggleKnowledge(d)}
+                        aria-pressed={Boolean(d.sources?.knowledge?.on)}
+                        title={d.sources?.knowledge?.on ? 'In Knowledge: Search, Ask and Kyu use it. Click to take it out.' : 'Copy into Knowledge and keep it current on every refresh'}
+                      >
+                        {d.sources?.knowledge?.on ? 'In Knowledge ✓' : 'Add to Knowledge'}
+                      </button>
                       {d.status === 'generating' && d.sources?.guide?.screenshots && d.workflow_id && (
                         <button type="button" className="btn btn-sm btn-ghost" onClick={() => setWatching(d)} title="See the cloud browser and sign in yourself if the agent asks">
                           Watch browser

@@ -25,6 +25,7 @@ import { getProjectRepository } from './repositories/projects.ts';
 import { getKnowledgeRepository } from './repositories/knowledge.ts';
 import { splitPassages, rankPassages, excerptAround, ASK_SYSTEM, buildAskUser, citedNumbers, type Passage } from './knowledge-answer.ts';
 import { retrieve, getSearchConfig, onDocumentReady, onDocumentDeleted } from './knowledge-search.ts';
+import { generatedLinks, unlinkKnowledgeDoc } from './knowledge-from-code.ts';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -51,7 +52,7 @@ async function requireMember(
   return project;
 }
 
-function knowledgeDir(projectSlug: string, sub: string): string {
+export function knowledgeDir(projectSlug: string, sub: string): string {
   return path.join(config.dataDir, 'projects', projectSlug, sub);
 }
 
@@ -178,7 +179,9 @@ export function registerKnowledgeRoutes(): void {
     if (!project) return;
 
     const docs = await getKnowledgeRepository().listDocs(req.params.id);
-    sendJson(res, 200, { docs });
+    // Documents written from the project's code carry the generated document they come from (knowledge-from-code.ts).
+    const links = await generatedLinks(req.params.id).catch(() => new Map());
+    sendJson(res, 200, { docs: docs.map((d) => (links.has(d.id) ? { ...d, generated: links.get(d.id) } : d)) });
   });
 
   // POST /api/projects/:id/knowledge/upload
@@ -276,6 +279,8 @@ export function registerKnowledgeRoutes(): void {
       }
 
       await onDocumentDeleted({ id: String(project.id), slug }, req.params.docId).catch(() => {});
+      // A copy written from a generated document: turn the link off so the next version does not bring it back.
+      await unlinkKnowledgeDoc(req.params.id, req.params.docId).catch(() => {});
 
       sendJson(res, 200, { ok: true });
     },

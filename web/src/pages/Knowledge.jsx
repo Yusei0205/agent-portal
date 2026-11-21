@@ -12,6 +12,7 @@ import { BulkActionBar } from '../components/BulkActionBar.jsx';
 import { useToast, ToastShelf } from '../components/Toast.jsx';
 import { useSort } from '../lib/useSort.jsx';
 import { PageHeader, SectionHead } from '../components/PageHeader.jsx';
+import { BuildKnowledgeDialog } from '../components/BuildKnowledgeDialog.jsx';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -40,6 +41,9 @@ function DocumentsTab({ projectId, onOpenDoc }) {
   const { confirmState, requestConfirm } = useConfirm();
   const { toast, toasts, removeToast } = useToast();
   const bulk = useBulkSelect(docs);
+  const [building, setBuilding] = useState(false);
+  // Documents being written from the code that are not in Knowledge yet (linked, no copy so far).
+  const [writing, setWriting] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -47,12 +51,31 @@ function DocumentsTab({ projectId, onOpenDoc }) {
     try {
       const r = await api.get(`/api/projects/${projectId}/knowledge`);
       setDocs(r.docs || []);
+      const g = await api.get(`/api/projects/${projectId}/generated-docs`).catch(() => ({ docs: [] }));
+      setWriting((g.docs || []).filter((d) => d.sources?.knowledge?.on && !d.sources?.knowledge?.docId && d.status !== 'failed'));
     } catch (e) {
       setError(e.message);
     } finally {
       setLoading(false);
     }
   }, [projectId]);
+
+  // While documents are being written, look again every 20 s so they appear without a reload.
+  useEffect(() => {
+    if (!writing.length) return undefined;
+    const t = setInterval(() => { load(); }, 20000);
+    return () => clearInterval(t);
+  }, [writing.length, load]);
+
+  const rebuild = async (doc) => {
+    try {
+      await api.post(`/api/projects/${projectId}/generated-docs/${doc.generated.id}/refresh`, {});
+      toast(`Rebuilding "${doc.generated.name}" from the code. It updates here when done.`, 'success');
+      setDocs((all) => all.map((d) => (d.id === doc.id ? { ...d, generated: { ...d.generated, status: 'generating' } } : d)));
+    } catch (err) {
+      setError(err.message);
+    }
+  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -140,11 +163,27 @@ function DocumentsTab({ projectId, onOpenDoc }) {
             aria-label="Upload document"
           />
         </label>
+        <button type="button" className="btn" onClick={() => setBuilding(true)}>
+          <Icon name="sparkles" size={14} /> Build from repositories
+        </button>
       </div>
+      {building && (
+        <BuildKnowledgeDialog
+          projectId={projectId}
+          onClose={() => setBuilding(false)}
+          onStarted={(started) => { toast(`Writing ${started.length} document${started.length === 1 ? '' : 's'} from the code. They appear here when ready.`, 'success'); load(); }}
+        />
+      )}
+      {writing.length > 0 && (
+        <p className="muted kb-writing" role="status">
+          <Icon name="sparkles" size={13} /> Writing from the code: {writing.map((d) => d.name).join('; ')}. They appear below when ready.{' '}
+          <a href={`#/p/${projectId}/create`}>See progress in Create › Documents</a>
+        </p>
+      )}
 
       {docs.length === 0 ? (
         <div className="empty-state">
-          <p>No documents yet. Upload a PDF, Word, Excel, PowerPoint or text file.</p>
+          <p>No documents yet. Upload a PDF, Word, Excel, PowerPoint or text file, or <strong>Build from repositories</strong> to have the portal write them from the project's code.</p>
         </div>
       ) : (
         <div style={{ position: 'relative' }}>
@@ -183,12 +222,29 @@ function DocumentsTab({ projectId, onOpenDoc }) {
                     {doc.status === 'ready'
                       ? <button type="button" className="link-btn" onClick={() => onOpenDoc({ docId: doc.id, name: doc.name })} title="Read the document">{doc.name}</button>
                       : doc.name}
+                    {doc.generated && (
+                      <span className="badge badge-neutral kb-from-code" title={`Written from the code by "${doc.generated.name}" in Create`}>
+                        From code{doc.generated.stale ? ' · out of date' : ''}
+                      </span>
+                    )}
                   </td>
                   <td><span className="muted">{doc.mime_type || '—'}</span></td>
                   <td>{formatBytes(doc.size_bytes)}</td>
                   <td><StatusBadge status={doc.status} /></td>
                   <td className="muted">{formatRelative(doc.created_at)}</td>
-                  <td>
+                  <td className="kb-row-actions">
+                    {doc.generated && (
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        onClick={() => rebuild(doc)}
+                        disabled={doc.generated.status === 'generating' || doc.generated.status === 'running'}
+                        aria-label={`Rebuild ${doc.name} from the code`}
+                        title="Rebuild from the code"
+                      >
+                        <Icon name="refresh" size={14} />
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn-icon"
