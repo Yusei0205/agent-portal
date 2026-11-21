@@ -311,6 +311,8 @@ async function handleOne(ctx: SessionPrContext, change: RepoChange): Promise<voi
     const settings = getPullRequestSettings(ctx.projectId);
     const ticket = ticketOf(w);
 
+    // Keep an explicit chat request as the publication entry point unless the
+    // project has opted into automatic PRs for Jira-linked sessions.
     if (!settings.openPullRequests || !ticket) {
       await writeEvent(ctx.runId, ctx.projectId, ctx.workflowId, base);
       return;
