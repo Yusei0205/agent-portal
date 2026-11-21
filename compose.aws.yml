@@ -1,0 +1,44 @@
+# Optional AWS credential overlay — mount alongside compose.yml:
+#
+#   docker compose -f compose.yml -f compose.aws.yml up -d
+#
+# This mounts the host's ~/.aws directory read-only inside the container so the
+# portal can use named profiles, instance-role ambient credentials, and IAM
+# Identity Center (SSO) sign-ins that are already configured on the host.
+#
+# NOTE — SSO / OIDC cache:
+#   If the portal needs to WRITE the SSO token cache (e.g. it initiates `aws sso login`
+#   itself), use a writable bind mount instead:
+#
+#     - type: bind
+#       source: ~/.aws
+#       target: /data/home/.aws
+#       read_only: false
+#
+#   That lets the portal update ~/.aws/sso/cache on the host and avoids having to
+#   re-authenticate every time the container restarts.
+
+services:
+  portal:
+    volumes:
+      # Read-only: safe for ambient / profile / key-based auth; SSO cache is only read, not written.
+      #
+      # WINDOWS USERS: `${HOME}` is not set in PowerShell / cmd.exe.
+      # Use `${USERPROFILE}` instead, or set AWS_HOME in your shell before running
+      # docker compose.  Examples:
+      #
+      #   PowerShell:
+      #     $env:AWS_HOME = "$env:USERPROFILE\.aws"
+      #     docker compose -f compose.yml -f compose.aws.yml up -d
+      #
+      #   cmd.exe:
+      #     set AWS_HOME=%USERPROFILE%\.aws
+      #     docker compose -f compose.yml -f compose.aws.yml up -d
+      #
+      #   Linux / macOS:
+      #     docker compose -f compose.yml -f compose.aws.yml up -d
+      #     (AWS_HOME defaults to ~/.aws via ${HOME})
+      - type: bind
+        source: "${AWS_HOME:-${HOME}/.aws}"
+        target: /data/home/.aws
+        read_only: true

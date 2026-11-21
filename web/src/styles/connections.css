@@ -1,0 +1,190 @@
+/* ── Connections page ──────────────────────────────────── */
+
+/* ── Repo browser (used in ProjectHub "Add Repositories" dialog) ── */
+.conn-repo-list {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-height: 300px;
+  overflow-y: auto;
+  /* scrollbar gutter stabilization */
+  overflow-anchor: none;
+}
+.conn-repo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--panel);
+  cursor: pointer;
+  user-select: none;
+}
+.conn-repo-row:last-child { border-bottom: none; }
+.conn-repo-row:hover:not(.is-added) { background: var(--canvas); }
+.conn-repo-row.is-selected { background: var(--accent-wash); }
+.conn-repo-row.is-added {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.conn-repo-row input[type="checkbox"] {
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+.conn-repo-body {
+  flex: 1;
+  min-width: 0;
+}
+.conn-repo-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.conn-repo-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.conn-repo-desc {
+  font-size: 0.79rem;
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+.conn-repo-meta {
+  font-size: 0.77rem;
+  color: var(--ink-3);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.conn-repo-empty {
+  padding: 20px 14px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 0.84rem;
+}
+
+/* ── Select-all control bar ───────────────────────────── */
+.conn-select-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--canvas);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  font-size: 0.83rem;
+}
+.conn-select-bar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+/* ── Bulk add summary ─────────────────────────────────── */
+.conn-bulk-summary {
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  font-size: 0.84rem;
+}
+.conn-bulk-summary.is-ok   {
+  background: var(--ok-wash);
+  border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
+  color: var(--ok);
+}
+.conn-bulk-summary.is-warn {
+  background: var(--warn-wash);
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
+  color: var(--warn);
+}
+
+/* ── Inner dialog tab bar ─────────────────────────────── */
+.conn-dialog-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 14px;
+}
+.conn-dialog-tab {
+  padding: 7px 12px;
+  border: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.84rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+.conn-dialog-tab:hover { color: var(--ink); }
+.conn-dialog-tab.is-active {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── Connection table extras ──────────────────────────── */
+.conn-account {
+  font-size: 0.82rem;
+  color: var(--ink-2);
+  font-family: var(--mono);
+}
+.conn-test-ok  { color: var(--ok);     font-size: 0.79rem; white-space: nowrap; }
+.conn-test-err {
+  color: var(--danger);
+  font-size: 0.79rem;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+/* ── Provider icon tile (small, inline) ───────────────── */
+.conn-provider-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm, 4px);
+  background: var(--accent-wash);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+/* ── Pagination load-more ─────────────────────────────── */
+.conn-load-more {
+  text-align: center;
+  padding: 10px;
+  border-top: 1px solid var(--line-2);
+}
+
+/* ── Search bar inside repo dialog ───────────────────── */
+.conn-search-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ── Disabled choice option (no OAuth App configured) ── */
+.choice.is-disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.choice.is-disabled:hover {
+  border-color: var(--line);
+  background: var(--panel);
+}

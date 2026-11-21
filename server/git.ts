@@ -1,65 +1,79 @@
-import { execFile } from 'node:child_process';
-import { HttpError } from './util.ts';
+/**
+ * Thin git utility wrapper for portal-initiated git commands.
+ *
+ * All portal git calls use GIT_BASE, which:
+ *   - Enables long-paths on Windows (core.longpaths=true)
+ *   - Disables git hooks by pointing core.hooksPath at a folder that is never
+ *     created: agents work in these repositories and could leave a hook behind
+ *     for the portal to run during push/fetch (same CVE class as the Copilot and
+ *     Cursor tool-settings vulnerabilities). Trade-off: Git LFS hooks do not run
+ *     on portal pushes.
+ *   - Disables fsmonitor so an agent-written fsmonitor program never runs on the
+ *     portal server.
+ */
+
+import { execFile, spawn } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
 
 export interface GitResult {
   stdout: string;
   stderr: string;
 }
 
-export function git(args: string[], opts: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; maxBuffer?: number } = {}): Promise<GitResult> {
+// Windows stops at 260 characters unless git is told otherwise; some repositories
+// have deeper paths than that.
+// The portal's own git commands also run no hooks and no fsmonitor program: agents
+// work in these repositories and could leave a hook (or a core.fsmonitor setting)
+// behind for the portal to run later, after the run and its approvals.
+// The hooks folder named here is never created.
+const NO_HOOKS = path.join(os.tmpdir(), 'agent-portal-no-git-hooks');
+export const GIT_BASE = [
+  '-c', 'core.longpaths=true',
+  '-c', `core.hooksPath=${NO_HOOKS}`,
+  '-c', 'core.fsmonitor=false',
+];
+
+export function git(
+  args: string[],
+  opts: { cwd?: string; env?: Record<string, string>; timeoutMs?: number; maxBuffer?: number } = {},
+): Promise<GitResult> {
   return new Promise((resolve, reject) => {
     execFile(
       'git',
-      args,
+      [...GIT_BASE, ...args],
       {
         cwd: opts.cwd,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: 'echo', ...opts.env },
-        timeout: opts.timeoutMs ?? 120_000,
-        maxBuffer: opts.maxBuffer ?? 64 * 1024 * 1024,
+        env: opts.env ?? (process.env as Record<string, string>),
+        timeout: opts.timeoutMs ?? 30_000,
+        maxBuffer: opts.maxBuffer ?? 10 * 1024 * 1024,
+        windowsHide: true,
       },
       (err, stdout, stderr) => {
         if (err) {
-          const msg = (stderr || err.message).toString().trim().split('\n').slice(-6).join('\n');
-          reject(new HttpError(400, `git ${args[0]} failed: ${redact(msg)}`));
-          return;
+          const gitErr = new Error(
+            `git ${args[0] ?? ''} failed (exit ${(err as NodeJS.ErrnoException & { code?: number }).code ?? '?'}): ${stderr.trim() || err.message}`,
+          );
+          (gitErr as Error & { stderr: string; stdout: string }).stderr = stderr;
+          (gitErr as Error & { stderr: string; stdout: string }).stdout = stdout;
+          reject(gitErr);
+        } else {
+          resolve({ stdout, stderr });
         }
-        resolve({ stdout: stdout.toString(), stderr: stderr.toString() });
       },
     );
   });
 }
 
-/** Never echo credentials back to the browser. */
-export function redact(s: string): string {
-  return s
-    .replace(/(https?:\/\/)[^\s/@]+@/g, '$1***@')
-    .replace(/(Authorization:\s*)(Basic|Bearer)\s+\S+/gi, '$1$2 ***')
-    .replace(/gh[pousr]_[A-Za-z0-9]{20,}/g, '***')
-    .replace(/github_pat_[A-Za-z0-9_]{20,}/g, '***');
-}
-
-/** Git config passed through environment variables, so tokens never appear in argv or on disk. */
-export function gitConfigEnv(pairs: [string, string][]): Record<string, string> {
-  const env: Record<string, string> = { GIT_CONFIG_COUNT: String(pairs.length) };
-  pairs.forEach(([k, v], i) => {
-    env[`GIT_CONFIG_KEY_${i}`] = k;
-    env[`GIT_CONFIG_VALUE_${i}`] = v;
+/** Spawn git with streaming output. Returns the child process. */
+export function gitSpawn(
+  args: string[],
+  opts: { cwd?: string; env?: Record<string, string> } = {},
+): ReturnType<typeof spawn> {
+  return spawn('git', [...GIT_BASE, ...args], {
+    cwd: opts.cwd,
+    env: opts.env ?? (process.env as Record<string, string>),
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
   });
-  return env;
-}
-
-export const PORTAL_GIT_IDENTITY = {
-  GIT_AUTHOR_NAME: 'Agent Portal',
-  GIT_AUTHOR_EMAIL: 'agent-portal@localhost',
-  GIT_COMMITTER_NAME: 'Agent Portal',
-  GIT_COMMITTER_EMAIL: 'agent-portal@localhost',
-};
-
-/** Commit everything under `paths` in a local repository; no-op when nothing changed. */
-export async function commitAll(cwd: string, message: string, paths: string[] = ['.']): Promise<boolean> {
-  await git(['add', '-A', '--', ...paths], { cwd });
-  const staged = await git(['diff', '--cached', '--name-only'], { cwd });
-  if (!staged.stdout.trim()) return false;
-  await git(['commit', '-q', '-m', message], { cwd, env: PORTAL_GIT_IDENTITY });
-  return true;
 }

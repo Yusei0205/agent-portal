@@ -1,0 +1,106 @@
+/* Motion and the extra session/dashboard polish: AI core, KPI highlights and sparklines, rail marker, focus mode,
+   session stars, stage strip, artifact reveal. Every animation is off under prefers-reduced-motion. */
+
+/* ── AI core: the nine lives ring (pixel clover inside nine lives, AiCore.jsx) ── */
+.ai-core { position: relative; flex: none; --core: var(--accent); --core-gold: var(--warn, #F2B33C); }
+.ai-core-svg { display: block; width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 6px color-mix(in srgb, var(--core) 35%, transparent)); }
+.ai-core-px { fill: var(--core); }
+.ai-core-centre { fill: var(--core-gold); }
+.ai-core-life { fill: var(--core); opacity: 0.25; }
+.ai-core-life.is-on { opacity: 1; }
+.ai-core-life.is-walk { opacity: 0.9; }
+.ai-core-life.is-bad { fill: var(--danger); opacity: 1; }
+.ai-core--failed .ai-core-l1, .ai-core--failed .ai-core-centre { fill: var(--danger); }
+.ai-core--failed .ai-core-l2, .ai-core--failed .ai-core-l3, .ai-core--failed .ai-core-l4 { fill: color-mix(in srgb, var(--danger) 30%, var(--core) 20%); }
+.ai-core--failed .ai-core-svg { filter: drop-shadow(0 0 6px color-mix(in srgb, var(--danger) 35%, transparent)); }
+/* Motion: the ring turns, lit lives pulse, an idle highlight walks round; nothing moves without .is-live. */
+.ai-core.is-live .ai-core-ring { transform-origin: 12px 12px; animation: ai-core-turn 24s linear infinite; }
+.ai-core--running.is-live .ai-core-ring { animation-duration: 8s; }
+.ai-core.is-live .ai-core-life.is-on { animation: ai-core-pulse 1.2s ease-in-out infinite; animation-delay: calc(var(--i) * 0.13s); }
+.ai-core--idle.is-live .ai-core-life { animation: ai-core-walk 4.5s steps(1) infinite; animation-delay: calc(var(--i) * 0.5s); }
+.ai-core--idle.is-live .ai-core-life.is-walk { opacity: 0.25; }
+.ai-core--idle.is-live .ai-core-clover, .ai-core--success.is-live .ai-core-clover { transform-origin: 5.5px 5.5px; animation: ai-core-breathe 4.5s ease-in-out infinite; }
+@keyframes ai-core-turn { to { transform: rotate(360deg); } }
+@keyframes ai-core-pulse { 50% { opacity: 0.6; } }
+@keyframes ai-core-walk { 0% { opacity: 0.95; } 11%, 100% { opacity: 0.25; } }
+@keyframes ai-core-breathe { 50% { transform: scale(1.05); } }
+
+/* ── Dashboard header with the core ──────────────────────────────────────── */
+.db-header-core { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.db-header-core > div { min-width: 0; }
+
+/* ── KPI cards: a sparkline shows the trend; delegated pointer light lives in command-center.css ── */
+.db-kpi-card { position: relative; overflow: hidden; }
+.kpi-spark { display: block; width: 100%; height: 28px; margin-top: 6px; overflow: visible; }
+.kpi-spark-line { fill: none; stroke: var(--spark, var(--accent)); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.kpi-spark-area { fill: color-mix(in srgb, var(--spark, var(--accent)) 14%, transparent); stroke: none; }
+.kpi-spark-dot { fill: var(--spark, var(--accent)); }
+.db-anim .kpi-spark-line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: kpi-spark-draw 0.9s ease-out 0.15s forwards; }
+@keyframes kpi-spark-draw { to { stroke-dashoffset: 0; } }
+
+/* ── Rail: the active marker slides between items ────────────────────────── */
+.rail-link { position: relative; }
+.rail-active-bar {
+  position: absolute; left: 0; top: 18%; bottom: 18%; width: 3px; border-radius: 0 3px 3px 0;
+  background: var(--accent); pointer-events: none;
+}
+
+/* ── Focus mode: the conversation takes the whole width ──────────────────── */
+.ide-workspace--focus .ide-activity-bar,
+.ide-workspace--focus .ide-sidebar,
+.ide-workspace--focus .ide-resize-handle-x,
+.ide-workspace--focus .ide-editor-area,
+.ide-workspace--focus .ide-editor-toggle-strip,
+.ide-workspace--focus .ide-terminal-panel { display: none; }
+.ide-workspace--focus .ide-agent-panel { max-width: 980px; margin-inline: auto; width: 100%; }
+.ide-view-tabs { display: flex; gap: 2px; }
+.ide-focus-btn { margin-left: auto; }
+
+/* ── Sessions list: stars and grouping ───────────────────────────────────── */
+.session-star { width: 24px; height: 24px; flex-shrink: 0; opacity: 0; color: var(--ink-3); transition: opacity 0.15s ease, color 0.15s ease; }
+.ws-item:hover .session-star, .ws-item:focus-within .session-star, .session-star.is-on { opacity: 1; }
+.session-star.is-on { color: var(--warn); }
+.session-star.is-on svg { fill: currentColor; }
+.sessions-group-by { display: flex; align-items: center; gap: 6px; padding: 5px 12px; border-bottom: 1px solid var(--line); font-size: 12px; color: var(--ink-3); }
+.sessions-group-by select { width: auto; padding: 2px 6px; font-size: 12px; }
+.ws-section-header .ws-section-star { color: var(--warn); margin-right: 4px; }
+
+/* ── Execution view: AI core and stage strip ─────────────────────────────── */
+.exe-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.exe-top .stage-strip { flex: 1; min-width: 260px; }
+.stage-strip { list-style: none; margin: 0; padding: 0; display: flex; align-items: flex-start; position: relative; }
+.stage-track, .stage-fill { position: absolute; top: 11px; left: 12.5%; height: 2px; border-radius: 2px; }
+.stage-track { right: 12.5%; background: var(--line); }
+.stage-fill { background: var(--accent); width: 75%; transform-origin: left center; }
+.stage-item { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 5px; position: relative; font-size: 0.78rem; color: var(--ink-3); text-align: center; }
+.stage-dot {
+  width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 0.7rem; font-weight: 700;
+  background: var(--panel); border: 2px solid var(--line); color: var(--ink-3); position: relative; z-index: 1;
+}
+.stage-item.is-done .stage-dot { background: var(--accent); border-color: var(--accent); color: var(--accent-ink, #fff); }
+.stage-item.is-active .stage-dot { border-color: var(--accent); color: var(--accent); }
+.stage-item.is-active .stage-dot::after { content: ''; position: absolute; inset: -6px; border-radius: 50%; border: 2px solid var(--accent); opacity: 0.5; animation: stage-ping 1.6s ease-out infinite; }
+.stage-item.is-failed .stage-dot { border-color: var(--danger); color: var(--danger); }
+.stage-item.is-stopped .stage-dot { border-color: var(--warn); color: var(--warn); }
+.stage-item.is-active, .stage-item.is-done { color: var(--ink-2); }
+.stage-item.is-active .stage-label { color: var(--accent); font-weight: 640; }
+@keyframes stage-ping { 0% { transform: scale(0.8); opacity: 0.6; } 100% { transform: scale(1.5); opacity: 0; } }
+
+/* ── Page fade-in ────────────────────────────────────────────────────────── */
+.main-enter { animation: main-fade-in 0.16s ease-out; }
+@keyframes main-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ── Artifact reveal: a new file slides in, then a highlight sweeps across ─ */
+.run-outputs-card-item.is-new { position: relative; overflow: hidden; animation: artifact-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) var(--reveal-delay, 0ms) both; }
+@keyframes artifact-in { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: none; } }
+.run-outputs-card-item.is-new::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 30%, color-mix(in srgb, var(--accent) 22%, transparent) 50%, transparent 70%);
+  transform: translateX(-100%); animation: artifact-shine 1.1s ease-out calc(var(--reveal-delay, 0ms) + 0.3s) 1 forwards;
+}
+@keyframes artifact-shine { to { transform: translateX(100%); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-core *, .stage-item.is-active .stage-dot::after, .run-outputs-card-item.is-new::after, .run-outputs-card-item.is-new, .main-enter { animation: none; }
+  .db-anim .kpi-spark-line { animation: none; stroke-dasharray: none; stroke-dashoffset: 0; }
+}

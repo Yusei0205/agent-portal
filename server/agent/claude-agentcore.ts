@@ -1,0 +1,312 @@
+/**
+ * Claude Code on Amazon Bedrock AgentCore.
+ *
+ * On Lambda the Claude Agent SDK cannot run locally (no long-lived process, no shell), so a Claude run is
+ * sent to an AgentCore runtime (agent-runner image) with the user's own Anthropic credential in the request.
+ * The runner streams back SSE events that this module turns into the portal's run events.
+ *
+ * Enabled when PORTAL_CLAUDE_AGENTCORE_RUNTIME_ARN is set and the run's credential is an Anthropic API key
+ * or a Claude subscription token (Bedrock credentials keep using the local SDK path).
+ *
+ * Runner events: status, assistant-text {text, tokens}, tool-call {name,input}, tool-result {name,output},
+ * tool-blocked {toolName,reason}, result {stop_reason, metrics}, error {message}.
+ */
+
+import { PORTAL_TURN_LIMIT_MS } from './turn-limit.ts';
+import { randomUUID } from 'node:crypto';
+import { invokeAgentCore } from './kiro-agentcore.ts';
+import { HttpError } from '../util.ts';
+import type { RunContext } from './types.ts';
+import { createFileReceiver } from './runner-files.ts';
+import { persistFile } from '../durable-files.ts';
+import { snapshotAccess } from './runner-snapshot-access.ts';
+import { agentCoreSessionId } from './agentcore-session.ts';
+import { waitForRepoPrep } from './repo-prep.ts';
+import { recordHostTimeLimit } from './host-limit.ts';
+import { getSessionsRepository } from '../repositories/sessions.ts';
+import { repoChangeOf } from './runner-finalize.ts';
+
+export interface ClaudeAgentCoreOpts {
+  runtimeArn: string;
+  runId: string;
+  prompt: string;
+  model: string;
+  auth: { kind: 'api_key' | 'oauth_token'; secret: string };
+  trustTools: boolean;
+  maxBudgetUsd?: number | null;
+  /** Thinking effort from Settings (empty = the model's default). */
+  effort?: string | null;
+  maxTurns?: number | null;
+  /** Give the agent the AgentCore Browser tools (mcp__browser__*). */
+  browser?: boolean;
+  /** The session's repositories for the runner to clone under repos/. */
+  repos?: import('./runner-repos.ts').RunnerRepo[];
+  /** The project's remote MCP integrations (runner starts a proxy for each). */
+  mcpServers?: import('./runner-mcp.ts').McpServerSpec[];
+  /** The project's AWS account as AWS_* variables for the agent's shell. */
+  awsEnv?: Record<string, string>;
+  /** Staged files (attachments, project documents) the runner writes into the work folder first. */
+  inputFiles?: import('./runner-files.ts').InputFile[];
+  /** A user guide run's test accounts for the browser's sign_in tool (the runner types them; the model never sees them) and the hosts they may be typed on. */
+  browserAccounts?: Array<{ role: string; username: string; password: string }>;
+  browserHosts?: string[];
+  /** The person signs in through Live View: the runner offers wait_for_sign_in. */
+  browserManualSignIn?: boolean;
+  /** Leave the cloud browser open after the turn (it ends after an hour or when the portal stops it), and reconnect to the one the last turn left. */
+  browserKeepOpen?: boolean;
+  browserResumeSession?: string;
+  /** A loop session's check steps, run by the runner after the agent finishes. */
+  checks?: import('./runner-checks.ts').CheckStep[];
+  /** The owner's and project's Claude agents (the Agent tool can start them by name). */
+  agents?: Record<string, import('./agent-defs.ts').AgentDefinitionPayload>;
+  /** The session's lead agent: one of `agents`, run as the main conversation. */
+  agent?: string | null;
+}
+
+export interface ClaudeAgentCoreResult {
+  text: string;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  stopReason: string;
+  /** Repositories the runner reported as changed (only when the payload asked with finalizeCheck). */
+  repoChanges?: import('../session-pr.ts').RepoChange[];
+  /** The run's check result when the payload carried checks (null: none arrived); handed to the PR gate with the changes. */
+  check?: { ok: boolean } | null;
+}
+
+/** Whether to ask the runner to report changed repositories (the pull request step). Never throws. */
+export async function finalizeCheckFor(projectId: string, hasTicket: boolean, workflowId?: string | null): Promise<boolean> {
+  try {
+    const { finalizeRunPayloadFlag } = await import('../session-pr.ts');
+    return await finalizeRunPayloadFlag(projectId, hasTicket, workflowId);
+  } catch (e) {
+    console.warn('[claude-agentcore] finalizeCheck flag skipped:', e);
+    return false;
+  }
+}
+
+/**
+ * Whether the runner builds the change report the checked way (`checkedReport`: a runner-private repository, with the changed file
+ * list for the auto-fix gate): only for an auto-fix session. Ordinary sessions keep the report they always had. Never throws.
+ */
+export async function checkedReportFor(workflowId?: string | null): Promise<boolean> {
+  if (!workflowId) return false;
+  try {
+    const { isAutofixWorkflow } = await import('../autofix/delivery.ts');
+    return await isAutofixWorkflow(workflowId);
+  } catch (e) {
+    console.warn('[claude-agentcore] checkedReport flag skipped:', e);
+    return false;
+  }
+}
+
+/**
+ * Hands the changed repositories to the pull request step. Called once the run is otherwise finished and its
+ * spend is recorded. Never throws. It waits a bounded time (so a quick "ask in the Inbox" result is written before
+ * the run closes, and the work is not left running in a frozen Lambda), then lets a slower push/PR carry on alone.
+ */
+export async function submitRepoChanges(
+  run: { runId: string; workflowId: string; projectId: string | null; credentialOwnerId?: string | null },
+  userId: string | null,
+  changes: import('../session-pr.ts').RepoChange[] | undefined,
+  waitMs = 30_000,
+  check?: { ok: boolean } | null,
+): Promise<void> {
+  const projectId = run.projectId;
+  if (!changes?.length || !projectId) return;
+  try {
+    const { handleRepoChanges } = await import('../session-pr.ts');
+    const job = Promise.resolve()
+      .then(() => handleRepoChanges({
+        workflowId: run.workflowId, runId: run.runId, projectId,
+        userId: run.credentialOwnerId ?? userId, engine: 'claude-code', ...(check !== undefined ? { check } : {}),
+      }, changes))
+      .catch((e: unknown) => { console.warn(`[claude-agentcore] pull request step failed for run ${run.runId}:`, e); });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([job, new Promise<void>((r) => { timer = setTimeout(r, waitMs); })]);
+    clearTimeout(timer);
+  } catch (e) {
+    console.warn('[claude-agentcore] pull request step skipped:', e);
+  }
+}
+
+/** Picks the credential the runner should use from the env built by resolveCredentialEnv(). */
+export function anthropicAuthFromEnv(env: Record<string, string | undefined>): ClaudeAgentCoreOpts['auth'] | null {
+  if (env.CLAUDE_CODE_USE_BEDROCK) return null;
+  if (env.ANTHROPIC_API_KEY) return { kind: 'api_key', secret: env.ANTHROPIC_API_KEY };
+  if (env.CLAUDE_CODE_OAUTH_TOKEN) return { kind: 'oauth_token', secret: env.CLAUDE_CODE_OAUTH_TOKEN };
+  return null;
+}
+
+function mergeSignals(signals: AbortSignal[]): AbortSignal {
+  const ac = new AbortController();
+  for (const s of signals) {
+    if (s.aborted) { ac.abort(s.reason); break; }
+    s.addEventListener('abort', () => ac.abort(s.reason), { once: true });
+  }
+  return ac.signal;
+}
+
+export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCoreOpts): Promise<ClaudeAgentCoreResult> {
+  const { emit, signal } = ctx;
+  // One AgentCore session per portal session, so the session's persistent folder (repositories) is found again.
+  const sessionId = ctx.run?.workflowId ? agentCoreSessionId(ctx.run.workflowId, 'claude-code') : randomUUID();
+  if (ctx.run?.workflowId && opts.repos?.length) await waitForRepoPrep(ctx.run.workflowId);
+  const parts: string[] = [];
+  // The run's own check result for the PR gate (the stored check-result event may not be written yet on DynamoDB).
+  let lastCheck: { ok: boolean } | null | undefined = opts.checks?.length ? null : undefined;
+  const out: ClaudeAgentCoreResult = {
+    text: '', costUsd: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, stopReason: 'end_turn',
+  };
+
+  emit('status', { state: 'thinking' });
+  emit('status', { text: 'Running Claude via AgentCore…' });
+
+  // Just under the AgentCore runtime's 30 minute maximum lifetime.
+  const timeoutMs = Number(process.env.PORTAL_RUN_TIMEOUT_MS) || PORTAL_TURN_LIMIT_MS;
+  const ac = new AbortController();
+  const merged = signal ? mergeSignals([signal, ac.signal]) : ac.signal;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    // Record why first: the abort reaches the run as an error that would otherwise read as "Cancelled".
+    void recordHostTimeLimit(ctx, opts.runId, timeoutMs).finally(() => ac.abort(new Error('AgentCore run timed out')));
+  }, timeoutMs);
+
+  let finalizeCheck = false;
+  let checkedReport = false;
+  if (opts.repos?.length && ctx.run?.workflowId && ctx.run.projectId) {
+    const wf = await getSessionsRepository().getWorkflowById(ctx.run.workflowId).catch(() => null);
+    finalizeCheck = await finalizeCheckFor(ctx.run.projectId, Boolean(wf?.jira_key), ctx.run.workflowId);
+    checkedReport = finalizeCheck && await checkedReportFor(ctx.run.workflowId);
+  }
+  const changes: import('../session-pr.ts').RepoChange[] = [];
+  const snapshot = opts.repos?.length && ctx.run?.workflowId ? await snapshotAccess(ctx.run.workflowId) : null;
+  const payload: Record<string, unknown> = {
+    runId: opts.runId,
+    prompt: opts.prompt,
+    model: opts.model,
+    auth: opts.auth,
+    trustTools: opts.trustTools,
+    ...(opts.browser ? { browser: true } : {}),
+    ...(opts.browser && opts.browserKeepOpen ? { browserKeepOpen: true } : {}),
+    ...(opts.browser && opts.browserResumeSession ? { browserResumeSession: opts.browserResumeSession } : {}),
+    ...(opts.browser && opts.browserManualSignIn ? { browserManualSignIn: true } : {}),
+    ...(opts.browser && opts.browserAccounts?.length ? { browserAccounts: opts.browserAccounts, browserHosts: opts.browserHosts ?? [] } : {}),
+    ...(opts.repos?.length ? { repos: opts.repos } : {}),
+    ...(opts.mcpServers?.length ? { mcpServers: opts.mcpServers } : {}),
+    ...(opts.awsEnv && Object.keys(opts.awsEnv).length ? { awsEnv: opts.awsEnv } : {}),
+    ...(opts.inputFiles?.length ? { inputFiles: opts.inputFiles } : {}),
+    ...(opts.checks?.length ? { checks: opts.checks } : {}),
+    ...(opts.agents && Object.keys(opts.agents).length ? { agents: opts.agents } : {}),
+    ...(opts.agent && opts.agents?.[opts.agent] ? { agent: opts.agent } : {}),
+    ...(snapshot ? { snapshot } : {}),
+    ...(finalizeCheck ? { finalizeCheck: true } : {}),
+    ...(checkedReport ? { checkedReport: true } : {}),
+    maxMinutes: Math.floor(timeoutMs / 60_000),
+    ...(opts.maxBudgetUsd && opts.maxBudgetUsd > 0 ? { maxBudgetUsd: Math.min(opts.maxBudgetUsd, 100) } : {}),
+    ...(opts.effort ? { effort: opts.effort } : {}),
+    ...(opts.maxTurns && opts.maxTurns > 0 ? { maxTurns: Math.min(opts.maxTurns, 200) } : {}),
+  };
+
+  // Files the agent wrote come back as 'file' events and land in the run's work folder (then mirrored to S3).
+  const receiver = ctx.run?.workDir ? createFileReceiver(ctx.run.workDir, (abs) => persistFile(abs)) : null;
+
+  try {
+    for await (const raw of invokeAgentCore(opts.runtimeArn, sessionId, payload, merged)) {
+      if (signal?.aborted) break;
+      const ev = raw as unknown as Record<string, unknown>;
+      switch (ev.type) {
+        case 'assistant-text': {
+          const text = String(ev.text ?? '');
+          if (text) {
+            // `stream` marks a piece of a longer message, which the viewer joins as-is.
+            emit('assistant-text', ev.stream === true ? { text, stream: true } : { text });
+            if (ev.stream === true && parts.length) parts[parts.length - 1] += text;
+            else parts.push(text);
+          }
+          break;
+        }
+        case 'context': {
+          const percent = Number(ev.percent);
+          if (Number.isFinite(percent)) emit('context-usage', { percent });
+          break;
+        }
+        case 'thought': {
+          const text = String(ev.text ?? '');
+          if (text) emit('agent-thought', { text });
+          break;
+        }
+        case 'tool-call':
+          // A tool call ends the current text segment; the next piece starts a new one.
+          if (parts.length && parts[parts.length - 1] !== '') parts.push('');
+          emit('tool-start', { toolCallId: '', toolName: String(ev.name ?? 'Tool'), toolInput: String(ev.input ?? '{}'), status: 'in_progress' });
+          break;
+        case 'tool-result':
+          emit('tool-end', { toolCallId: '', toolName: String(ev.name ?? 'Tool'), status: 'completed', output: String(ev.output ?? '') });
+          break;
+        case 'check-result':
+          lastCheck = { ok: Boolean(ev.ok) };
+          emit('check-result', { ok: Boolean(ev.ok), ranAt: String(ev.ranAt ?? ''), steps: Array.isArray(ev.steps) ? ev.steps : [] });
+          break;
+        case 'browser-session':
+          if (ev.sessionId) emit('browser-session', { browserId: String(ev.browserId ?? 'aws.browser.v1'), sessionId: String(ev.sessionId), width: Number(ev.width) || 1280, height: Number(ev.height) || 800 });
+          break;
+        case 'browser-waiting':
+          emit('browser-waiting', { state: ev.state === 'waiting' ? 'waiting' : 'done', message: String(ev.message ?? '').slice(0, 300) });
+          break;
+        case 'browser-navigate':
+          if (ev.url) emit('browser-navigate', { url: String(ev.url) });
+          break;
+        case 'browser-screenshot':
+          if (ev.screenshotBase64) emit('browser-screenshot', { screenshotBase64: String(ev.screenshotBase64), ...(ev.url ? { url: String(ev.url) } : {}) });
+          break;
+        case 'tool-blocked':
+          emit('tool-blocked', { toolName: String(ev.toolName ?? ''), toolInput: String(ev.toolInput ?? ''), reason: String(ev.reason ?? '') });
+          break;
+        case 'status': {
+          const text = String(ev.text ?? '');
+          if (text && !text.startsWith('Work dir:')) emit('status', { text });
+          break;
+        }
+        case 'repo-changes':
+          // Not a run event: handed to the pull request step once the run has finished.
+          changes.push(repoChangeOf(ev));
+          break;
+        case 'file':
+          await receiver?.handle(ev);
+          break;
+        case 'error':
+          // Never echo the credential: the runner does not log it, but cut anything that looks like a key anyway.
+          throw new HttpError(502, `AgentCore Claude run error: ${String(ev.message ?? '').replace(/sk-ant-[\w-]+/g, 'sk-ant-…')}`);
+        case 'result': {
+          const m = (ev.metrics ?? {}) as Record<string, unknown>;
+          out.costUsd = Number(m.costUsd ?? 0) || 0;
+          out.inputTokens = Number(m.inputTokens ?? 0) || 0;
+          out.outputTokens = Number(m.outputTokens ?? 0) || 0;
+          out.cacheReadTokens = Number(m.cacheReadTokens ?? 0) || 0;
+          out.cacheWriteTokens = Number(m.cacheWriteTokens ?? 0) || 0;
+          out.stopReason = String(ev.stop_reason ?? 'end_turn');
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (timedOut) throw new HttpError(504, 'AgentCore Claude run timed out');
+  if (signal?.aborted) throw new DOMException('Run cancelled', 'AbortError');
+
+  if (receiver?.received.length) emit('status', { text: `Received ${receiver.received.length} file${receiver.received.length === 1 ? '' : 's'} from the agent` });
+  emit('status', { state: 'idle' });
+  out.text = parts.join('\n').trim();
+  if (changes.length) out.repoChanges = changes;
+  if (lastCheck !== undefined) out.check = lastCheck;
+  return out;
+}

@@ -1,0 +1,197 @@
+/**
+ * Aurora Glass — template-specific visual enhancements.
+ *
+ * All rules are gated on [data-template="aurora-glass"] so they have
+ * zero effect when another template is active.
+ *
+ * Effects:
+ *   - Diagonal violet→blue gradient canvas (data-fx-gradient)
+ *   - Frosted panels: backdrop-filter blur 16px where supported, solid fallback
+ *   - Hairline rgba white borders at 10%
+ *   - Large 20px radius panels and cards
+ *   - Stat icon tint squares, badge washes
+ *
+ * Accessibility: backdrop-filter is progressive enhancement only.
+ * Text contrast is maintained by the semi-transparent panel values in tokens.
+ * No url() — all backgrounds are CSS gradient-based.
+ *
+ * Reduced motion / data-fx-motion respected.
+ */
+
+/* ── Canvas: violet→blue diagonal gradient ────────────────────────── */
+[data-template="aurora-glass"][data-fx-gradient="true"] .shell > .shell-right > .main {
+  background:
+    radial-gradient(ellipse 70% 50% at 10% 20%, rgba(100,40,180,0.45) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 45% at 90% 80%, rgba(20,60,200,0.40) 0%, transparent 60%),
+    linear-gradient(135deg, #1e0a40 0%, #0a1050 50%, #061428 100%);
+}
+
+[data-template="aurora-glass"][data-mode="light"][data-fx-gradient="true"] .shell > .shell-right > .main {
+  background:
+    radial-gradient(ellipse 70% 50% at 10% 20%, rgba(140,80,240,0.20) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 45% at 90% 80%, rgba(20,100,220,0.18) 0%, transparent 60%),
+    linear-gradient(135deg, #e8d8ff 0%, #d8e4ff 50%, #cce8ff 100%);
+}
+
+/* Disable gradient behind IDE/editor/terminal */
+[data-template="aurora-glass"][data-fx-gradient="true"] .ide-workspace,
+[data-template="aurora-glass"][data-fx-gradient="true"] .ide-body,
+[data-template="aurora-glass"][data-fx-gradient="true"] .ide-codemirror-host,
+[data-template="aurora-glass"][data-fx-gradient="true"] .ide-terminal-panel {
+  background: var(--code-bg) !important;
+}
+
+/* ── Frosted glass panels ──────────────────────────────────────────── */
+@supports (backdrop-filter: blur(1px)) {
+  [data-template="aurora-glass"] .panel,
+  [data-template="aurora-glass"] .project-card,
+  [data-template="aurora-glass"] .stat-card {
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+  }
+
+  [data-template="aurora-glass"] .palette-dialog {
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+  }
+}
+
+/* ── Rail frosted ─────────────────────────────────────────────────── */
+@supports (backdrop-filter: blur(1px)) {
+  [data-template="aurora-glass"] .shell-rail {
+    backdrop-filter: blur(14px) saturate(130%);
+    -webkit-backdrop-filter: blur(14px) saturate(130%);
+  }
+}
+
+/* ── Panel borders: hairline rgba white ────────────────────────────── */
+[data-template="aurora-glass"] .panel,
+[data-template="aurora-glass"] .project-card,
+[data-template="aurora-glass"] .stat-card {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: var(--radius-lg);
+}
+
+[data-template="aurora-glass"][data-mode="light"] .panel,
+[data-template="aurora-glass"][data-mode="light"] .project-card,
+[data-template="aurora-glass"][data-mode="light"] .stat-card {
+  border-color: rgba(255,255,255,0.55);
+}
+
+/* ── Card hover glow ───────────────────────────────────────────────── */
+[data-template="aurora-glass"] .project-card:hover {
+  border-color: rgba(139,92,246,0.40);
+  box-shadow:
+    0 0 0 1px rgba(139,92,246,0.20),
+    0 8px 40px rgba(139,92,246,0.15),
+    inset 0 1px 0 rgba(255,255,255,0.15);
+}
+
+[data-template="aurora-glass"][data-mode="light"] .project-card:hover {
+  border-color: rgba(124,58,237,0.40);
+  box-shadow:
+    0 0 0 1px rgba(124,58,237,0.15),
+    0 8px 32px rgba(124,58,237,0.12),
+    inset 0 1px 0 rgba(255,255,255,0.60);
+}
+
+/* ── Rail active pill ──────────────────────────────────────────────── */
+[data-template="aurora-glass"] .rail-link.is-active {
+  background: rgba(139,92,246,0.18);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(139,92,246,0.30);
+  border-radius: var(--radius-md);
+  border: none;
+}
+
+[data-template="aurora-glass"] .rail-link.is-active svg {
+  color: var(--accent);
+}
+
+[data-template="aurora-glass"] .rail-group-btn.has-active-child {
+  background: rgba(139,92,246,0.12);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(139,92,246,0.20);
+  border: none;
+}
+
+[data-template="aurora-glass"][data-mode="light"] .rail-link.is-active {
+  background: rgba(124,58,237,0.12);
+  box-shadow: inset 0 0 0 1px rgba(124,58,237,0.25);
+}
+
+[data-template="aurora-glass"][data-mode="light"] .rail-group-btn.has-active-child {
+  background: rgba(124,58,237,0.08);
+  box-shadow: inset 0 0 0 1px rgba(124,58,237,0.18);
+}
+
+/* ── Palette dialog frosted ──────────────────────────────────────── */
+[data-template="aurora-glass"][data-fx-glow="true"] .palette-dialog {
+  box-shadow:
+    0 20px 60px rgba(0,0,0,0.45),
+    0 0 0 1px rgba(139,92,246,0.25),
+    inset 0 1px 0 rgba(255,255,255,0.12);
+}
+
+/* ── Brand mark ─────────────────────────────────────────────────────── */
+[data-template="aurora-glass"] .brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-size: 1rem;
+}
+
+/* ── Stat icon squares — tinted accents ─────────────────────────────── */
+[data-template="aurora-glass"] .stat-icon {
+  background: var(--accent-wash);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+}
+
+/* ── Search palette trigger ─────────────────────────────────────────── */
+[data-template="aurora-glass"] .palette-trigger-btn {
+  background: var(--raised);
+  border-color: var(--line);
+  border-radius: var(--radius-md);
+}
+
+[data-template="aurora-glass"] .palette-trigger-btn:hover {
+  border-color: rgba(139,92,246,0.40);
+}
+
+/* ── Button glow on primary ─────────────────────────────────────────── */
+[data-template="aurora-glass"] .btn-primary:hover,
+[data-template="aurora-glass"] .btn-primary:focus-visible {
+  box-shadow: 0 0 20px rgba(139,92,246,0.40), inset 0 0 0 1px rgba(255,255,255,0.12);
+  outline: none;
+}
+
+/* ── Motion: Outfit easing when full motion ─────────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  [data-template="aurora-glass"][data-fx-motion="full"] *,
+  [data-template="aurora-glass"][data-fx-motion="full"] *::before,
+  [data-template="aurora-glass"][data-fx-motion="full"] *::after {
+    transition-timing-function: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
+}
+
+/* ── Motion: none ─────────────────────────────────────────────────────── */
+[data-template="aurora-glass"][data-fx-motion="none"] *,
+[data-template="aurora-glass"][data-fx-motion="none"] *::before,
+[data-template="aurora-glass"][data-fx-motion="none"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* ── Reduced motion: no backdrop-filter (avoid potential motion) ─────── */
+@media (prefers-reduced-motion: reduce) {
+  [data-template="aurora-glass"] .panel,
+  [data-template="aurora-glass"] .project-card,
+  [data-template="aurora-glass"] .stat-card,
+  [data-template="aurora-glass"] .shell-rail,
+  [data-template="aurora-glass"] .palette-dialog {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}

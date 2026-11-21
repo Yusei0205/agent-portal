@@ -1,0 +1,89 @@
+{
+  "id": "kyuubit",
+  "name": "Kyuubit",
+  "version": 1,
+  "description": "Lucky clover: deep green-black with gold accents in dark, warm cream with clover green in light. Rounded cards and a soft glow.",
+  "brand": {
+    "productName": "Kyuubit",
+    "tagline": "Lucky agents. Nine lives.",
+    "logoSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 12 12\" shape-rendering=\"crispEdges\"><rect x=\"1.5\" y=\"0.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"9.5\" y=\"0.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"0.5\" y=\"1.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"1.5\" y=\"1.5\" width=\"1\" height=\"1\" fill=\"#F2A1AE\"/><rect x=\"2.5\" y=\"1.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"8.5\" y=\"1.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"9.5\" y=\"1.5\" width=\"1\" height=\"1\" fill=\"#F2A1AE\"/><rect x=\"10.5\" y=\"1.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"0.5\" y=\"2.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"1.5\" y=\"2.5\" width=\"2\" height=\"1\" fill=\"#A9714A\"/><rect x=\"3.5\" y=\"2.5\" width=\"5\" height=\"1\" fill=\"#1E1410\"/><rect x=\"8.5\" y=\"2.5\" width=\"2\" height=\"1\" fill=\"#F0A452\"/><rect x=\"10.5\" y=\"2.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"0.5\" y=\"3.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"1.5\" y=\"3.5\" width=\"3\" height=\"1\" fill=\"#A9714A\"/><rect x=\"4.5\" y=\"3.5\" width=\"3\" height=\"1\" fill=\"#F5ECDF\"/><rect x=\"7.5\" y=\"3.5\" width=\"3\" height=\"1\" fill=\"#F0A452\"/><rect x=\"10.5\" y=\"3.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"0.5\" y=\"4.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"1.5\" y=\"4.5\" width=\"1\" height=\"1\" fill=\"#A9714A\"/><rect x=\"2.5\" y=\"4.5\" width=\"1\" height=\"1\" fill=\"#2A1F1C\"/><rect x=\"3.5\" y=\"4.5\" width=\"5\" height=\"1\" fill=\"#F5ECDF\"/><rect x=\"8.5\" y=\"4.5\" width=\"1\" height=\"1\" fill=\"#2A1F1C\"/><rect x=\"9.5\" y=\"4.5\" width=\"1\" height=\"1\" fill=\"#F0A452\"/><rect x=\"10.5\" y=\"4.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"0.5\" y=\"5.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"1.5\" y=\"5.5\" width=\"1\" height=\"1\" fill=\"#A9714A\"/><rect x=\"2.5\" y=\"5.5\" width=\"1\" height=\"1\" fill=\"#2A1F1C\"/><rect x=\"3.5\" y=\"5.5\" width=\"5\" height=\"1\" fill=\"#F5ECDF\"/><rect x=\"8.5\" y=\"5.5\" width=\"1\" height=\"1\" fill=\"#2A1F1C\"/><rect x=\"9.5\" y=\"5.5\" width=\"1\" height=\"1\" fill=\"#F5ECDF\"/><rect x=\"10.5\" y=\"5.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"0.5\" y=\"6.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"1.5\" y=\"6.5\" width=\"1\" height=\"1\" fill=\"#F2A1AE\"/><rect x=\"2.5\" y=\"6.5\" width=\"2\" height=\"1\" fill=\"#F5ECDF\"/><rect x=\"4.5\" y=\"6.5\" width=\"3\" height=\"1\" fill=\"#F09AAA\"/><rect x=\"7.5\" y=\"6.5\" width=\"2\" height=\"1\" fill=\"#F5ECDF\"/><rect x=\"9.5\" y=\"6.5\" width=\"1\" height=\"1\" fill=\"#F2A1AE\"/><rect x=\"10.5\" y=\"6.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"0.5\" y=\"7.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"1.5\" y=\"7.5\" width=\"9\" height=\"1\" fill=\"#F2B33C\"/><rect x=\"10.5\" y=\"7.5\" width=\"1\" height=\"1\" fill=\"#1E1410\"/><rect x=\"5.5\" y=\"8.5\" width=\"1\" height=\"1\" fill=\"#3FAE6E\"/><rect x=\"4.5\" y=\"9.5\" width=\"1\" height=\"1\" fill=\"#3FAE6E\"/><rect x=\"5.5\" y=\"9.5\" width=\"1\" height=\"1\" fill=\"#F2CB3C\"/><rect x=\"6.5\" y=\"9.5\" width=\"1\" height=\"1\" fill=\"#3FAE6E\"/><rect x=\"5.5\" y=\"10.5\" width=\"1\" height=\"1\" fill=\"#3FAE6E\"/></svg>"
+  },
+  "modes": {
+    "dark": {
+      "canvas": "#0E0F13",
+      "rail": "#111318",
+      "panel": "#16181E",
+      "panel-2": "#1A1D24",
+      "raised": "#1C1F26",
+      "line": "#23262E",
+      "line-2": "rgba(255,255,255,0.07)",
+      "ink": "#ECE7DE",
+      "ink-2": "#BFC4C0",
+      "ink-3": "#9AA19D",
+      "accent": "#3FAE6E",
+      "accent-2": "#34A585",
+      "accent-3": "#F09AAA",
+      "accent-ink": "#06180D",
+      "accent-wash": "rgba(63,174,110,0.15)",
+      "link": "#7FD9A0",
+      "ok": "#5CCB86",
+      "ok-wash": "rgba(92,203,134,0.12)",
+      "warn": "#F2B33C",
+      "warn-wash": "rgba(242,179,60,0.12)",
+      "danger": "#F87878",
+      "danger-wash": "rgba(248,120,120,0.12)",
+      "info": "#7CB8FF",
+      "info-wash": "rgba(124,184,255,0.12)",
+      "focus": "#3FAE6E",
+      "glow": "0 0 0 3px rgba(63,174,110,0.3)",
+      "code-bg": "#0A0B0E",
+      "shadow": "inset 0 1px 0 0 rgba(255,255,255,0.055), 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -6px rgba(0,0,0,0.5)"
+    },
+    "light": {
+      "canvas": "#FBF8EF",
+      "rail": "#F3F0E4",
+      "panel": "#FFFFFF",
+      "panel-2": "#FFFFFF",
+      "raised": "#F6F3E8",
+      "line": "#E4E0D2",
+      "line-2": "rgba(0,0,0,0.07)",
+      "ink": "#22302A",
+      "ink-2": "#44524A",
+      "ink-3": "#627068",
+      "accent": "#25804F",
+      "accent-2": "#1D6B4F",
+      "accent-3": "#B0407A",
+      "accent-ink": "#FFFFFF",
+      "accent-wash": "rgba(37,128,79,0.10)",
+      "link": "#1F7346",
+      "ok": "#25804F",
+      "ok-wash": "rgba(37,128,79,0.10)",
+      "warn": "#956A0C",
+      "warn-wash": "rgba(149,106,12,0.10)",
+      "danger": "#B02F1A",
+      "danger-wash": "rgba(176,47,26,0.10)",
+      "info": "#2A52CC",
+      "info-wash": "rgba(42,82,204,0.10)",
+      "focus": "#25804F",
+      "glow": "0 0 0 3px rgba(37,128,79,0.20)",
+      "code-bg": "#F1EEE2",
+      "shadow": "inset 0 1px 0 0 rgba(255,255,255,0.8), 0 1px 2px rgba(30,40,30,0.08), 0 4px 12px rgba(30,40,30,0.06)"
+    }
+  },
+  "fonts": {
+    "display": "Quicksand",
+    "body": "Geist Sans",
+    "mono": "JetBrains Mono"
+  },
+  "effects": {
+    "glow": true,
+    "gridBackground": false,
+    "gradientAccents": true,
+    "motion": "full"
+  },
+  "radius": {
+    "sm": 6,
+    "md": 10,
+    "lg": 14
+  }
+}
