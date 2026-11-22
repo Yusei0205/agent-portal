@@ -207,6 +207,11 @@ export function createCodexRunnerServer(options: ServiceOptions = {}): http.Serv
         const mcp = Object.fromEntries(Object.keys(connections).map(name => [name, {
           command: process.execPath, args: [path.join(path.dirname(fileURLToPath(import.meta.url)), 'mcp-proxy.mjs')],
           env_vars: ['PORTAL_MCP_CONNECTIONS_JSON'], env: { PORTAL_MCP_NAME: name },
+          // Codex asks its own approval for tools that can change things, and the portal's handler only answers shell and file
+          // requests, so it declined every such call ("user rejected MCP tool call") without ever asking the person. The proxy
+          // already hides write tools unless the integration allows writes, so in a trusted session (the person allowed all tools)
+          // those calls are approved here. An untrusted session keeps Codex's prompt, which still fails closed.
+          ...(body.trusted === true ? { default_tools_approval_mode: 'approve' } : {}),
         }]));
         const ctx: CodexSessionContext = {
           run: { workDir, goal: body.prompt, model: body.model || null, engineSessionId: body.threadId || null,
