@@ -677,9 +677,9 @@ ${agentRun.goal}`;
     // vault in the Files panel. Without this the agent guesses Azure Key Vault, Obsidian or Drive. There is no vault tool: a file the
     // agent writes in the run folder becomes an output, and the portal copies outputs to the Team vault (or the person adds them with
     // "Add to vault" in the Outputs tab).
-    if (agentRun.projectId) agentRun.goal = `Portal vault: when the person says "vault", "our vault", "team vault" or "save to vault", they mean the portal's own file store (My vault / Team vault in the Files panel), not Azure Key Vault, Google Drive, Notion or Obsidian. To save something there, write it as a file in the current run folder: the portal collects it as an output and puts it in the vault (the person can also use "Add to vault" in the Outputs tab). Say which file you wrote. Do not ask which vault they mean. You cannot read the vault directly: for an existing vault file, ask the person to attach it.
+    if (agentRun.projectId) agentRun.goal = `${agentRun.goal}
 
-${agentRun.goal}`;
+Portal vault: when the person says "vault", "our vault", "team vault" or "save to vault", they mean the portal's own file store (My vault / Team vault in the Files panel), not Azure Key Vault, Google Drive, Notion or Obsidian. To save something there, write it as a file in the current run folder: the portal collects it as an output and puts it in the vault (the person can also use "Add to vault" in the Outputs tab). Say which file you wrote. Do not ask which vault they mean. You cannot read the vault directly: for an existing vault file, ask the person to attach it.`;
 
     // ── Run-time limit (FR-GUARD-10) ────────────────────────────────────────
     // Apply the per-workflow override or the global setting. The timer fires on the
