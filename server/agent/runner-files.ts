@@ -57,8 +57,10 @@ export const RUNNER_EXCLUDED_DIRS = new Set([
 
 export const RUNNER_FILE_LIMITS = {
   files: 50,
-  fileBytes: 10 * 1024 * 1024,
-  totalBytes: 40 * 1024 * 1024,
+  // Same per-file and total limits the portal applies to a local run's output (output-files.ts): a 10 MB cap dropped
+  // an 18 MB workbook from a cloud session without a word.
+  fileBytes: 25 * 1024 * 1024,
+  totalBytes: 100 * 1024 * 1024,
   chunkBytes: 192 * 1024,
   pathChars: 300,
 };
@@ -186,7 +188,11 @@ export function emitRunnerFiles(
   sinceMs = 0,
 ): number {
   const { files, skipped } = collectRunnerFiles(workDir, sinceMs);
-  if (!files.length) return 0;
+  if (!files.length) {
+    // Say so when files were left out: an empty Outputs tab with no explanation looks like the agent wrote nothing.
+    if (skipped) emit({ type: 'status', text: `${skipped} file${skipped === 1 ? ' was' : 's were'} not sent back (too large, too many or not allowed)` });
+    return 0;
+  }
   emit({ type: 'status', text: `Sending ${files.length} file${files.length === 1 ? '' : 's'} back${skipped ? ` (${skipped} skipped: too large, too many or not allowed)` : ''}` });
   for (const f of files) {
     let buf: Buffer;
