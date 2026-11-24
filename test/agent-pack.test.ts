@@ -129,6 +129,22 @@ describe('agent pack content', () => {
     assert.match(delegation, /Assumptions:/);
   });
 
+  it('solutions are split into services along business capabilities, so a change in one does not break another', () => {
+    const sb = skills.find((s) => s.name === 'service-boundaries');
+    assert.ok(sb, 'service-boundaries skill');
+    for (const w of ['## Split by business capability', 'owns its data', 'No shared database', '## Contracts between services',
+      'backward compatible', 'contract tests', '## Independent deployment', '## Failure isolation', 'modular monolith', '## Done checklist']) {
+      assert.ok(sb!.body.includes(w), `service-boundaries: ${w}`);
+    }
+    for (const n of ['lead-orchestrator', 'backend-engineer', 'infra-engineer', 'frontend-engineer']) {
+      assert.ok(agents.find((a) => a.name === n)!.skills.includes('service-boundaries'), `${n} loads service-boundaries`);
+    }
+    const lead = (agents.find((a) => a.lead) as PackAgent & { prompt: string }).prompt;
+    assert.match(lead, /separate services by business capability/);
+    const backend = (agents.find((a) => a.name === 'backend-engineer') as PackAgent & { prompt: string }).prompt;
+    assert.match(backend, /never reach into another service's database/);
+  });
+
   it('every agent shares notes in the folder that is saved with the session', () => {
     for (const a of agents as Array<PackAgent & { prompt: string }>) {
       assert.ok(a.skills.includes('agent-notes'), `${a.name}: agent-notes skill`);

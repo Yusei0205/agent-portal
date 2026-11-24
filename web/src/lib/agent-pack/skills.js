@@ -228,110 +228,124 @@ Re-read the other agents' files before each major step and before you report don
   skill('requirements-clarification', 'Find unclear or missing requirements before planning or building, ask the user the questions that would change the design, and record the rest as stated assumptions, so the work is not redone later. Use at the start of any task beyond a small, fully specified change.', `
 # Requirements clarification
 
-Rework mostly comes from building on a guess. Spend a few minutes finding the gaps before you plan or write code.
+Rework comes from building on guesses. Find the gaps before you plan or code.
 
 ## When
-- At the start of any task beyond a small change whose behaviour is fully specified (a typo, a one-line fix, a rename the user spelled out).
-- Again when you hit something the request did not cover while building.
+At the start of any task beyond a small, fully specified change, and again when the build hits something the request did not cover.
 
 ## What to check
-First read the repository, its docs and the agent notes: never ask what is answerable from the repository. Then go through:
-- **Goal and users:** who uses it, what problem it solves, what "done" looks like (acceptance criteria).
-- **Scope:** what is in and what is explicitly out; which parts of the system may change and which must not.
-- **Behaviour:** inputs and outputs, the main flow, edge cases (empty, duplicate, very large, concurrent), error cases and what the user sees.
-- **Data:** what is stored, its shape and validation, ownership, retention, migration of existing data.
-- **Interfaces:** APIs, events, files or screens other parts depend on; backward compatibility; versioning.
-- **Permissions and security:** who may do what; personal or sensitive data; secrets.
-- **Non-functional:** expected volume and response time, availability, cost limits, accessibility, supported browsers or platforms.
-- **Environments and delivery:** where it runs, configuration per environment, rollout, feature flags.
-- **Conflicts:** anything in the request that contradicts the code, the docs or another requirement.
+Read the repository, docs and agent notes first: never ask what is answerable from the repository. Then check: goal, users and acceptance criteria; scope and what must not change; behaviour, edge cases (empty, duplicate, large, concurrent) and errors; data, validation and migration; interfaces and backward compatibility; permissions and sensitive data; volume, speed, cost and availability; environments and rollout; anything contradicting the code or docs.
 
 ## Sort each question
-- **Blocking:** the answer changes the design, the data model, a public interface or contract, security or permissions, cost, or anything hard to undo. Ask before you build, and wait for the answer.
-- **Assumption:** a sensible default exists and changing it later is cheap. Do not ask; choose the default, write it down as an assumption, and carry on.
-When in doubt about which it is, ask whether a wrong guess would mean rewriting code. If yes, it is blocking.
+- **Blocking:** the answer changes the design, data model, a public interface, security, cost, or anything hard to undo. Ask and wait.
+- **Assumption:** a sensible default exists and changing it later is cheap. Choose it, write it down, carry on.
+If a wrong guess would mean rewriting code, it is blocking.
 
 ## How to ask
-Put all blocking questions in one message, highest impact first, at most about seven; group related ones. For each, give the reason and your proposed default, so the user can answer with "yes" or a letter:
+All blocking questions in one message, highest impact first, at most about seven:
 
 \`\`\`
 Open questions (blocking: the answers change the design)
 1. <question>
    Why it matters: <what it changes>
-   Options: a) <option>  b) <option>
-   Proposed default: <a or b, and why>
-2. ...
-
-Assumptions (I will go ahead with these unless you say otherwise)
+   Options: a) ...  b) ...
+   Proposed default: <choice and why>
+Assumptions (going ahead unless you say otherwise)
 - <assumption>
 \`\`\`
 
-Use the portal's question or ask-the-user tool when you have one; otherwise put this at the end of your reply and stop. Do not start building the parts that depend on an unanswered blocking question; you may do the independent parts.
+Use the portal's question or ask-the-user tool when you have one; otherwise end your reply with this and stop. Work only on parts no unanswered blocking question affects.
 
 ## Record the answers
-- Write the decisions and assumptions in your notes file (agent-notes skill) and in the plan, so the other agents build on the same answers.
-- Turn each answer into an acceptance criterion or a test where you can.
-- Where the project keeps decision records (ADRs, docs/decisions), add significant decisions there.
+Put decisions and assumptions in your notes file (agent-notes skill) and the plan; turn answers into acceptance criteria or tests; add significant decisions to the project's ADRs if it keeps them.
 
 ## During the build
-- A new blocking gap: stop that part, ask, and continue with the parts it does not affect.
-- Never quietly widen the scope or change an agreed interface to work around a gap.
+A new blocking gap: stop that part and ask. Never quietly widen the scope or change an agreed interface to work around it.
 
 ## In the final report
-List the assumptions you made, the questions still open, and anything you would confirm before release.
+List the assumptions made, questions still open, and what to confirm before release.
+`),
+
+  skill('service-boundaries', 'Design and change solutions as separate services split by business capability, each owning its data and talking to the others only through versioned contracts, so a change to one function cannot break another. Use when designing a solution or a new feature, adding a service, or changing how services talk to each other.', `
+# Service boundaries
+
+Goal: a change to one business function is made, tested and deployed in one service without breaking another.
+
+## Split by business capability
+- One service per capability the user would name (orders, payments, catalogue, notifications, identity), never per technical layer.
+- Each service owns its data and rules; write its responsibility in one sentence in the plan. Services that must change together for most features have the wrong boundary.
+- Map the user's flows to services; fewer well-chosen services beat many tiny ones.
+
+## Data
+- No shared database: only the owning service reads or writes its tables, collections or buckets. Others use its API or events, or keep a read-only copy fed by its events. No joins across services.
+- Each service has its own migrations, configuration and secrets.
+
+## Contracts between services
+- Write every interface down and version it: OpenAPI for HTTP, JSON Schema or AsyncAPI for events, kept with the provider.
+- Keep changes backward compatible: add optional fields and endpoints; never remove, rename or change meaning. A breaking change gets a new version (\`/v2\`, \`OrderPlaced.v2\`) beside the old until consumers move.
+- HTTP when the caller needs the answer now; events or queues (SNS/SQS, EventBridge, Kafka) when others only need to know. Consumers ignore unknown fields.
+- Add contract tests (Pact or schema checks) on both provider and consumer side.
+
+## Independent deployment
+- Own folder or repository, pipeline, infrastructure stack, health check, logs and alarms per service; deploying one never needs another.
+- Share only small versioned libraries (logging, auth helpers, generated clients), never business logic or another service's models.
+- The UI reaches services through a gateway or backend-for-frontend using their published contracts.
+
+## Failure isolation
+Timeouts, limited retries with backoff and idempotency keys on calls between services; degrade gracefully when another is down (queue, cache, clear message); cross-service workflows use events or sagas with compensation, not distributed transactions.
+
+## When not to split yet
+For a small project (one team, low traffic) a modular monolith is often better: one deployable with the same boundaries inside (a module per capability, its own tables, calls only through module interfaces). Splitting later is then a move, not a rewrite. Put this choice to the user as a blocking question with your recommendation (requirements-clarification skill); otherwise default to separate services.
+
+## Done checklist
+- [ ] One capability per service, owning its data; responsibility written in the plan
+- [ ] All cross-service calls through versioned contracts; no shared database
+- [ ] Changes backward compatible, or the new version runs beside the old; contract tests updated
+- [ ] The changed service deploys alone; timeouts, retries and idempotency between services
 `),
 
   skill('maintainable-code', 'Write code that is easy to read and change later, so it does not need refactoring: follow the repository conventions, small clear units, honest names, explicit boundaries, few and useful comments, and tests that pin behaviour. Use whenever you write or change application or infrastructure code.', `
 # Maintainable code
 
-The goal: an engineer who has never seen this code understands a change in one read, and the next feature does not need a rewrite.
+Goal: a newcomer understands a change in one read, and the next feature extends the code instead of rewriting it.
 
 ## Before writing code
-- Read how the repository already does the same kind of thing (a similar endpoint, component, module or stack) and do it that way: layout, naming, error handling, test style, formatter and linter. Consistency beats your preference.
-- Find the place the change belongs. Extend the existing module when it owns the concern; add a new one only for a new concern.
-- If the request is unclear about behaviour (inputs, edge cases, who calls it), ask or state your assumption in the report; do not guess silently.
+- Find how the repository already does the same thing (a similar endpoint, component or stack) and do it that way: layout, naming, errors, tests, formatter, linter.
+- Put the change where its concern already lives; add a module only for a new concern.
 
 ## Design for change
-- One responsibility per function, class and file. A function does one thing at one level of detail; split when you need "and" to describe it.
-- Keep boundaries explicit: HTTP / UI / CLI at the edge, business rules in the middle, data access and external services behind small interfaces. Business rules never import the web framework or the database client directly.
-- Depend on what you need, passed in (parameters, constructor), not on globals or hidden singletons; this keeps code testable and replaceable.
-- Put values that change between environments in configuration; put magic numbers and strings in named constants.
-- Make invalid states hard to represent: types, enums and validation at the boundary instead of checks scattered through the code.
-- Prefer plain, boring code: simple functions and data over clever abstractions, inheritance trees, metaprogramming or premature generic frameworks. Add an abstraction when a second or third real use needs it (Rule of three), not "for the future".
-- Keep public surfaces small: export only what callers use; keep helpers private.
-- Handle errors where you can act on them; otherwise let them propagate with context. Never swallow an error silently.
+- One job per function, class and file; split when describing it needs "and".
+- Edges (HTTP, UI, CLI) → business rules → data access and external services behind small interfaces. Rules never import the web framework or database client.
+- Pass dependencies in; no hidden globals. Environment values in configuration, magic values in named constants.
+- Validate at the boundary and use types or enums so invalid states cannot exist.
+- Plain code over clever abstractions, deep inheritance or metaprogramming. Abstract when a real second or third use appears (Rule of three), not "for later".
+- Export only what callers use. Handle an error where you can act on it; otherwise pass it on with context; never swallow it.
 
 ## Naming
-- Names say what something is or does in the domain's words: \`overdueInvoices\`, \`sendReminder\`, not \`data\`, \`list2\`, \`handle\`, \`doStuff\`, \`util\`.
-- Booleans read as questions (\`isActive\`, \`hasAccess\`); functions are verbs; collections are plural.
-- No abbreviations a newcomer must decode; no type or scope noise in names (\`strName\`, \`m_count\`).
-- A name that is hard to choose usually means the unit does too much: split it.
+- Domain words: \`overdueInvoices\`, \`sendReminder\`, not \`data\`, \`handle\`, \`util\`. Booleans as questions (\`isActive\`), functions as verbs, plural collections, no cryptic abbreviations.
+- A name that is hard to choose means the unit does too much.
 
 ## Comments
-- Good names and small functions come first; a comment is the last resort, not a substitute.
-- Explain why, not what: the reason for a non-obvious decision, a constraint from outside the code (a vendor limit, a regulation, a bug workaround with its link), or a trap the next engineer would fall into.
-- Document public interfaces (exported functions, API handlers, modules) with one short docstring: purpose, inputs, outputs, errors. Skip it for private helpers whose name says it all.
-- Do not add a comment that repeats the code (\`// increment i\`, \`# return the result\`), narrates your change (\`// added for ticket 123\`, \`// new logic\`), or marks sections of an obvious file.
-- No commented-out code (version control keeps history), no journal or author headers, no TODO without an owner or ticket.
-- When you change code, update or delete the comments next to it; a wrong comment is worse than none.
-- Keep comments in the language and style the repository already uses.
+- Names and small functions first; a comment is the last resort.
+- Explain why, not what: a non-obvious decision, an outside constraint (vendor limit, regulation, linked bug workaround), or a trap.
+- One short docstring on public interfaces (purpose, inputs, outputs, errors); none on private helpers whose name says it all.
+- Do not add a comment that repeats the code (\`// increment i\`) or narrates your change (\`// added for ticket 123\`). No commented-out code, author or journal headers, or TODO without an owner or ticket.
+- Update or delete comments next to code you change; a wrong comment is worse than none.
 
 ## When to refactor
-- Leave the code you touch a little clearer (a better name, an extracted function), within the scope of the task.
-- Do not rewrite or reformat unrelated code, rename across the codebase, or change public interfaces without being asked; list such improvements in your report instead.
-- Before a refactor, make sure tests cover the behaviour; refactor in small steps with the tests passing after each.
+- Leave touched code a little clearer (a name, an extracted function) within the task.
+- Do not rewrite or reformat unrelated code or change public interfaces unasked; list such clean-ups in your report.
+- Refactor only with tests covering the behaviour, in small steps that keep them passing.
 
-## Tests as documentation
-- Name tests after the behaviour (\`rejects an expired token\`), one behaviour per test, arranged as given / when / then.
-- Test through public interfaces, not private details, so tests survive refactoring.
+## Tests
+- Named after behaviour (\`rejects an expired token\`), one behaviour each, through public interfaces so they survive refactoring.
 
 ## Done checklist
-- [ ] Follows the repository's existing patterns, formatter and linter
-- [ ] Each new function / class has one clear job and an honest name
-- [ ] No duplicated logic you could have reused; no unused code, imports or parameters
-- [ ] Comments explain only why; no commented-out code, change narration or obvious comments
-- [ ] Public interfaces documented briefly; behaviour covered by tests
-- [ ] Report lists any larger clean-up you saw but did not do
+- [ ] Matches repository patterns; formatter and linter pass
+- [ ] One clear job and an honest name per new unit; no duplicated, unused or dead code
+- [ ] Comments only say why; no commented-out code or change narration
+- [ ] Public interfaces documented briefly; behaviour tested
+- [ ] Report lists larger clean-ups not done
 `),
 
   skill('api-design', 'Design HTTP/REST APIs and contracts: resource naming, status codes, errors, pagination, versioning, OpenAPI specs and backward compatibility. Use when adding or changing an API, or agreeing a contract between back end and front end.', `
