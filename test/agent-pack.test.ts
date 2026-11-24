@@ -95,6 +95,22 @@ describe('agent pack content', () => {
     for (const t of [...skills.map((s) => s.body), ...prompts]) assert.doesNotMatch(t, /(^|[^v] )pip install/m);
   });
 
+  it('the engineers write code that is easy to change and read: a maintainable-code skill and two shared rules', () => {
+    const mc = skills.find((s) => s.name === 'maintainable-code');
+    assert.ok(mc, 'maintainable-code skill');
+    for (const w of ['## Before writing code', '## Design for change', '## Naming', '## Comments', '## When to refactor', '## Done checklist',
+      'Explain why, not what', 'commented-out code', 'Rule of three', 'Do not add a comment that repeats the code']) {
+      assert.ok(mc!.body.includes(w), `maintainable-code: ${w}`);
+    }
+    for (const n of ['backend-engineer', 'frontend-engineer', 'infra-engineer']) {
+      assert.ok(agents.find((a) => a.name === n)!.skills.includes('maintainable-code'), `${n} loads maintainable-code`);
+    }
+    for (const a of agents as Array<PackAgent & { prompt: string }>) {
+      assert.match(a.prompt, /Write code a new engineer can follow/, `${a.name}: readable code rule`);
+      assert.match(a.prompt, /Comment only what the code cannot say/, `${a.name}: comment rule`);
+    }
+  });
+
   it('every agent shares notes in the folder that is saved with the session', () => {
     for (const a of agents as Array<PackAgent & { prompt: string }>) {
       assert.ok(a.skills.includes('agent-notes'), `${a.name}: agent-notes skill`);

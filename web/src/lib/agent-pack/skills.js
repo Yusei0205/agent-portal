@@ -223,6 +223,59 @@ Re-read the other agents' files before each major step and before you report don
 - [ ] Migrations included when the schema changed
 `),
 
+  skill('maintainable-code', 'Write code that is easy to read and change later, so it does not need refactoring: follow the repository conventions, small clear units, honest names, explicit boundaries, few and useful comments, and tests that pin behaviour. Use whenever you write or change application or infrastructure code.', `
+# Maintainable code
+
+The goal: an engineer who has never seen this code understands a change in one read, and the next feature does not need a rewrite.
+
+## Before writing code
+- Read how the repository already does the same kind of thing (a similar endpoint, component, module or stack) and do it that way: layout, naming, error handling, test style, formatter and linter. Consistency beats your preference.
+- Find the place the change belongs. Extend the existing module when it owns the concern; add a new one only for a new concern.
+- If the request is unclear about behaviour (inputs, edge cases, who calls it), ask or state your assumption in the report; do not guess silently.
+
+## Design for change
+- One responsibility per function, class and file. A function does one thing at one level of detail; split when you need "and" to describe it.
+- Keep boundaries explicit: HTTP / UI / CLI at the edge, business rules in the middle, data access and external services behind small interfaces. Business rules never import the web framework or the database client directly.
+- Depend on what you need, passed in (parameters, constructor), not on globals or hidden singletons; this keeps code testable and replaceable.
+- Put values that change between environments in configuration; put magic numbers and strings in named constants.
+- Make invalid states hard to represent: types, enums and validation at the boundary instead of checks scattered through the code.
+- Prefer plain, boring code: simple functions and data over clever abstractions, inheritance trees, metaprogramming or premature generic frameworks. Add an abstraction when a second or third real use needs it (Rule of three), not "for the future".
+- Keep public surfaces small: export only what callers use; keep helpers private.
+- Handle errors where you can act on them; otherwise let them propagate with context. Never swallow an error silently.
+
+## Naming
+- Names say what something is or does in the domain's words: \`overdueInvoices\`, \`sendReminder\`, not \`data\`, \`list2\`, \`handle\`, \`doStuff\`, \`util\`.
+- Booleans read as questions (\`isActive\`, \`hasAccess\`); functions are verbs; collections are plural.
+- No abbreviations a newcomer must decode; no type or scope noise in names (\`strName\`, \`m_count\`).
+- A name that is hard to choose usually means the unit does too much: split it.
+
+## Comments
+- Good names and small functions come first; a comment is the last resort, not a substitute.
+- Explain why, not what: the reason for a non-obvious decision, a constraint from outside the code (a vendor limit, a regulation, a bug workaround with its link), or a trap the next engineer would fall into.
+- Document public interfaces (exported functions, API handlers, modules) with one short docstring: purpose, inputs, outputs, errors. Skip it for private helpers whose name says it all.
+- Do not add a comment that repeats the code (\`// increment i\`, \`# return the result\`), narrates your change (\`// added for ticket 123\`, \`// new logic\`), or marks sections of an obvious file.
+- No commented-out code (version control keeps history), no journal or author headers, no TODO without an owner or ticket.
+- When you change code, update or delete the comments next to it; a wrong comment is worse than none.
+- Keep comments in the language and style the repository already uses.
+
+## When to refactor
+- Leave the code you touch a little clearer (a better name, an extracted function), within the scope of the task.
+- Do not rewrite or reformat unrelated code, rename across the codebase, or change public interfaces without being asked; list such improvements in your report instead.
+- Before a refactor, make sure tests cover the behaviour; refactor in small steps with the tests passing after each.
+
+## Tests as documentation
+- Name tests after the behaviour (\`rejects an expired token\`), one behaviour per test, arranged as given / when / then.
+- Test through public interfaces, not private details, so tests survive refactoring.
+
+## Done checklist
+- [ ] Follows the repository's existing patterns, formatter and linter
+- [ ] Each new function / class has one clear job and an honest name
+- [ ] No duplicated logic you could have reused; no unused code, imports or parameters
+- [ ] Comments explain only why; no commented-out code, change narration or obvious comments
+- [ ] Public interfaces documented briefly; behaviour covered by tests
+- [ ] Report lists any larger clean-up you saw but did not do
+`),
+
   skill('api-design', 'Design HTTP/REST APIs and contracts: resource naming, status codes, errors, pagination, versioning, OpenAPI specs and backward compatibility. Use when adding or changing an API, or agreeing a contract between back end and front end.', `
 # API design
 
