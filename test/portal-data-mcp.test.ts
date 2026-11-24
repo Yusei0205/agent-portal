@@ -12,7 +12,7 @@ import { config } from '../server/config.ts';
 import { hashPassword } from '../server/auth.ts';
 import { getKnowledgeRepository } from '../server/repositories/knowledge.ts';
 import { getVaultFilesRepository } from '../server/repositories/vault-files.ts';
-import { issuePortalDataToken, verifyPortalDataToken, portalDataMcpSpec } from '../server/portal-data-mcp.ts';
+import { issuePortalDataToken, verifyPortalDataToken, portalDataMcpSpec, portalDataLocalSpec } from '../server/portal-data-mcp.ts';
 import { buildRunnerMcpServers } from '../server/agent/runner-integrations.ts';
 
 type Json = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -100,6 +100,14 @@ describe('portal data for agents (Knowledge and Vault)', () => {
     assert.equal(s.url, 'https://k.example/api/mcp/portal-data');
     assert.equal(s.allowWrites, false);
     assert.match(s.headers.Authorization!, /^Bearer pd_/);
+  });
+
+  it('a run on this machine reaches it over the loopback address, with the same kind of token', () => {
+    const s = portalDataLocalSpec('u', 'p', 8787)!;
+    assert.equal(s.url, 'http://127.0.0.1:8787/api/mcp/portal-data');
+    assert.deepEqual(verifyPortalDataToken(s.headers.Authorization!.slice(7)), { userId: 'u', projectId: 'p' });
+    assert.equal(portalDataLocalSpec(null, 'p', 8787), null);
+    assert.equal(portalDataLocalSpec('u', null, 8787), null);
   });
 
   it('every cloud run gets it, first, whatever integrations the session chose', async () => {

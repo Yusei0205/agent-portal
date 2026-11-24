@@ -238,6 +238,16 @@ describe('Claude Code engine — skills loaded on demand (read_skill)', () => {
     assert.match(text, /BODY_IN_PROMPT=false/);
   });
 
+  it('a run on this machine gets the portal\'s Knowledge and Vault server over the loopback address', async () => {
+    const { ctx, events } = await makeRunContext(t, {
+      localPortalData: { name: 'portal-data', url: 'http://127.0.0.1:8787/api/mcp/portal-data', headers: { Authorization: 'Bearer pd_x.y' }, allowWrites: false },
+    });
+    await runClaudeCode(ctx);
+    const text = events.filter((e) => e.type === 'assistant-text').map((e) => String(e.payload.text)).join('');
+    assert.match(text, /SERVERS=[^ ]*portal-data/);
+    assert.match(text, /DATA=http:http:\/\/127\.0\.0\.1:8787\/api\/mcp\/portal-data/);
+  });
+
   it('offers no read_skill when no agent loads skills on demand', async () => {
     const slug = (getDb().prepare('SELECT slug FROM projects WHERE id = ?').get(t.projectId) as { slug: string }).slug;
     fs.rmSync(path.join(t.cfg.dataDir, 'projects', slug, '.claude', 'agents'), { recursive: true, force: true });

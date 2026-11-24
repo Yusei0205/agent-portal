@@ -69,6 +69,21 @@ export function portalDataMcpSpec(userId: string | null, projectId: string | nul
   };
 }
 
+/**
+ * The same server for a run on this machine (Claude or Kiro without a cloud runner), over the loopback address. The token is
+ * the same short-lived one; it never leaves the machine.
+ */
+export function portalDataLocalSpec(userId: string | null, projectId: string | null, port: number = config.port):
+  { name: string; url: string; headers: Record<string, string>; allowWrites: boolean } | null {
+  if (!userId || !projectId || !port) return null;
+  return {
+    name: PORTAL_DATA_SERVER,
+    url: `http://127.0.0.1:${port}/api/mcp/portal-data`,
+    headers: { Authorization: `Bearer ${issuePortalDataToken(userId, projectId)}` },
+    allowWrites: false,
+  };
+}
+
 // ── Access ────────────────────────────────────────────────────────────────────
 
 /** The project, when the person may see it now (a member, or a portal admin); else null. */

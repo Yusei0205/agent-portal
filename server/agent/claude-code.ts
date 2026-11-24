@@ -528,7 +528,13 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
       // Non-fatal: the agents still have their preloaded skills and the index.
     }
   }
-  const portalMcpServers = delegationMcpServers || skillMcpServers ? { ...(delegationMcpServers ?? {}), ...(skillMcpServers ?? {}) } : undefined;
+  // The portal's Knowledge and Vault tools (portal-data-mcp.ts), served by this portal over the loopback address.
+  const localData = run.localPortalData
+    ? { [run.localPortalData.name]: { type: 'http' as const, url: run.localPortalData.url, headers: run.localPortalData.headers } }
+    : undefined;
+  const portalMcpServers = delegationMcpServers || skillMcpServers || localData
+    ? { ...(delegationMcpServers ?? {}), ...(skillMcpServers ?? {}), ...(localData ?? {}) }
+    : undefined;
 
   // ── Run SDK ────────────────────────────────────────────────────────────────
   const abortController = new AbortController();

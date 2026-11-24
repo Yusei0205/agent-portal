@@ -14,6 +14,7 @@
  * ALL decisions route through evaluateCommand() from guardrails.ts.
  */
 
+import { portalDataLocalSpec } from '../portal-data-mcp.ts';
 import { portalToolsBriefing } from './portal-tools-guidance.ts';
 import { stageChatAttachments, stagePriorAttachments } from '../session-attachments.ts';
 import { getReviewsRepository } from '../repositories/reviews.ts';
@@ -648,6 +649,10 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
         }
       }
     } else {
+      // Knowledge and the Vault for a run on this machine: Claude and Kiro take an MCP server; Codex and Cursor do not here.
+      if (agentRun.engine === 'claude-code' || agentRun.engine === 'kiro') {
+        agentRun.localPortalData = portalDataLocalSpec(agentRun.credentialOwnerId ?? null, agentRun.projectId ?? null) ?? undefined;
+      }
       // A zip attached to the message: unpack it here, as a cloud runner does when it receives the files.
       unpackInputZips(workDir, (e) => emitRunEvent(runId, agentRun.projectId, workflowId, 'status', { text: e.text }));
       availableRepoNames = await populateRepoWorkDirs(
@@ -675,7 +680,8 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
 
 ${portalToolsBriefing({
       project: Boolean(agentRun.projectId),
-      integrations: (agentRun.runnerMcpServers ?? []).map((s) => ({ name: s.name, url: s.url })),
+      integrations: [...(agentRun.runnerMcpServers ?? []), ...(agentRun.localPortalData ? [agentRun.localPortalData] : [])]
+        .map((s) => ({ name: s.name, url: s.url })),
       browser: runsOnAgentCore && process.env.PORTAL_AGENTCORE_BROWSER === '1',
       jiraUnavailable,
       awsAccount: Boolean(agentRun.runnerAwsEnv && Object.keys(agentRun.runnerAwsEnv).length),

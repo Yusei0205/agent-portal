@@ -1261,6 +1261,21 @@ export async function runKiro(ctx: RunContext): Promise<string> {
     } catch { /* Non-fatal */ }
   }
 
+  // ── The portal's Knowledge and Vault tools (portal-data-mcp.ts), over the loopback address ──
+  if (homeDir && run.localPortalData) {
+    try {
+      const settingsDir = path.join(homeDir, '.kiro', 'settings');
+      await fsp.mkdir(settingsDir, { recursive: true });
+      const mcpJsonPath = path.join(settingsDir, 'mcp.json');
+      const raw = await fsp.readFile(mcpJsonPath, 'utf8').catch(() => '');
+      const cfg = (raw.trim() ? JSON.parse(raw) : {}) as { mcpServers?: Record<string, unknown> };
+      cfg.mcpServers = { ...(cfg.mcpServers ?? {}), [run.localPortalData.name]: { url: run.localPortalData.url, headers: run.localPortalData.headers } };
+      await fsp.writeFile(mcpJsonPath, JSON.stringify(cfg, null, 2), 'utf8');
+    } catch {
+      emit('run', { text: 'Knowledge and Vault tools skipped: ~/.kiro/settings/mcp.json could not be read.' });
+    }
+  }
+
   // ── Live browser + Playwright MCP rewrite ──────────────────────────────────
   // When the materialised mcp.json contains a @playwright/mcp entry, start the
   // portal-managed live browser and rewrite the entry to use --cdp-endpoint so
@@ -1337,8 +1352,10 @@ export async function runKiro(ctx: RunContext): Promise<string> {
         const raw = await fsp.readFile(mcpJsonPath, 'utf8').catch(() => '');
         if (raw.trim()) {
           const cfg = JSON.parse(raw) as { mcpServers?: Record<string, unknown> };
-          if (cfg.mcpServers?.['portal-delegation']) {
-            delete cfg.mcpServers['portal-delegation'];
+          // The run's own entries (they carry run tokens) never outlive the run.
+          const runEntries = ['portal-delegation', ...(run.localPortalData ? [run.localPortalData.name] : [])];
+          if (cfg.mcpServers && runEntries.some((k) => cfg.mcpServers![k])) {
+            for (const k of runEntries) delete cfg.mcpServers[k];
             await fsp.writeFile(mcpJsonPath, JSON.stringify(cfg, null, 2), 'utf8');
           }
         }

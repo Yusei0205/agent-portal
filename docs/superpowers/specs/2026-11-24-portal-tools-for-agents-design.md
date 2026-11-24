@@ -23,6 +23,13 @@ agents could not read the project's Knowledge or the Vault at all.
    https public address. The tool policy already allows read-only MCP tools without asking.
 3. SQLite keyword search now matches any word (quoted, OR), like the DynamoDB index, so whole questions find passages locally too.
 
+## Local runs (added the same day)
+
+Claude and Kiro runs on the portal's own machine get the same server over the loopback address (`portalDataLocalSpec`,
+`AgentRun.localPortalData`): Claude as an HTTP MCP server in the SDK options, Kiro as an entry in the run home's
+`~/.kiro/settings/mcp.json`, removed after the run like the delegation entry. Codex and Cursor on the portal's machine take no
+MCP configuration here (their config handling refuses it by design), so their briefing says to ask for an attachment.
+
 ## Not included
 
-Local (non-cloud) runs do not get the portal-data server yet (the deployed portal runs sessions in the cloud). No write tools.
+No write tools.

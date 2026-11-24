@@ -27,6 +27,8 @@ export interface AgentRun {
   runnerRepos?: import('./runner-repos.ts').RunnerRepo[];
   /** Set when the run goes to an AgentCore runner: the project's enabled MCP integrations (see runner-integrations.ts). */
   runnerMcpServers?: import('./runner-mcp.ts').McpServerSpec[];
+  /** A run on this machine (Claude or Kiro): the portal's Knowledge and Vault tools over the loopback address (portal-data-mcp.ts). */
+  localPortalData?: import('./runner-mcp.ts').McpServerSpec;
   /** The project's default AWS account as AWS_* variables for the agent's shell (server/project-aws.ts). */
   runnerAwsEnv?: Record<string, string>;
   /** Files staged in the run folder (attachments, chosen project documents) to hand to the runner. */

@@ -44,7 +44,7 @@ export async function* query({ prompt, options }) {
     yield {
       type: 'assistant',
       message: {
-        content: [{ type: 'text', text: `TOOL=${t ? t.name : 'none'} POLICY=${policy?.behavior ?? 'none'} RESULT<<${out?.content?.[0]?.text ?? ''}>> INDEX=${lead.includes('# Skills you can load')} BODY_IN_PROMPT=${lead.includes('PYTHON-BODY')}` }],
+        content: [{ type: 'text', text: `SERVERS=${Object.keys(options?.mcpServers ?? {}).sort().join(',')} DATA=${options?.mcpServers?.['portal-data']?.type ?? 'none'}:${options?.mcpServers?.['portal-data']?.url ?? ''} TOOL=${t ? t.name : 'none'} POLICY=${policy?.behavior ?? 'none'} RESULT<<${out?.content?.[0]?.text ?? ''}>> INDEX=${lead.includes('# Skills you can load')} BODY_IN_PROMPT=${lead.includes('PYTHON-BODY')}` }],
         usage: { input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
       },
     };
