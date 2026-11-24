@@ -111,6 +111,24 @@ describe('agent pack content', () => {
     }
   });
 
+  it('agents list unclear requirements while planning, ask the ones that change the design, and record assumptions', () => {
+    const rc = skills.find((s) => s.name === 'requirements-clarification');
+    assert.ok(rc, 'requirements-clarification skill');
+    for (const w of ['## When', '## What to check', '## Sort each question', 'Blocking', 'Assumption', '## How to ask', 'Open questions',
+      'Proposed default', 'answerable from the repository', '## Record the answers', '## During the build', '## In the final report']) {
+      assert.ok(rc!.body.includes(w), `requirements-clarification: ${w}`);
+    }
+    for (const n of ['lead-orchestrator', 'backend-engineer', 'frontend-engineer', 'infra-engineer', 'tech-writer']) {
+      assert.ok(agents.find((a) => a.name === n)!.skills.includes('requirements-clarification'), `${n} loads requirements-clarification`);
+    }
+    for (const a of agents as Array<PackAgent & { prompt: string }>) {
+      assert.match(a.prompt, /Plan before you build/, `${a.name}: planning rule`);
+    }
+    const delegation = skills.find((s) => s.name === 'task-delegation')!.body;
+    assert.match(delegation, /requirements-clarification skill/);
+    assert.match(delegation, /Assumptions:/);
+  });
+
   it('every agent shares notes in the folder that is saved with the session', () => {
     for (const a of agents as Array<PackAgent & { prompt: string }>) {
       assert.ok(a.skills.includes('agent-notes'), `${a.name}: agent-notes skill`);

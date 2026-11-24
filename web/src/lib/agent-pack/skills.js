@@ -16,7 +16,7 @@ You are the lead. You plan, delegate, check and combine. You do small glue work 
 ## 1. Understand before splitting
 - Restate the goal in one sentence and list what "done" means (acceptance criteria).
 - Read the repository first: README, build files (package.json, pom.xml, pyproject.toml, build.gradle), infra folders, existing docs.
-- If a decision only the user can make blocks the plan (scope, budget, target environment), ask once, briefly. Otherwise pick a sensible default and say so.
+- List what is unclear before you plan (requirements-clarification skill): ask the user the blocking questions together, in one message, and wait for the answers; record the rest as assumptions. Questions a specialist will meet later belong in your plan too, so you can ask them now rather than mid-build.
 
 ## 2. Split into tasks
 Each task must be independently doable and checkable:
@@ -42,10 +42,11 @@ Give every agent a self-contained brief (it does not see your conversation):
 \`\`\`
 Goal: <one sentence>
 Context: <what exists, relevant files, decisions already made>
+Assumptions: <what you assumed where the user did not say; the specialist must not silently change them>
 Task: <exactly what to produce>
 Constraints: <language/framework versions, style, files it may and may not touch>
 Done when: <tests pass / command output / file exists / checklist>
-Report back: <summary, files changed, how verified, open questions>
+Report back: <summary, files changed, how verified, open questions and any assumption it had to add>
 \`\`\`
 
 Put the plan, who does what and the shared decisions in your notes file (agent-notes skill) before you hand off, so every specialist can read them; still give each brief everything its agent needs.
@@ -62,6 +63,7 @@ Put the plan, who does what and the shared decisions in your notes file (agent-n
 - Read each result critically: does it meet "done when"? Check that the files exist and run the tests or commands yourself when you can. A specialist's summary says what it meant to do, not necessarily what it did.
 - Resolve conflicts between agents (naming, contracts, versions) before moving on.
 - If a result is wrong, send it back with the specific gap, not a vague "fix it".
+- A specialist that reports a blocking question: answer it from the decisions you have, or ask the user; do not let it guess.
 
 ## 7. Report
 Finish with: what was done (by whom), how it was verified, what is left or risky, and next steps. Be honest about anything not verified.
@@ -221,6 +223,62 @@ Re-read the other agents' files before each major step and before you report don
 - [ ] Type check, lint, tests and build pass
 - [ ] Inputs validated; errors mapped; no secrets committed
 - [ ] Migrations included when the schema changed
+`),
+
+  skill('requirements-clarification', 'Find unclear or missing requirements before planning or building, ask the user the questions that would change the design, and record the rest as stated assumptions, so the work is not redone later. Use at the start of any task beyond a small, fully specified change.', `
+# Requirements clarification
+
+Rework mostly comes from building on a guess. Spend a few minutes finding the gaps before you plan or write code.
+
+## When
+- At the start of any task beyond a small change whose behaviour is fully specified (a typo, a one-line fix, a rename the user spelled out).
+- Again when you hit something the request did not cover while building.
+
+## What to check
+First read the repository, its docs and the agent notes: never ask what is answerable from the repository. Then go through:
+- **Goal and users:** who uses it, what problem it solves, what "done" looks like (acceptance criteria).
+- **Scope:** what is in and what is explicitly out; which parts of the system may change and which must not.
+- **Behaviour:** inputs and outputs, the main flow, edge cases (empty, duplicate, very large, concurrent), error cases and what the user sees.
+- **Data:** what is stored, its shape and validation, ownership, retention, migration of existing data.
+- **Interfaces:** APIs, events, files or screens other parts depend on; backward compatibility; versioning.
+- **Permissions and security:** who may do what; personal or sensitive data; secrets.
+- **Non-functional:** expected volume and response time, availability, cost limits, accessibility, supported browsers or platforms.
+- **Environments and delivery:** where it runs, configuration per environment, rollout, feature flags.
+- **Conflicts:** anything in the request that contradicts the code, the docs or another requirement.
+
+## Sort each question
+- **Blocking:** the answer changes the design, the data model, a public interface or contract, security or permissions, cost, or anything hard to undo. Ask before you build, and wait for the answer.
+- **Assumption:** a sensible default exists and changing it later is cheap. Do not ask; choose the default, write it down as an assumption, and carry on.
+When in doubt about which it is, ask whether a wrong guess would mean rewriting code. If yes, it is blocking.
+
+## How to ask
+Put all blocking questions in one message, highest impact first, at most about seven; group related ones. For each, give the reason and your proposed default, so the user can answer with "yes" or a letter:
+
+\`\`\`
+Open questions (blocking: the answers change the design)
+1. <question>
+   Why it matters: <what it changes>
+   Options: a) <option>  b) <option>
+   Proposed default: <a or b, and why>
+2. ...
+
+Assumptions (I will go ahead with these unless you say otherwise)
+- <assumption>
+\`\`\`
+
+Use the portal's question or ask-the-user tool when you have one; otherwise put this at the end of your reply and stop. Do not start building the parts that depend on an unanswered blocking question; you may do the independent parts.
+
+## Record the answers
+- Write the decisions and assumptions in your notes file (agent-notes skill) and in the plan, so the other agents build on the same answers.
+- Turn each answer into an acceptance criterion or a test where you can.
+- Where the project keeps decision records (ADRs, docs/decisions), add significant decisions there.
+
+## During the build
+- A new blocking gap: stop that part, ask, and continue with the parts it does not affect.
+- Never quietly widen the scope or change an agreed interface to work around a gap.
+
+## In the final report
+List the assumptions you made, the questions still open, and anything you would confirm before release.
 `),
 
   skill('maintainable-code', 'Write code that is easy to read and change later, so it does not need refactoring: follow the repository conventions, small clear units, honest names, explicit boundaries, few and useful comments, and tests that pin behaviour. Use whenever you write or change application or infrastructure code.', `
