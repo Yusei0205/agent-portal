@@ -12,6 +12,7 @@ import { api } from '../../lib/api.js';
 import { Icon } from '../../components/Icon.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
+import { planFolderUpload, readDroppedItems, runLimited, skippedNote } from '../../lib/upload-folder.js';
 
 function extOf(name) {
   const dot = name.lastIndexOf('.');
@@ -264,6 +265,8 @@ function ScopeSection({ root, workflowId, onFileOpen, globalRefreshCount }) {
   const [open, setOpen]           = useState(true);
   const [dragging, setDragging]   = useState(false);
   const [uploadError, setUploadError] = useState(null);
+  const [progress, setProgress] = useState(null); // { done, total } while files are being sent
+  const [uploadNote, setUploadNote] = useState('');
   const [focusedPath, setFocusedPath] = useState(null); // for roving tabindex
   const [showNewFile, setShowNewFile]     = useState(false);
   const [newFileName, setNewFileName]     = useState('');
@@ -319,39 +322,51 @@ function ScopeSection({ root, workflowId, onFileOpen, globalRefreshCount }) {
     } catch (e) { toast(e.message, 'error'); }
   };
 
-  // Upload: check res.ok and surface 4xx/5xx errors (fix #3)
-  const handleUpload = (files) => {
-    setUploadError(null);
-    Array.from(files).forEach((file) => {
-      const fd = new FormData();
-      fd.append('file', file);
-      fetch(`/api/workflows/${workflowId}/ide/upload`, {
-        method: 'POST',
-        headers: { 'x-requested-with': 'agent-portal' },
-        credentials: 'same-origin',
-        body: fd,
-      })
-        .then(async (res) => {
-          if (!res.ok) {
-            let msg = `Upload failed (HTTP ${res.status})`;
-            try {
-              const body = await res.json();
-              msg = body.error ?? body.message ?? msg;
-            } catch { /* use status text */ }
-            setUploadError(msg);
-            return;
-          }
-          load();
-        })
-        .catch((e) => setUploadError(e.message));
+  // One file into uploads, in `dir` (its folder inside an uploaded folder, or '' for the top). Rejects with the server's message.
+  const uploadOne = async (file, dir) => {
+    const fd = new FormData();
+    fd.append('file', file);
+    const res = await fetch(`/api/workflows/${workflowId}/ide/upload${dir ? `?dir=${encodeURIComponent(dir)}` : ''}`, {
+      method: 'POST',
+      headers: { 'x-requested-with': 'agent-portal' },
+      credentials: 'same-origin',
+      body: fd,
     });
+    if (!res.ok) {
+      let msg = `Upload failed (HTTP ${res.status})`;
+      try {
+        const body = await res.json();
+        msg = body.error ?? body.message ?? msg;
+      } catch { /* use status text */ }
+      throw new Error(`${file.name}: ${msg}`);
+    }
   };
+
+  // Files and whole folders: each file keeps its path inside the folder; dependency and version-control folders are left out.
+  const uploadEntries = async (entries) => {
+    setUploadError(null);
+    setUploadNote('');
+    const plan = planFolderUpload(entries);
+    const note = skippedNote(plan);
+    if (!plan.items.length) { setUploadNote(note || 'Nothing to upload.'); return; }
+    setProgress({ done: 0, total: plan.items.length });
+    const errors = await runLimited(plan.items, 4, (it) => uploadOne(it.file, it.dir), (done) => setProgress({ done, total: plan.items.length }));
+    setProgress(null);
+    if (errors.length) setUploadError(errors.length === 1 ? errors[0] : `${errors.length} files failed. First: ${errors[0]}`);
+    const sent = plan.items.length - errors.length;
+    setUploadNote([plan.items.length > 1 ? `Uploaded ${sent} of ${plan.items.length} files.` : '', note].filter(Boolean).join(' '));
+    load();
+  };
+
+  // From the file pickers: a folder picker gives each file its path inside the folder (webkitRelativePath).
+  const handleUpload = (files) => uploadEntries(Array.from(files ?? []).map((file) => ({ file, relPath: file.webkitRelativePath || file.name })));
 
   const handleDrop = (e) => {
     e.preventDefault();
     setDragging(false);
     if (root.readOnly) return;
-    handleUpload(e.dataTransfer.files);
+    // Read the drop before the event ends: the browser empties dataTransfer afterwards.
+    readDroppedItems(e.dataTransfer).then(uploadEntries).catch((err) => setUploadError(err.message));
   };
 
   const handleDownloadZip = () => {
@@ -446,7 +461,32 @@ function ScopeSection({ root, workflowId, onFileOpen, globalRefreshCount }) {
                     type="file"
                     multiple
                     style={{ display: 'none' }}
-                    onChange={(e) => handleUpload(e.target.files)}
+                    onChange={(e) => { handleUpload(e.target.files); e.target.value = ''; }}
+                  />
+                </label>
+              )}
+              {root.scope === 'uploads' && (
+                <label
+                  title="Upload folder"
+                  aria-label="Upload folder"
+                  style={{
+                    width: 22,
+                    height: 22,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <Icon name="folder-upload" size={12} />
+                  <input
+                    type="file"
+                    multiple
+                    webkitdirectory=""
+                    directory=""
+                    style={{ display: 'none' }}
+                    data-testid="upload-folder-input"
+                    onChange={(e) => { handleUpload(e.target.files); e.target.value = ''; }}
                   />
                 </label>
               )}
@@ -465,6 +505,18 @@ function ScopeSection({ root, workflowId, onFileOpen, globalRefreshCount }) {
         </span>
       </div>
 
+      {progress && (
+        <div className="ide-upload-progress" role="status" aria-live="polite">
+          <span>Uploading {progress.done} of {progress.total}…</span>
+          <span className="ide-upload-bar"><span style={{ width: `${Math.round((progress.done / progress.total) * 100)}%` }} /></span>
+        </div>
+      )}
+      {!progress && uploadNote && (
+        <div className="ide-upload-note muted" role="status">
+          {uploadNote}
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setUploadNote('')} style={{ marginLeft: 4 }}>Dismiss</button>
+        </div>
+      )}
       {uploadError && (
         <div
           className="error-note"
@@ -539,7 +591,7 @@ function ScopeSection({ root, workflowId, onFileOpen, globalRefreshCount }) {
           ))}
           {entries?.length === 0 && (
             <div style={{ padding: '6px 16px', fontSize: '0.78rem', color: 'var(--ink-3)' }}>
-              {isReadOnly ? 'No files' : 'Drop files here to upload'}
+              {isReadOnly ? 'No files' : 'Drop files or folders here to upload'}
             </div>
           )}
         </div>

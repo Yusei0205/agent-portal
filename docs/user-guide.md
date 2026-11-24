@@ -152,7 +152,7 @@ A vertical bar of icon buttons on the left edge. Each button toggles a sidebar p
 | Terminal (Ctrl+`) | Integrated terminal |
 
 **Explorer panel**
-Shows root sections for each repo in the session's workspace, an **Uploads** section (drag-and-drop or upload button), **My vault** (read-only, your personal vault files), and **Team vault** (read-only, project and portal vault files). You can create files and folders, rename and delete items in the workspace sections. You can download any section as a zip.
+Shows root sections for each repo in the session's workspace, an **Uploads** section (drag files or folders onto it, or use the **Upload file** and **Upload folder** buttons), **My vault** (read-only, your personal vault files), and **Team vault** (read-only, project and portal vault files). You can create files and folders, rename and delete items in the workspace sections. You can download any section as a zip. An uploaded folder keeps its structure (sub-folders included), so the agent sees it as it is on your computer. Folders such as `node_modules`, `.git`, `__pycache__` and virtual environments are left out, as are files over 50 MB and anything past the first 1,000 files; a line under the section says what was uploaded and what was left out, and a progress bar shows while files are sent.
 
 **Editor panel**
 Click any file in the Explorer to open it in the editor. Save with **Ctrl+S**.

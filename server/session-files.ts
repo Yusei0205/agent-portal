@@ -14,7 +14,7 @@
  *   POST   /api/workflows/:id/ide/folder            — create folder
  *   DELETE /api/workflows/:id/ide/file              — delete file or folder
  *   PATCH  /api/workflows/:id/ide/rename            — rename
- *   POST   /api/workflows/:id/ide/upload            — multipart upload → uploads scope
+ *   POST   /api/workflows/:id/ide/upload?dir=a/b    — multipart upload → uploads scope (dir: keeps an uploaded folder's structure)
  *   GET    /api/workflows/:id/ide/download-zip      — zip download of scope/subpath
  *   GET    /api/workflows/:id/ide/git/status        — git status across repos
  *   GET    /api/workflows/:id/ide/git/diff          — git diff for one file
@@ -145,6 +145,25 @@ function parseMultipartUploadMulti(
     });
   }
   return files;
+}
+
+/**
+ * The folder inside uploads that an upload goes to (`?dir=`, the file's folder when a whole folder is uploaded), as a clean relative
+ * path: '' for none, or null when it is not allowed (absolute, '.', '..', empty segments, deeper than 20 levels). Each name is made
+ * safe the same way as a file name.
+ */
+export function uploadSubdir(raw: string | null | undefined): string | null {
+  const dir = String(raw ?? '').replace(/\\/g, '/');
+  if (!dir) return '';
+  if (dir.startsWith('/')) return null;
+  const parts = dir.split('/');
+  if (parts.length > 20) return null;
+  const clean: string[] = [];
+  for (const part of parts) {
+    if (!part || part === '.' || part === '..') return null;
+    clean.push(part.replace(/[^\w.\-]/g, '_').slice(0, 100));
+  }
+  return clean.join('/');
 }
 
 // ── Working copy resolution ───────────────────────────────────────────────────
@@ -927,6 +946,12 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
+    const subdir = uploadSubdir(req.query.get('dir'));
+    if (subdir === null) {
+      sendJson(res, 400, { error: 'That folder path is not allowed' });
+      return;
+    }
+
     const ct = String(req.headers['content-type'] ?? '');
     let uploadedFiles: UploadedFile[];
     try {
@@ -961,14 +986,17 @@ export function registerSessionFileRoutes(): void {
       return;
     }
 
-    await fsp.mkdir(roots.uploadsDir, { recursive: true });
+    const targetDir = subdir ? path.join(roots.uploadsDir, subdir) : roots.uploadsDir;
+    assertPathContained(targetDir, roots.uploadsDir);
+    await fsp.mkdir(targetDir, { recursive: true });
 
     const savedFiles: Array<{ path: string; size: number; name: string; mtime: number }> = [];
     for (const uploaded of uploadedFiles) {
       const safeFilename = path.basename(uploaded.filename)
         .replace(/[^\w.\-]/g, '_')
         .slice(0, 200);
-      const destPath = path.join(roots.uploadsDir, safeFilename);
+      const relPath = subdir ? `${subdir}/${safeFilename}` : safeFilename;
+      const destPath = path.join(roots.uploadsDir, relPath);
       assertPathContained(destPath, roots.uploadsDir);
 
       await fsp.writeFile(destPath, uploaded.data);
@@ -980,11 +1008,11 @@ export function registerSessionFileRoutes(): void {
         req.user!.id,
         'ide.upload',
         `workflow:${req.params.id}`,
-        { filename: safeFilename, size: stat.size },
+        { filename: relPath, size: stat.size },
         req.ip,
       );
 
-      savedFiles.push({ path: safeFilename, size: stat.size, name: safeFilename, mtime: stat.mtimeMs });
+      savedFiles.push({ path: relPath, size: stat.size, name: safeFilename, mtime: stat.mtimeMs });
     }
 
     // Return new contract { files: [{path, size}] } plus backward-compat { ok, file }

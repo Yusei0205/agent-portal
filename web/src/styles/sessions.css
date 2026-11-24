@@ -1410,3 +1410,9 @@
 /* Plan mode: a chip next to the tools chip, and a visible cue on the message box while it is on */
 .ws-mode-plan.is-plan { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); }
 .ws-composer--plan .ws-composer-row { border-style: dashed; border-color: var(--accent); }
+
+/* Session explorer: uploading many files (a folder) */
+.ide-upload-progress { display: grid; gap: 3px; margin: 2px 8px 4px; font-size: 0.76rem; color: var(--ink-2); }
+.ide-upload-bar { display: block; height: 4px; border-radius: 2px; background: var(--raised); overflow: hidden; }
+.ide-upload-bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.2s ease; }
+.ide-upload-note { margin: 2px 8px 4px; font-size: 0.76rem; }

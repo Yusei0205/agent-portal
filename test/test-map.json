@@ -433,7 +433,8 @@
         "web/src/pages/sessions/xterm-terminal.jsx",
         "web/src/lib/outputFileUtils.js",
         "web/src/lib/terminal-pipe.js",
-        "web/src/styles/ide.css"
+        "web/src/styles/ide.css",
+        "web/src/lib/upload-folder.js"
       ],
       "tests": [
         "test/agent-orbit.test.ts",
@@ -447,7 +448,8 @@
         "test/terminal.test.ts",
         "test/terminal-cloud.test.ts",
         "test/runner-terminal.test.ts",
-        "test/terminal-pipe.test.ts"
+        "test/terminal-pipe.test.ts",
+        "test/upload-folder.test.ts"
       ],
       "smokeIds": [
         "ide"

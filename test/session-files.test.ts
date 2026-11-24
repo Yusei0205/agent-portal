@@ -186,6 +186,32 @@ describe('Session IDE Files API', () => {
     assert.equal(file.scope, 'uploads');
   });
 
+  it('POST /ide/upload?dir= keeps a folder\'s structure, and refuses a path that leaves the uploads folder', async () => {
+    const send = async (dir: string, name: string): Promise<Response> => {
+      const { body: multipartBody, contentType } = makeMultipart(name, `content of ${name}`, 'text/plain');
+      return fetch(`${baseUrl}/api/workflows/${workflowId}/ide/upload?dir=${encodeURIComponent(dir)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': contentType, 'X-Requested-With': 'agent-portal', Cookie: adminCookie },
+        body: multipartBody,
+      });
+    };
+    const ok = await send('my project/src/utils', 'a.ts');
+    assert.equal(ok.status, 200);
+    const data = await ok.json() as { files: Array<{ path: string }> };
+    assert.equal(data.files[0]!.path, 'my_project/src/utils/a.ts');
+    const tree = await fetchJson(baseUrl, `/api/workflows/${workflowId}/ide/tree?scope=uploads&path=my_project/src/utils`, { cookie: adminCookie });
+    assert.ok(((tree.body as { entries: Array<{ name: string }> }).entries).some((e) => e.name === 'a.ts'));
+    const read = await fetchJson(baseUrl, `/api/workflows/${workflowId}/ide/file?scope=uploads&path=my_project/src/utils/a.ts`, { cookie: adminCookie });
+    assert.match(JSON.stringify(read.body), /content of a\.ts/);
+    for (const bad of ['../outside', 'a/../../b', '/etc', 'a//b', '.', 'x/'.repeat(25) + 'y']) {
+      const r = await send(bad, 'b.txt');
+      assert.equal(r.status, 400, `dir ${bad} should be refused`);
+    }
+    // No dir (or an empty one) still uploads to the top of the uploads folder.
+    const top = await send('', 'top.txt');
+    assert.equal(((await top.json()) as { files: Array<{ path: string }> }).files[0]!.path, 'top.txt');
+  });
+
   it('POST /ide/upload respects size cap (>50 MB)', async () => {
     // Create a buffer slightly over the 50 MB cap
     const bigContent = Buffer.alloc(51 * 1024 * 1024, 'x');

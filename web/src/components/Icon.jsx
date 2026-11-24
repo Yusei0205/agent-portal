@@ -107,6 +107,7 @@ const PATHS = {
   clock:        'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 6v6l4 2',
   'file-plus':  'M14 3H6v18h12V7l-4-4Zm0 0v4h4M9 12h6M12 9v6',
   'folder-plus': 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7ZM12 11v6M9 14h6',
+  'folder-upload': 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7ZM12 17v-6m0 0-3 3m3-3 3 3',
   'zip-download': 'M12 18v-6M12 18l-3-3m3 3 3-3M5 8H3M5 8a2 2 0 0 1-2-2V5h18v1a2 2 0 0 1-2 2H5ZM3 8v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8',
   slash:        'M6 4h12M6 20h12M16 4 8 20',
   'idle-stop':  'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20ZM12 8v4M12 16h.01',

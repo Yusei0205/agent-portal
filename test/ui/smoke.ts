@@ -15,6 +15,7 @@ import { chromium, type Browser, type BrowserContext, type Page } from 'playwrig
 import * as cp from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -2483,6 +2484,36 @@ async function main() {
       await explorerBtn.click();
       await pressed(true).waitFor({ timeout: 3000 });
       await explorerSidebar.waitFor({ state: 'visible', timeout: 3000 });
+    }, page);
+
+    await test('Explorer: Upload folder keeps the folder\'s structure and leaves out node_modules', async (p) => {
+      if (!demoSessionId) throw new Error('Could not create demo session');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-folder-'));
+      const root = path.join(dir, 'specs');
+      fs.mkdirSync(path.join(root, 'api'), { recursive: true });
+      fs.mkdirSync(path.join(root, 'node_modules', 'pkg'), { recursive: true });
+      fs.writeFileSync(path.join(root, 'README.md'), '# Specs');
+      fs.writeFileSync(path.join(root, 'api', 'orders.yaml'), 'openapi: 3.0.0');
+      fs.writeFileSync(path.join(root, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1');
+      try {
+        await goto(p, `/p/${projectId}/sessions/${demoSessionId}`, 2000);
+        await p.waitForSelector('.ide-workspace', { timeout: 8_000 });
+        const explorerBtn = p.locator('.ide-activity-btn[title*="Explorer"]').first();
+        if (await explorerBtn.getAttribute('aria-pressed') !== 'true') await explorerBtn.click();
+        const input = p.getByTestId('upload-folder-input').first();
+        await input.waitFor({ state: 'attached', timeout: 5000 });
+        if ((await input.getAttribute('webkitdirectory')) === null) throw new Error('The folder input is not a folder picker');
+        await input.setInputFiles(root);
+        await p.locator('.ide-upload-note').filter({ hasText: 'Uploaded 2 of 2 files' }).waitFor({ timeout: 10_000 });
+        await p.locator('.ide-upload-note').filter({ hasText: '1 file in dependency, version-control or system folders' }).waitFor({ timeout: 2000 });
+        const tree = await apiGet(`/api/workflows/${demoSessionId}/ide/tree?scope=uploads&path=specs/api`) as { entries?: Array<{ name: string }> };
+        if (!tree.entries?.some((e) => e.name === 'orders.yaml')) throw new Error(`specs/api/orders.yaml was not uploaded: ${JSON.stringify(tree)}`);
+        const top = await apiGet(`/api/workflows/${demoSessionId}/ide/tree?scope=uploads&path=specs`) as { entries?: Array<{ name: string }> };
+        if (top.entries?.some((e) => e.name === 'node_modules')) throw new Error('node_modules was uploaded');
+        await p.locator('.ide-tree [role="treeitem"]').filter({ hasText: 'specs' }).first().waitFor({ timeout: 5000 });
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
     }, page);
 
     await test('Source control panel opens via activity button', async (p) => {
