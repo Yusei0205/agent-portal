@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { parseAgentFile, parseFrontMatter, loadAgentDefinitions, AGENT_LIMITS } from '../server/agent/agent-defs.ts';
+import { parseAgentFile, parseFrontMatter, loadAgentDefinitions, loadSkillLibrary, AGENT_LIMITS } from '../server/agent/agent-defs.ts';
 import { agentModelFor } from '../server/agent/claude-agentcore-bedrock.ts';
 
 const reviewer = `---
@@ -71,6 +71,40 @@ describe('agent files', () => {
     assert.equal(withModel('claude-opus-4-5'), 'global.anthropic.claude-opus-4-5-20251101-v1:0');
     assert.equal(withModel('global.anthropic.claude-sonnet-4-5-20250929-v1:0'), 'global.anthropic.claude-sonnet-4-5-20250929-v1:0');
     assert.equal(withModel('gpt-5'), undefined, 'not a Claude model: the run\'s model');
+  });
+
+  it('preloads `skills:` and lists `on-demand-skills:` as an index the agent reads with read_skill', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agents-ondemand-'));
+    const skill = (name: string, desc: string, body: string) => {
+      fs.mkdirSync(path.join(root, 'skills', name), { recursive: true });
+      fs.writeFileSync(path.join(root, 'skills', name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${desc}\n---\n${body}`);
+    };
+    skill('rules', 'House rules.', 'RULES-BODY');
+    skill('backend-python', 'Python back ends. Use for FastAPI work.', 'PYTHON-BODY');
+    skill('backend-java', 'Java back ends.', 'JAVA-BODY');
+    fs.mkdirSync(path.join(root, 'agents'));
+    fs.writeFileSync(path.join(root, 'agents', 'be.md'), '---\nname: be\ndescription: Backend\nskills: [rules]\non-demand-skills: [backend-python, backend-java, missing, rules]\n---\nYou build back ends.');
+    fs.writeFileSync(path.join(root, 'agents', 'rev.md'), '---\nname: rev\ndescription: Reviewer\ntools: Read, Grep\non-demand-skills: [backend-python]\n---\nYou review.');
+    const defs = loadAgentDefinitions([path.join(root, 'agents')], undefined, [path.join(root, 'skills')]);
+    const be = defs.be!.prompt;
+    assert.match(be, /# Skill: rules\n\nRULES-BODY/, 'rules preloaded');
+    assert.doesNotMatch(be, /PYTHON-BODY|JAVA-BODY/, 'on-demand bodies are not in the prompt');
+    assert.match(be, /# Skills you can load/);
+    assert.match(be, /- backend-python: Python back ends\. Use for FastAPI work\./);
+    assert.match(be, /- backend-java: Java back ends\./);
+    assert.doesNotMatch(be, /- missing:/, 'a skill that does not exist is not listed');
+    assert.doesNotMatch(be, /- rules:/, 'a preloaded skill is not listed again');
+    // An agent limited to some tools gets read_skill added, so it can load its skills.
+    assert.deepEqual(defs.rev!.tools, ['Read', 'Grep', 'mcp__portal-skills__read_skill']);
+    // The library holds every skill in the folders, by name, without front matter.
+    const lib = loadSkillLibrary([path.join(root, 'skills'), null, path.join(root, 'nope')]);
+    assert.deepEqual(Object.keys(lib).sort(), ['backend-java', 'backend-python', 'rules']);
+    assert.equal(lib['backend-python'], 'PYTHON-BODY');
+    // A later folder (the project's) wins.
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'skills-project-'));
+    fs.mkdirSync(path.join(project, 'backend-python'));
+    fs.writeFileSync(path.join(project, 'backend-python', 'SKILL.md'), '---\nname: backend-python\ndescription: d\n---\nPROJECT-PYTHON');
+    assert.equal(loadSkillLibrary([path.join(root, 'skills'), project])['backend-python'], 'PROJECT-PYTHON');
   });
 
   it('loads folders in order: a later folder wins on a name clash; bad files are skipped', () => {

@@ -34,6 +34,24 @@ export async function* query({ prompt, options }) {
     return;
   }
 
+  if (scenario === 'skill-tool') {
+    // Reports which agents and portal tools the engine offered, then calls read_skill the way Claude would.
+    const server = options?.mcpServers?.['portal-skills'];
+    const t = server?.tools?.[0];
+    const policy = canUseTool ? await canUseTool('mcp__portal-skills__read_skill', { name: 'backend-python' }, { signal: new AbortController().signal, suggestions: [] }) : null;
+    const out = t ? await t.handler({ name: 'backend-python' }) : null;
+    const lead = options?.agents?.be?.prompt ?? '';
+    yield {
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: `TOOL=${t ? t.name : 'none'} POLICY=${policy?.behavior ?? 'none'} RESULT<<${out?.content?.[0]?.text ?? ''}>> INDEX=${lead.includes('# Skills you can load')} BODY_IN_PROMPT=${lead.includes('PYTHON-BODY')}` }],
+        usage: { input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      },
+    };
+    yield { type: 'result', subtype: 'success', total_cost_usd: 0.001, num_turns: 1, is_error: false, result: 'done', stop_reason: 'end_turn' };
+    return;
+  }
+
   if (scenario === 'echo-prompt') {
     // Hands the prompt the engine sent back as the reply, so a test can see exactly what the model would have read.
     yield {

@@ -473,3 +473,17 @@ describe('validateFinalizeRequest', () => {
     assert.equal(okF({ ...good(), snapshot: undefined }).snapshot, undefined);
   });
 });
+
+describe('skillLibrary (on-demand skills for read_skill)', () => {
+  it('accepts an object of skill texts and passes it on', () => {
+    const p = ok({ ...minPayload(), skillLibrary: { 'backend-python': 'Use FastAPI.' } });
+    assert.deepEqual(p.skillLibrary, { 'backend-python': 'Use FastAPI.' });
+    assert.equal(ok(minPayload()).skillLibrary, undefined);
+  });
+  it('refuses a wrong shape, non-text values, too many skills or too much text', () => {
+    fail({ ...minPayload(), skillLibrary: ['x'] }, '"skillLibrary"');
+    fail({ ...minPayload(), skillLibrary: { a: 5 } }, '"skillLibrary"');
+    fail({ ...minPayload(), skillLibrary: Object.fromEntries(Array.from({ length: 81 }, (_, i) => [`s${i}`, 'x'])) }, '"skillLibrary"');
+    fail({ ...minPayload(), skillLibrary: { a: 'x'.repeat(600_001) } }, '"skillLibrary" is too large');
+  });
+});

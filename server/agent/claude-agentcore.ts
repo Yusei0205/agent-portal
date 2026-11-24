@@ -12,6 +12,7 @@
  * tool-blocked {toolName,reason}, result {stop_reason, metrics}, error {message}.
  */
 
+import { usesOnDemandSkills } from './skill-library.ts';
 import { PORTAL_TURN_LIMIT_MS } from './turn-limit.ts';
 import { randomUUID } from 'node:crypto';
 import { invokeAgentCore } from './kiro-agentcore.ts';
@@ -61,6 +62,8 @@ export interface ClaudeAgentCoreOpts {
   agents?: Record<string, import('./agent-defs.ts').AgentDefinitionPayload>;
   /** The session's lead agent: one of `agents`, run as the main conversation. */
   agent?: string | null;
+  /** Skills the agents read on demand (read_skill); sent only when an agent uses them (an older runner rejects the field). */
+  skillLibrary?: Record<string, string>;
 }
 
 export interface ClaudeAgentCoreResult {
@@ -203,6 +206,7 @@ export async function runClaudeViaAgentCore(ctx: RunContext, opts: ClaudeAgentCo
     ...(opts.checks?.length ? { checks: opts.checks } : {}),
     ...(opts.agents && Object.keys(opts.agents).length ? { agents: opts.agents } : {}),
     ...(opts.agent && opts.agents?.[opts.agent] ? { agent: opts.agent } : {}),
+    ...(opts.skillLibrary && Object.keys(opts.skillLibrary).length && usesOnDemandSkills(opts.agents) ? { skillLibrary: opts.skillLibrary } : {}),
     ...(snapshot ? { snapshot } : {}),
     ...(finalizeCheck ? { finalizeCheck: true } : {}),
     ...(checkedReport ? { checkedReport: true } : {}),

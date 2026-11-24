@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { guardToolCall } from './guard.ts';
 import { isReallyInsideDir } from '../real-path.ts';
+import { SKILL_TOOL_FULL_NAME } from './skill-library.ts';
 
 // ── Tool families ─────────────────────────────────────────────────────────────
 
@@ -206,6 +207,9 @@ export interface ToolCallCheck {
 
 export function decideToolCall(c: ToolCallCheck): ToolDecision {
   const { toolName, input } = c;
+
+  // The portal's own read_skill only returns skill text the portal supplied: nothing to approve, also in plan mode.
+  if (toolName === SKILL_TOOL_FULL_NAME) return { action: 'allow' };
 
   if (c.planMode) {
     const denial = planModeDenial(toolName, input);

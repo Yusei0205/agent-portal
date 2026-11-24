@@ -11,7 +11,8 @@ import path from 'node:path';
 import { config } from '../config.ts';
 import { one, type Row } from '../db.ts';
 import { getRunHomeDir } from '../user-config.ts';
-import { loadAgentDefinitions, type AgentDefinitionPayload } from './agent-defs.ts';
+import { loadAgentDefinitions, loadSkillLibrary, type AgentDefinitionPayload } from './agent-defs.ts';
+import type { SkillLibrary } from './skill-library.ts';
 import { anthropicModelFor } from './anthropic-models.ts';
 import type { AgentRun } from './types.ts';
 
@@ -39,6 +40,13 @@ export function loadRunAgents(
     mapModel,
     [sub(homeClaude, 'skills'), sub(project, 'skills')],
   );
+}
+
+/** The skills a run's agents may read on demand (read_skill): the owner's ~/.claude/skills, then the project's .claude/skills. */
+export function loadRunSkillLibrary(run: Pick<AgentRun, 'runId' | 'projectId'>): SkillLibrary {
+  const home = getRunHomeDir(run.runId);
+  const project = projectClaudeDir(run.projectId);
+  return loadSkillLibrary([home ? path.join(home, '.claude', 'skills') : null, project ? path.join(project, 'skills') : null]);
 }
 
 /** The session's lead agent when it is one of the run's agents (the SDK's `agent` option), else null. */

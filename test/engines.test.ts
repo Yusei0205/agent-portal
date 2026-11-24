@@ -205,6 +205,49 @@ describe('Claude Code engine — event mapping', () => {
   });
 });
 
+describe('Claude Code engine — skills loaded on demand (read_skill)', () => {
+  let t: TestData;
+
+  before(() => {
+    createTestDb();
+    t = makeTestData();
+    process.env.PORTAL_SDK_MODULE = `file://${FAKE_SDK}`;
+    process.env.PORTAL_FAKE_SDK_SCENARIO = 'skill-tool';
+  });
+
+  after(async () => {
+    delete process.env.PORTAL_SDK_MODULE;
+    delete process.env.PORTAL_FAKE_SDK_SCENARIO;
+    await cleanup();
+  });
+
+  it('offers read_skill when an agent lists on-demand skills, allows it without asking, and returns the skill', async () => {
+    const slug = (getDb().prepare('SELECT slug FROM projects WHERE id = ?').get(t.projectId) as { slug: string }).slug;
+    const claude = path.join(t.cfg.dataDir, 'projects', slug, '.claude');
+    fs.mkdirSync(path.join(claude, 'agents'), { recursive: true });
+    fs.mkdirSync(path.join(claude, 'skills', 'backend-python'), { recursive: true });
+    fs.writeFileSync(path.join(claude, 'skills', 'backend-python', 'SKILL.md'), '---\nname: backend-python\ndescription: Python back ends.\n---\nPYTHON-BODY');
+    fs.writeFileSync(path.join(claude, 'agents', 'be.md'), '---\nname: be\ndescription: Backend\non-demand-skills: [backend-python]\n---\nYou build back ends.');
+    const { ctx, events } = await makeRunContext(t);
+    await runClaudeCode(ctx);
+    const text = events.filter((e) => e.type === 'assistant-text').map((e) => String(e.payload.text)).join('');
+    assert.match(text, /TOOL=read_skill/);
+    assert.match(text, /POLICY=allow/);
+    assert.match(text, /RESULT<<# Skill: backend-python\n\nPYTHON-BODY>>/);
+    assert.match(text, /INDEX=true/);
+    assert.match(text, /BODY_IN_PROMPT=false/);
+  });
+
+  it('offers no read_skill when no agent loads skills on demand', async () => {
+    const slug = (getDb().prepare('SELECT slug FROM projects WHERE id = ?').get(t.projectId) as { slug: string }).slug;
+    fs.rmSync(path.join(t.cfg.dataDir, 'projects', slug, '.claude', 'agents'), { recursive: true, force: true });
+    const { ctx, events } = await makeRunContext(t);
+    await runClaudeCode(ctx);
+    const text = events.filter((e) => e.type === 'assistant-text').map((e) => String(e.payload.text)).join('');
+    assert.match(text, /TOOL=none/);
+  });
+});
+
 describe('Claude Code engine — terse replies (caveman)', () => {
   let t: TestData;
 

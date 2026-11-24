@@ -35,7 +35,8 @@ import { createChildSession } from '../delegation.ts';
 import { getRunHomeDir } from '../user-config.ts';
 import { toPolicyRules } from './tool-policy.ts';
 import { type AgentDefinitionPayload } from './agent-defs.ts';
-import { loadRunAgents, leadAgentFor } from './run-agents.ts';
+import { loadRunAgents, loadRunSkillLibrary, leadAgentFor } from './run-agents.ts';
+import { usesOnDemandSkills } from './skill-library.ts';
 import { buildConversationRecap } from './recap.ts';
 import { ApprovalRelay, DelegationRelay, isApprovalRequest, isDelegateRequest } from './agentcore-bridge.ts';
 import { invokeAgentCore, agentCoreControlSender, runnerApprovals } from './kiro-agentcore.ts';
@@ -237,6 +238,8 @@ export async function runClaudeViaAgentCore(ctx: RunContext, runtimeArn: string,
     // The session's lead agent runs the main conversation (its prompt, tools and skills).
     ...(leadAgentFor(run, agents) ? { agent: leadAgentFor(run, agents) } : {}),
     ...(canDelegate ? { delegation: { via: 'portal' } } : {}),
+    // Skills the agents load on demand (read_skill); only when one uses them, as an older runner rejects the field.
+    ...(usesOnDemandSkills(agents) ? { skillLibrary: loadRunSkillLibrary(run) } : {}),
     ...(hasRepos ? { repos: run.runnerRepos } : {}),
     ...(snapshot ? { snapshot } : {}),
     ...(finalizeCheck ? { finalizeCheck: true } : {}),

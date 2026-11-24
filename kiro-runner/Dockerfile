@@ -46,7 +46,7 @@ COPY server/agent/runner-graph-build.ts ./shared/runner-graph-build.ts
 COPY server/agent/runner-browser-capture.ts ./shared/runner-browser-capture.ts
 COPY agent-runner/src/browser-tools.ts ./shared/browser-tools.ts
 # Portal modules the runner shares with the portal (guard, approvals, env scrub), same layout as server/.
-COPY server/agent/guard.ts server/agent/env-scrub.ts server/agent/agentcore-approvals.ts server/agent/tool-policy.ts ./shared/agent/
+COPY server/agent/guard.ts server/agent/env-scrub.ts server/agent/agentcore-approvals.ts server/agent/tool-policy.ts server/agent/skill-library.ts ./shared/agent/
 COPY server/real-path.ts ./shared/real-path.ts
 
 # Compile + bundle → dist/index.mjs (no external runtime deps; node:* built-ins only)

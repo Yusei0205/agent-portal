@@ -20,6 +20,7 @@ const SHARED = [
   ['agent/env-scrub.ts', 'agent/env-scrub.ts'],
   ['agent/agentcore-approvals.ts', 'agent/agentcore-approvals.ts'],
   ['agent/tool-policy.ts', 'agent/tool-policy.ts'],
+  ['agent/skill-library.ts', 'agent/skill-library.ts'],
   ['real-path.ts', 'real-path.ts'],
   // The runner's own pure modules (files, repositories, snapshots, MCP, checks).
   ['agent/runner-files.ts', 'runner-files.ts'],

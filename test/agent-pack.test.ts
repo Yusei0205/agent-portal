@@ -9,8 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 // @ts-expect-error — plain JS module without type declarations
-import { PACK_AGENTS, PACK_SKILLS, kiroPackFiles, claudePackFiles, agentPackFiles, packUpdatePlan, packFileLabel } from '../web/src/lib/agent-pack/index.js';
-import { parseAgentFile, parseFrontMatter, loadAgentDefinitions, AGENT_NAME, SKILL_NAME, AGENT_LIMITS } from '../server/agent/agent-defs.ts';
+import { PACK_AGENTS, PACK_SKILLS, ALWAYS_LOADED_SKILLS, kiroPackFiles, claudePackFiles, agentPackFiles, packUpdatePlan, packFileLabel } from '../web/src/lib/agent-pack/index.js';
+import { parseAgentFile, parseFrontMatter, loadAgentDefinitions, loadSkillLibrary, AGENT_NAME, SKILL_NAME, AGENT_LIMITS } from '../server/agent/agent-defs.ts';
 import { leadAgentFor, anthropicAgentModel } from '../server/agent/run-agents.ts';
 import { collectKiroConfig, hasKiroAgent, KIRO_CONFIG_PATH } from '../server/agent/kiro-config-files.ts';
 import { parseKiroConfig, writeKiroConfig } from '../kiro-runner/src/kiro-config.ts';
@@ -219,7 +219,11 @@ describe('agent pack for Claude Code', () => {
       const defs = loadAgentDefinitions([path.join(home, 'agents')], anthropicAgentModel, [path.join(home, 'skills')]);
       assert.deepEqual(Object.keys(defs).sort(), agents.map((a) => a.name).sort());
       for (const a of agents) {
-        for (const s of a.skills) assert.ok(defs[a.name].prompt.includes(`# Skill: ${s}`), `${a.name} preloads ${s}`);
+        // Rule skills are preloaded; the others are listed for read_skill.
+        for (const s of a.skills) {
+          if (ALWAYS_LOADED_SKILLS.includes(s)) assert.ok(defs[a.name].prompt.includes(`# Skill: ${s}`), `${a.name} preloads ${s}`);
+          else assert.ok(defs[a.name].prompt.includes(`\n- ${s}: `), `${a.name} lists ${s}`);
+        }
         assert.equal(defs[a.name].model, 'inherit');
         // With room to spare: a skill that would pass the limit is left out without a word.
         assert.ok(defs[a.name].prompt.length < AGENT_LIMITS.maxPrompt / 2, `${a.name}: ${defs[a.name].prompt.length} characters with its skills`);
@@ -230,6 +234,30 @@ describe('agent pack for Claude Code', () => {
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it('preloads only the rule skills; stack skills are listed and loaded on demand with read_skill', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-claude-ondemand-'));
+    try {
+      writeTree(home, files);
+      const defs = loadAgentDefinitions([path.join(home, 'agents')], anthropicAgentModel, [path.join(home, 'skills')]);
+      const be = defs['backend-engineer']!.prompt;
+      for (const rule of ['agent-notes', 'requirements-clarification', 'maintainable-code']) assert.ok(be.includes(`# Skill: ${rule}`), `backend preloads ${rule}`);
+      for (const stack of ['backend-python', 'backend-java', 'backend-node-typescript', 'api-design', 'service-boundaries']) {
+        assert.ok(!be.includes(`# Skill: ${stack}`), `backend does not preload ${stack}`);
+        assert.match(be, new RegExp(`\\n- ${stack}: `), `backend lists ${stack}`);
+      }
+      assert.ok(be.length < 14_000, `backend-engineer starts with ${be.length} characters`);
+      assert.ok(defs['lead-orchestrator']!.prompt.includes('# Skill: task-delegation'), 'the lead always has task-delegation');
+      assert.ok(defs['security-reviewer']!.tools!.includes('mcp__portal-skills__read_skill'), 'a tool-limited agent can still read skills');
+      const lib = loadSkillLibrary([path.join(home, 'skills')]);
+      assert.equal(Object.keys(lib).length, skills.length, 'every pack skill can be read');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+    const be = files.find((f) => f.path === 'agents/backend-engineer.md')!.content;
+    assert.match(be, /^skills: \[maintainable-code, requirements-clarification, agent-notes\]$/m);
+    assert.match(be, /^on-demand-skills: \[backend-python, backend-java, backend-node-typescript, api-design, service-boundaries\]$/m);
   });
 
   it('the portal lists them with their names (front matter)', () => {

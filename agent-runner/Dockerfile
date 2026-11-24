@@ -29,7 +29,7 @@ COPY agent-runner/build.mjs ./
 # a copy at build time so the compiled bundle includes the live versions).
 # run.ts imports them from ../shared/agent/*.ts and ../shared/real-path.ts (same layout as server/), and its own
 # modules from ../shared/runner-*.ts.
-COPY server/agent/guard.ts server/agent/env-scrub.ts server/agent/tool-policy.ts server/agent/pricing.ts server/agent/agentcore-approvals.ts ./shared/agent/
+COPY server/agent/guard.ts server/agent/env-scrub.ts server/agent/tool-policy.ts server/agent/pricing.ts server/agent/agentcore-approvals.ts server/agent/skill-library.ts ./shared/agent/
 COPY server/real-path.ts ./shared/real-path.ts
 COPY server/agent/runner-files.ts ./shared/runner-files.ts
 COPY server/agent/runner-repos.ts ./shared/runner-repos.ts

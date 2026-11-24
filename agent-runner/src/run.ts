@@ -54,6 +54,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { scrubEnvForShell } from '../shared/agent/env-scrub.ts';
 import { decideToolCall, inputFingerprint } from '../shared/agent/tool-policy.ts';
+import { SKILL_SERVER, parseSkillLibrary, skillToolSpec } from '../shared/agent/skill-library.ts';
 import { estimateCost } from '../shared/agent/pricing.ts';
 import type { ApprovalBroker } from '../shared/agent/agentcore-approvals.ts';
 import { AgentCoreBrowser, BROWSER_SERVER_NAME, createBrowserMcpServer } from './browser-tools.js';
@@ -163,12 +164,22 @@ async function portalMcpServers(
   broker: ApprovalBroker | undefined,
   stop: AbortSignal,
 ): Promise<Record<string, unknown> | undefined> {
-  if (!payload.delegation || !broker) return undefined;
+  const library = parseSkillLibrary(payload.skillLibrary);
+  const wantSkills = Object.keys(library).length > 0;
+  if (!wantSkills && (!payload.delegation || !broker)) return undefined;
   if (typeof sdk.tool !== 'function' || typeof sdk.createSdkMcpServer !== 'function') {
-    emit({ type: 'status', text: 'Child sessions are not available: this Agent SDK has no in-process tools.' });
+    emit({ type: 'status', text: 'Child sessions and on-demand skills are not available: this Agent SDK has no in-process tools.' });
     return undefined;
   }
   const { z } = await import('zod');
+  // read_skill: the agents' on-demand skills (their prompts list them by name only).
+  const skillServers: Record<string, unknown> = {};
+  if (wantSkills) {
+    const spec = skillToolSpec(library);
+    const readSkill = sdk.tool(spec.name, spec.description, { name: z.string().describe('The skill name, e.g. backend-python') }, spec.handler);
+    skillServers[SKILL_SERVER] = sdk.createSdkMcpServer({ name: SKILL_SERVER, version: '1.0.0', tools: [readSkill], alwaysLoad: true });
+  }
+  if (!payload.delegation || !broker) return skillServers;
   // The run's agents can each run a child session as its lead agent (a lead hands a whole piece to a specialist).
   const agentNames = Object.keys(payload.agents ?? {});
   const delegate = sdk.tool(
@@ -207,6 +218,7 @@ async function portalMcpServers(
   // alwaysLoad: the tool is always in the prompt, never deferred behind tool search, so
   // Claude sees delegate_session from its first turn.
   return {
+    ...skillServers,
     [PORTAL_MCP_SERVER]: sdk.createSdkMcpServer({ name: PORTAL_MCP_SERVER, version: '1.0.0', tools: [delegate], alwaysLoad: true }),
   };
 }

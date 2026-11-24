@@ -135,6 +135,8 @@ export interface InvocationPayload {
   /** The session's lead agent: one of `agents`, run as the main conversation. */
   agent?: string;
   delegation?: DelegationPayload;
+  /** Skills the agents read on demand with read_skill, by name (parsed again by shared/agent/skill-library.ts in run.ts). */
+  skillLibrary?: Record<string, string>;
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -148,11 +150,13 @@ export const DEFAULT_MAX_BUDGET_USD = 0.5;
 export const DEFAULT_MAX_MINUTES = 10;
 
 const MAX_PROMPT_LENGTH = 100_000;
+const MAX_SKILLS = 80;
+const MAX_SKILL_LIBRARY_CHARS = 600_000;
 const MAX_REPO_URL_LENGTH = 1_024;
 const MAX_RUN_ID_LENGTH = 256;
 const KNOWN_FIELDS = new Set([
   'mode', 'runId', 'prompt', 'model', 'maxTurns', 'maxBudgetUsd', 'effort', 'maxMinutes', 'repo', 'repos', 'mcpServers', 'awsEnv', 'bedrockEnv', 'inputFiles', 'checks', 'snapshot', 'prepareOnly', 'finalizeCheck', 'checkedReport', 'portal', 'auth', 'trustTools', 'browser', 'browserAccounts', 'browserHosts', 'browserManualSignIn', 'browserKeepOpen', 'browserResumeSession', 'policy', 'approvals',
-  'agents', 'agent', 'delegation',
+  'agents', 'agent', 'delegation', 'skillLibrary',
 ]);
 const AWS_ENV_KEYS = new Set(['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'AWS_REGION', 'AWS_DEFAULT_REGION']);
 
@@ -397,6 +401,16 @@ export function validatePayload(raw: unknown): ValidationResult {
     agent = obj.agent;
   }
 
+  let skillLibrary: Record<string, string> | undefined;
+  if (obj.skillLibrary !== undefined) {
+    const lib = obj.skillLibrary as Record<string, unknown>;
+    if (typeof lib !== 'object' || lib === null || Array.isArray(lib)) return err('"skillLibrary" must be an object of skill texts by name');
+    const entries = Object.entries(lib);
+    if (entries.length > MAX_SKILLS || entries.some(([, v]) => typeof v !== 'string')) return err(`"skillLibrary" must hold at most ${MAX_SKILLS} skill texts`);
+    if (entries.reduce((t, [, v]) => t + (v as string).length, 0) > MAX_SKILL_LIBRARY_CHARS) return err('"skillLibrary" is too large');
+    skillLibrary = lib as Record<string, string>;
+  }
+
   let delegation: DelegationPayload | undefined;
   if (obj.delegation !== undefined) {
     const d = obj.delegation as Record<string, unknown>;
@@ -442,6 +456,7 @@ export function validatePayload(raw: unknown): ValidationResult {
       agents,
       ...(agent ? { agent } : {}),
       delegation,
+      ...(skillLibrary ? { skillLibrary } : {}),
     },
   };
 }

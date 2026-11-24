@@ -4,7 +4,8 @@
  * One definition per agent produces:
  *   Kiro         ~/.kiro/agents/<name>.json      (CLI V3 format; skills via `resources: skill://…`)
  *                ~/.kiro/skills/<skill>/SKILL.md
- *   Claude Code  ~/.claude/agents/<name>.md      (YAML front matter; `skills:` preloads the agent's skills)
+ *   Claude Code  ~/.claude/agents/<name>.md      (YAML front matter; `skills:` preloads the rule skills, `on-demand-skills:`
+ *                                                lists the rest, read with the portal's read_skill tool)
  *                ~/.claude/skills/<skill>/SKILL.md
  *
  * Added from Agent setup (Agent pack). The first time, every file is added. Later, the same button updates the
@@ -190,6 +191,13 @@ export function kiroPackFiles() {
 
 // ── Claude Code ───────────────────────────────────────────────────────────────
 
+/**
+ * Skills preloaded into an agent's prompt in the portal's Claude runs: rules every task needs. The agent's other skills are
+ * listed by name and description only (`on-demand-skills:`) and read with the portal's read_skill tool when needed; Claude
+ * Code itself (outside the portal) finds them in ~/.claude/skills on its own. Kiro and Codex already load skills on demand.
+ */
+export const ALWAYS_LOADED_SKILLS = ['task-delegation', 'maintainable-code', 'requirements-clarification', 'agent-notes'];
+
 function claudeAgent(a) {
   const lines = [
     '---',
@@ -197,7 +205,10 @@ function claudeAgent(a) {
     `description: ${yamlString(a.description)}`,
     // No tools line: the agent inherits every tool, including Agent (the lead delegates with it).
     ...(a.claudeTools ? [`tools: ${a.claudeTools.join(', ')}`] : []),
-    `skills: [${a.skills.join(', ')}]`,
+    `skills: [${a.skills.filter((s) => ALWAYS_LOADED_SKILLS.includes(s)).join(', ')}]`,
+    ...(a.skills.some((s) => !ALWAYS_LOADED_SKILLS.includes(s))
+      ? [`on-demand-skills: [${a.skills.filter((s) => !ALWAYS_LOADED_SKILLS.includes(s)).join(', ')}]`]
+      : []),
     'model: inherit',
     '---',
     '',

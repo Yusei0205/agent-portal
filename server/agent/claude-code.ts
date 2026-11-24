@@ -43,7 +43,9 @@ import {
 } from './claude-sessions.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { runClaudeViaAgentCore, anthropicAuthFromEnv, submitRepoChanges } from './claude-agentcore.ts';
-import { loadRunAgents, leadAgentFor, anthropicAgentModel } from './run-agents.ts';
+import { loadRunAgents, loadRunSkillLibrary, leadAgentFor, anthropicAgentModel } from './run-agents.ts';
+import { SKILL_SERVER, skillToolSpec, usesOnDemandSkills } from './skill-library.ts';
+import { z } from 'zod';
 import { resolveAnthropicModel } from './anthropic-models.ts';
 import { withBrowserGuidance } from './browser-guidance.ts';
 import { agentcoreSkillBody } from './builtin-skills.ts';
@@ -173,6 +175,7 @@ ${REVIEW_SYSTEM_APPEND}`;
     runId: run.runId,
     agents,
     agent: lead,
+    skillLibrary: usesOnDemandSkills(agents) ? loadRunSkillLibrary(run) : undefined,
     prompt,
     model,
     auth,
@@ -509,6 +512,24 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
     }
   }
 
+  // ── Skills loaded on demand (read_skill) ─────────────────────────────────────
+  // Agents list some skills by name only ("on-demand-skills"); read_skill returns one when the task needs it.
+  let skillMcpServers: Record<string, McpServerConfigWithInstance> | undefined;
+  if (typeof sdk.createSdkMcpServer === 'function' && typeof sdk.tool === 'function') {
+    try {
+      // Only when an agent lists skills to load on demand; otherwise the extra tool is noise.
+      const library = usesOnDemandSkills(loadRunAgents(run, anthropicAgentModel)) ? loadRunSkillLibrary(run) : {};
+      if (Object.keys(library).length) {
+        const spec = skillToolSpec(library);
+        const readSkill = sdk.tool(spec.name, spec.description, { name: z.string().describe('The skill name, e.g. backend-python') }, spec.handler) as unknown as Record<string, unknown>;
+        skillMcpServers = { [SKILL_SERVER]: sdk.createSdkMcpServer({ name: SKILL_SERVER, tools: [readSkill] }) as McpServerConfigWithInstance };
+      }
+    } catch {
+      // Non-fatal: the agents still have their preloaded skills and the index.
+    }
+  }
+  const portalMcpServers = delegationMcpServers || skillMcpServers ? { ...(delegationMcpServers ?? {}), ...(skillMcpServers ?? {}) } : undefined;
+
   // ── Run SDK ────────────────────────────────────────────────────────────────
   const abortController = new AbortController();
 
@@ -565,8 +586,8 @@ export async function runClaudeCode(ctx: RunContext): Promise<string> {
         // Per-run spend cap (FR-GUARD-10): subagents inherit this cap.
         ...(maxBudgetUsd != null && maxBudgetUsd > 0 ? { maxBudgetUsd } : {}),
         ...(getSettings().agents.effort ? { effort: getSettings().agents.effort } : {}),
-        // In-process delegation MCP server (F7)
-        ...(delegationMcpServers ? { mcpServers: delegationMcpServers as unknown as Record<string, object> } : {}),
+        // In-process portal MCP servers: delegation (F7) and read_skill.
+        ...(portalMcpServers ? { mcpServers: portalMcpServers as unknown as Record<string, object> } : {}),
         // Agents the Agent tool can start by name, and the lead agent for the main conversation.
         ...(Object.keys(runAgentDefs).length ? { agents: runAgentDefs } : {}),
         ...(leadAgent ? { agent: leadAgent } : {}),

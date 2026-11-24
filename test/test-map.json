@@ -993,7 +993,8 @@
         "web/src/lib/agent-pack/skills.js",
         "server/repositories/agentcore-login.ts",
         "server/repositories/agentcore-login-sqlite.ts",
-        "server/repositories/agentcore-login-dynamodb.ts"
+        "server/repositories/agentcore-login-dynamodb.ts",
+        "server/agent/skill-library.ts"
       ],
       "tests": [
         "test/kiro-cmd.test.ts",
@@ -1010,7 +1011,8 @@
         "test/agent-defs.test.ts",
         "test/agent-pack.test.ts",
         "test/agentcore-multi-agent.test.ts",
-        "test/runtime-models.test.ts"
+        "test/runtime-models.test.ts",
+        "test/skill-library.test.ts"
       ],
       "smokeIds": [],
       "note": "No dedicated smoke section for Kiro CLI integration; it is backend/CLI only."

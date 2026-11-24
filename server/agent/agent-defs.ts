@@ -15,13 +15,16 @@
  * with the Agent tool, and the session's lead agent (the SDK's `agent` option) is one of them.
  *
  * `skills: [a, b]` in the front matter preloads those skills: their SKILL.md text is added to
- * the agent's prompt here (runs load no settings from disk, so Claude would not find them). Files are read where a run's
+ * the agent's prompt here (runs load no settings from disk, so Claude would not find them).
+ * `on-demand-skills: [c, d]` are listed in the prompt by name and description only; the agent reads one with the
+ * portal's read_skill tool when the task needs it (skill-library.ts). Use `skills:` for rules every task needs. Files are read where a run's
  * agents live: the owner's (or team's) Claude config, materialised into the run's home, then
  * the project's own .claude/agents/, which wins on a name clash (Claude Code's precedence).
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { parseSkillLibrary, skillIndexSection, SKILL_TOOL_FULL_NAME, type SkillLibrary } from './skill-library.ts';
 
 /** What the runner passes to the Agent SDK for one agent (a subset of AgentDefinition). */
 export interface AgentDefinitionPayload {
@@ -99,6 +102,7 @@ export function parseAgentFile(
   fallbackName: string,
   mapModel: (model: string) => string | undefined = (m) => m,
   readSkill: (name: string) => string | null = () => null,
+  readSkillDescription: (name: string) => string | null = () => null,
 ): { name: string; def: AgentDefinitionPayload } | null {
   const fm = /^﻿?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/.exec(text);
   if (!fm) return null;
@@ -110,6 +114,7 @@ export function parseAgentFile(
   if (!AGENT_NAME.test(name) || !description || !prompt) return null;
 
   let fullPrompt = prompt;
+  const preloaded = new Set<string>();
   for (const skill of asList(meta.skills) ?? []) {
     if (!SKILL_NAME.test(skill)) continue;
     const body = readSkill(skill);
@@ -117,13 +122,22 @@ export function parseAgentFile(
     const section = `\n\n---\n# Skill: ${skill}\n\n${body.trim()}`;
     if (fullPrompt.length + section.length > AGENT_LIMITS.maxPrompt) break;
     fullPrompt += section;
+    preloaded.add(skill);
   }
+  // On-demand skills: an index only (the bodies are read with read_skill). Skills that do not exist are left out.
+  const onDemand = [...new Set(asList(meta['on-demand-skills'] ?? meta.onDemandSkills) ?? [])]
+    .filter((s) => SKILL_NAME.test(s) && !preloaded.has(s))
+    .flatMap((s) => { const description = readSkillDescription(s); return description ? [{ name: s, description }] : []; });
+  const index = skillIndexSection(onDemand);
+  const hasIndex = Boolean(index) && fullPrompt.length + index.length <= AGENT_LIMITS.maxPrompt;
+  if (hasIndex) fullPrompt += index;
   const def: AgentDefinitionPayload = {
     description: description.slice(0, AGENT_LIMITS.maxDescription),
     prompt: fullPrompt.slice(0, AGENT_LIMITS.maxPrompt),
   };
   const tools = asList(meta.tools);
-  if (tools) def.tools = tools;
+  // An agent limited to some tools still needs read_skill to load the skills in its index.
+  if (tools) def.tools = hasIndex && !tools.includes(SKILL_TOOL_FULL_NAME) ? [...tools, SKILL_TOOL_FULL_NAME] : tools;
   const disallowed = asList(meta.disallowedTools ?? meta['disallowed-tools']);
   if (disallowed) def.disallowedTools = disallowed;
   const model = str('model');
@@ -165,6 +179,47 @@ export function skillReader(skillDirs: ReadonlyArray<string | null | undefined>)
   };
 }
 
+/** Reads a skill's `description` from its SKILL.md front matter, from the last folder that has it. */
+export function skillDescriptionReader(skillDirs: ReadonlyArray<string | null | undefined>): (name: string) => string | null {
+  return (name: string): string | null => {
+    if (!SKILL_NAME.test(name)) return null;
+    for (const dir of [...skillDirs].reverse()) {
+      if (!dir) continue;
+      const file = path.join(dir, name, 'SKILL.md');
+      try {
+        const st = fs.statSync(file);
+        if (!st.isFile() || st.size > AGENT_LIMITS.maxFileBytes) continue;
+        const m = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/.exec(fs.readFileSync(file, 'utf8'));
+        const d = m ? parseFrontMatter(m[1]).description : undefined;
+        return typeof d === 'string' && d.trim() ? d.trim() : null;
+      } catch {
+        /* not in this folder */
+      }
+    }
+    return null;
+  };
+}
+
+/** Every skill in the given folders (later folders win), by name, as text without front matter: what read_skill serves. */
+export function loadSkillLibrary(skillDirs: ReadonlyArray<string | null | undefined>): SkillLibrary {
+  const read = skillReader(skillDirs);
+  const names = new Set<string>();
+  for (const dir of skillDirs) {
+    if (!dir) continue;
+    try {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) if (e.isDirectory() && SKILL_NAME.test(e.name)) names.add(e.name);
+    } catch {
+      /* missing folder */
+    }
+  }
+  const raw: Record<string, string> = {};
+  for (const name of [...names].sort()) {
+    const body = read(name);
+    if (body) raw[name] = body;
+  }
+  return parseSkillLibrary(raw);
+}
+
 // ── A run's agents ────────────────────────────────────────────────────────────
 
 /**
@@ -177,6 +232,7 @@ export function loadAgentDefinitions(
   skillDirs: ReadonlyArray<string | null | undefined> = [],
 ): Record<string, AgentDefinitionPayload> {
   const readSkill = skillReader(skillDirs);
+  const readSkillDescription = skillDescriptionReader(skillDirs);
   const found = new Map<string, AgentDefinitionPayload>();
   for (const dir of dirs) {
     if (!dir) continue;
@@ -191,7 +247,7 @@ export function loadAgentDefinitions(
       try {
         const st = fs.statSync(full);
         if (!st.isFile() || st.size > AGENT_LIMITS.maxFileBytes) continue;
-        const agent = parseAgentFile(fs.readFileSync(full, 'utf8'), file.slice(0, -3), mapModel, readSkill);
+        const agent = parseAgentFile(fs.readFileSync(full, 'utf8'), file.slice(0, -3), mapModel, readSkill, readSkillDescription);
         if (!agent) continue;
         found.delete(agent.name); // a later folder's agent replaces it (and moves to the end)
         found.set(agent.name, agent.def);
