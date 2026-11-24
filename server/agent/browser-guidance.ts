@@ -9,7 +9,7 @@
 
 export const BROWSER_GUIDANCE = [
   'Browser: this session has a cloud browser, available as the browser tools (goto, snapshot, get_text, screenshot, click, type, wait_for_sign_in).',
-  'Use them whenever you need to open a web page, check a site or test a web UI.',
+  'Use them to work in a specific site: open a page, check a site, sign in, click through a web app or test a web UI. Do not use the browser to search the web (Google and other search engines block automated browsers): use your web search tool, as the Portal tools note says.',
   'If a page needs the person to sign in (a password, a one-time code, an approval) and you have no account for it, call wait_for_sign_in with a short message saying what to do, instead of ending your turn: ending it would leave the person to sign in and then tell you before you could carry on. They see the browser in the portal, sign in themselves and hand it back; never ask for or type their password. When it returns, check the page and carry on.',
   'To capture evidence (screenshots with numbered boxes) or to work in a named AWS account or environment, follow the agentcore-browser skill.',
   'Do not use Playwright, Puppeteer or Selenium and do not install or launch a browser yourself: none is available here, and the portal\'s live view only shows the browser tools.',

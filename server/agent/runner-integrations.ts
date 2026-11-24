@@ -7,6 +7,7 @@
  * runner keeps them in a proxy process's environment (see runner-mcp.ts).
  */
 
+import { portalDataMcpSpec } from '../portal-data-mcp.ts';
 import { decrypt } from '../secrets.ts';
 import { config } from '../config.ts';
 import { getIntegrationsRepository } from '../repositories/integrations.ts';
@@ -115,6 +116,9 @@ export async function buildRunnerMcpServers(
     }
     specs.push({ name, url: cfg.url, headers, allowWrites: cfg.allowWrites === true });
   }
+  // The project's Knowledge and the Vault, read-only (portal-data-mcp.ts): always, whatever integrations the session chose.
+  const pd = portalDataMcpSpec(userId, projectId, process.env.PORTAL_PUBLIC_URL);
+  if (pd && !taken.has(pd.name)) { taken.add(pd.name); specs.unshift(pd); } // first, so the server limit never drops it
   // The person's own Google Drive, Docs, Sheets and Slides, when they have connected Google. The runner only gets a
   // short-lived token for this portal, never a Google credential.
   if (!selected) {

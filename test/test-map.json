@@ -1831,10 +1831,14 @@
       "description": "Tests in runner-mcp.test.ts",
       "sources": [
         "server/agent/runner-mcp.ts",
-        "server/agent/runner-integrations.ts"
+        "server/agent/runner-integrations.ts",
+        "server/portal-data-mcp.ts",
+        "server/agent/portal-tools-guidance.ts"
       ],
       "tests": [
-        "test/runner-mcp.test.ts"
+        "test/runner-mcp.test.ts",
+        "test/portal-data-mcp.test.ts",
+        "test/portal-tools-guidance.test.ts"
       ],
       "smokeIds": []
     },

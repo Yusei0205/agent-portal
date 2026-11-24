@@ -134,6 +134,11 @@ export class SqliteKnowledgeRepository implements KnowledgeRepository {
   }
 
   async searchDocs(projectId: string, query: string, limit: number): Promise<SearchResult[]> {
+    // Any word may match, ranked by how well (the same as the DynamoDB index): a whole question such as "how do deploys
+    // work" would otherwise need every word in one document. Each word is quoted, so FTS syntax in the text is inert.
+    const words = [...new Set((query.toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []))].slice(0, 20);
+    if (!words.length) return [];
+    const match = words.map((w) => `"${w}"`).join(' OR ');
     let rows: Row[] = [];
     try {
       rows = all<Row>(
@@ -146,7 +151,7 @@ export class SqliteKnowledgeRepository implements KnowledgeRepository {
           ORDER BY rank
           LIMIT ?`,
         projectId,
-        query,
+        match,
         limit,
       );
     } catch {

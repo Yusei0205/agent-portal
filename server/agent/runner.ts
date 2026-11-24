@@ -14,6 +14,7 @@
  * ALL decisions route through evaluateCommand() from guardrails.ts.
  */
 
+import { portalToolsBriefing } from './portal-tools-guidance.ts';
 import { stageChatAttachments, stagePriorAttachments } from '../session-attachments.ts';
 import { getReviewsRepository } from '../repositories/reviews.ts';
 import { buildRunnerRepos } from './runner-repo-specs.ts';
@@ -581,7 +582,7 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       || (agentRun.engine === 'codex' && Boolean(process.env.PORTAL_CODEX_AGENTCORE_RUNTIME_ARN))
       || (agentRun.engine === 'cursor' && Boolean(process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN));
     let availableRepoNames: string[] = [];
-    let jiraHint = '';
+    let jiraUnavailable = false;
     if (runsOnAgentCore) {
       const specs = await buildRunnerRepos(
         agentRun.repoIds,
@@ -609,10 +610,9 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       }
       agentRun.runnerMcpServers = await buildRunnerMcpServers(agentRun.projectId, agentRun.credentialOwnerId, agentRun.integrationIds ?? null)
         .catch((e) => { console.warn('[runner] MCP integrations skipped:', e); return []; });
-      // Say how to reach Jira, so the agent does not try the browser (which has no Jira login).
+      // Jira without the Atlassian MCP: the briefing says so, so the agent does not try the browser (which has no Jira login).
       const atlassianServer = (agentRun.runnerMcpServers ?? []).find((s) => isAtlassianMcpUrl(s.url));
-      if (atlassianServer) jiraHint = `Jira and Confluence: use the ${atlassianServer.name} MCP tools to read tickets and pages. Do not open Jira in the browser: it has no Jira login.`;
-      else if (agentRun.projectId && await jiraConnected(agentRun.projectId)) jiraHint = 'Jira is not available in this session (Atlassian sign-in was skipped or has not been done). Say so if a task needs Jira tickets; do not try to open Jira in the browser, it has no Jira login.';
+      if (!atlassianServer && agentRun.projectId && await jiraConnected(agentRun.projectId)) jiraUnavailable = true;
       // Small files go inline; larger ones (up to 50 MB, cloud only) as download links the runner fetches.
       const inputFiles = await collectInputFilesWithUrls(workDir, chatAttachments.map(a => 'attachments/' + a.path));
       if (inputFiles.length) agentRun.runnerInputFiles = inputFiles;
@@ -669,17 +669,17 @@ export async function executeRun(runId: string, workflowId: string): Promise<voi
       agentRun.goal = `${reposLine}\n\n${agentRun.goal}`;
     }
 
-    if (jiraHint) agentRun.goal = `${jiraHint}
+    // What the portal's words mean (vault, knowledge) and which tool to use (web search, an integration, the browser), from what
+    // this run really has. After the person's text, so their words stay first.
+    agentRun.goal = `${agentRun.goal}
 
-${agentRun.goal}`;
-
-    // "The vault" (also "our vault", "team vault", "save to vault") means the portal's own file store, shown as My vault and Team
-    // vault in the Files panel. Without this the agent guesses Azure Key Vault, Obsidian or Drive. There is no vault tool: a file the
-    // agent writes in the run folder becomes an output, and the portal copies outputs to the Team vault (or the person adds them with
-    // "Add to vault" in the Outputs tab).
-    if (agentRun.projectId) agentRun.goal = `${agentRun.goal}
-
-Portal vault: when the person says "vault", "our vault", "team vault" or "save to vault", they mean the portal's own file store (My vault / Team vault in the Files panel), not Azure Key Vault, Google Drive, Notion or Obsidian. To save something there, write it as a file in the current run folder: the portal collects it as an output and puts it in the vault (the person can also use "Add to vault" in the Outputs tab). Say which file you wrote. Do not ask which vault they mean. You cannot read the vault directly: for an existing vault file, ask the person to attach it.`;
+${portalToolsBriefing({
+      project: Boolean(agentRun.projectId),
+      integrations: (agentRun.runnerMcpServers ?? []).map((s) => ({ name: s.name, url: s.url })),
+      browser: runsOnAgentCore && process.env.PORTAL_AGENTCORE_BROWSER === '1',
+      jiraUnavailable,
+      awsAccount: Boolean(agentRun.runnerAwsEnv && Object.keys(agentRun.runnerAwsEnv).length),
+    })}`;
 
     // ── Run-time limit (FR-GUARD-10) ────────────────────────────────────────
     // Apply the per-workflow override or the global setting. The timer fires on the

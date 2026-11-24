@@ -479,6 +479,14 @@ After adding starter agents, they appear in the picker immediately on the next d
 
 Every session receives a copy of your entire `~/.kiro`, `~/.claude`, and `~/.aws` folders (or the team default versions if you are following them). This includes agents, skills, steering files, hooks, commands, and settings — the full folder tree is materialised into the session's home directory before the engine starts.
 
+### Portal tools agents can use
+
+Every session's agent is told, in a short "Portal tools" note added after your message, which of the portal's services it has and which tool to use for each:
+
+- **Knowledge and the Vault (cloud sessions):** agents can search the project's Knowledge (`search_knowledge`, `list_knowledge`) and read the Vault (`list_vault` with "team" or "mine", `read_vault_file`; Word, Excel, PowerPoint and PDF are read as text). They see only what you can see: the project's and portal-wide Vault files and your own personal files, never another person's. Nothing is changed: to save something to the Vault, the agent writes a file in its run folder and the portal collects it as an output. These tools need the portal's public address (deploy setting `publicUrl`); without it the agent is told to ask you to attach the document instead.
+- **Web search:** "google it" or "look it up" uses the engine's web search tool (or a plain search page fetched without a browser). Agents do not open Google in the cloud browser: search engines block automated browsers. The cloud browser is for working in a specific site (signing in, clicking through an app, screenshots).
+- **Connected integrations** are named with what each is for (for example "notion: Notion pages and databases"), so the agent uses their tools rather than the browser. Jira without an Atlassian sign-in, and the project's AWS account, are mentioned when they apply.
+
 ### JSON validation
 
 The editor validates `.json` and `.jsonc` files as you type and shows inline errors in the footer. If you try to save a file with invalid JSON, you are offered a **Save anyway** option.

@@ -56,6 +56,7 @@ import { registerAgentCoreIdleRoutes } from './agentcore-idle.ts';
 import { registerAgentCoreEvalRoutes } from './agentcore-eval.ts';
 import { registerAgentCoreMemoryRoutes } from './agentcore-memory.ts';
 import { registerGoogleWorkspaceRoutes } from './google-workspace.ts';
+import { registerPortalDataMcpRoutes } from './portal-data-mcp.ts';
 import { registerGmailRoutes } from './gmail.ts';
 import { registerMailRoutes } from './mail.ts';
 import { registerDashboardRoutes } from './dashboard.ts';
@@ -312,6 +313,7 @@ export async function startServer(
   registerAgentCoreEvalRoutes();
   registerAgentCoreMemoryRoutes();
   registerGoogleWorkspaceRoutes();
+  registerPortalDataMcpRoutes();
   registerGmailRoutes();
   registerMailRoutes();
   registerDashboardRoutes();
