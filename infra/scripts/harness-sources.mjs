@@ -5,7 +5,7 @@
  * to the runner images here, and nowhere else.
  */
 export const HARNESS_SERVER_FILES = [
-  'agent/guard.ts', 'agent/env-scrub.ts', 'agent/tool-policy.ts', 'agent/pricing.ts', 'agent/agentcore-approvals.ts', 'real-path.ts',
+  'agent/guard.ts', 'agent/env-scrub.ts', 'agent/tool-policy.ts', 'agent/skill-library.ts', 'agent/pricing.ts', 'agent/agentcore-approvals.ts', 'real-path.ts',
   // The runners' own pure modules (files, repositories, snapshots, MCP proxies, checks).
   'agent/runner-files.ts',
   'agent/runner-inspect.ts',

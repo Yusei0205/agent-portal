@@ -592,7 +592,12 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
     // The specialist got its own prompt and skills, and every tool (its file has no tools line).
     const backendRequests = mine.filter(isBackend);
     assert.ok(backendRequests.length > 0, `backend-engineer asked the model\n${logs()}`);
-    assert.match(systemOf(backendRequests[0]), /# Skill: backend-python[\s\S]*# Skill: api-design/, 'its skills are preloaded');
+    // Rule skills are preloaded; stack skills are listed and served by read_skill (the portal sent the skill library).
+    assert.match(systemOf(backendRequests[0]), /# Skill: maintainable-code/, 'its rule skills are preloaded');
+    assert.match(systemOf(backendRequests[0]), /# Skills you can load[\s\S]*- backend-python: [\s\S]*- api-design: /, 'its stack skills are listed');
+    assert.doesNotMatch(systemOf(backendRequests[0]), /# Skill: backend-python/, 'stack skills are not preloaded');
+    const backendTools = (backendRequests[0].body?.tools ?? []).map((t: { name?: string }) => t.name);
+    assert.ok(backendTools.includes('mcp__portal-skills__read_skill'), `read_skill is offered; offered: ${backendTools.join(', ')}`);
     assert.ok(toolsOf(backendRequests[0]).some((x) => x.name === 'Bash'), 'it may run commands');
 
     // Its command went through the run's "ask" rule, was approved and ran in the microVM.
@@ -663,7 +668,7 @@ describe('AgentCore runner + real Claude Code engine', { skip: installed ? false
       const writerRequests = api.requests.slice(from).filter(isWriter);
       assert.ok(writerRequests.length > 0, `tech-writer ran the child session\n${logs()}`);
       assert.ok(JSON.stringify(writerRequests[0].body?.messages?.[0] ?? '').includes('Write the user guide'), 'as its main conversation, with the task');
-      assert.match(systemOf(writerRequests[0]), /# Skill: technical-documentation/, 'with its skills');
+      assert.match(systemOf(writerRequests[0]), /# Skill: requirements-clarification[\s\S]*- technical-documentation: /, 'with its skills (rules preloaded, the rest listed)');
       const childRuns = all<{ id: string }>('SELECT id FROM p6_runs WHERE workflow_id = ?', child.id).map((r) => r.id);
       const childCalls = invocations.filter((i) => childRuns.some((id) => i.sessionId.startsWith(`${id}-`)));
       assert.deepEqual([...new Set(childCalls.map((i) => i.runner))], ['B'], 'in its own microVM');
