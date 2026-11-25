@@ -14,6 +14,7 @@
  * ALL decisions route through evaluateCommand() from guardrails.ts.
  */
 
+import { refreshSnapshotIfStale } from '../repositories/settings.ts';
 import { portalDataLocalSpec } from '../portal-data-mcp.ts';
 import { portalToolsBriefing } from './portal-tools-guidance.ts';
 import { stageChatAttachments, stagePriorAttachments } from '../session-attachments.ts';
@@ -686,6 +687,10 @@ ${portalToolsBriefing({
       jiraUnavailable,
       awsAccount: Boolean(agentRun.runnerAwsEnv && Object.keys(agentRun.runnerAwsEnv).length),
     })}`;
+
+    // A run can start on another instance than the request that saved the session's settings (terse replies, ponytail, plan mode):
+    // reload them first, or the first turn misses them.
+    await refreshSnapshotIfStale().catch(() => {});
 
     // ── Run-time limit (FR-GUARD-10) ────────────────────────────────────────
     // Apply the per-workflow override or the global setting. The timer fires on the
