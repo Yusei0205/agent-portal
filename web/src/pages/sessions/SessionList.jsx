@@ -357,17 +357,19 @@ export function SessionList({ project, selectedId, onSelect, initialDialogTicket
 
   const handleDelete = async () => {
     if (bulk.selected.size === 0) return;
-    const ok = await requestConfirm(
+    const answer = await requestConfirm(
       `Delete ${bulk.selected.size} session${bulk.selected.size === 1 ? '' : 's'}? This cannot be undone.`,
       'Delete',
       'danger',
+      { checkbox: { label: 'Also delete the saved workspace files (repositories, attachments, outputs). Files that are kept stay in cloud storage and are billed until removed.', checked: true } },
     );
-    if (!ok) return;
+    if (!answer.ok) return;
+    const keepFiles = answer.checked ? '' : '?keepFiles=1';
     setDeleting(true);
     try {
       await Promise.all(
         [...bulk.selected].map((id) =>
-          api.delete(`/api/projects/${project.id}/workflows/${id}`),
+          api.delete(`/api/projects/${project.id}/workflows/${id}${keepFiles}`),
         ),
       );
       bulk.clearAll();

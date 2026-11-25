@@ -112,6 +112,17 @@ function run(cmd: string, args: string[], cwd: string, timeoutMs: number, signal
   });
 }
 
+/**
+ * What a save packs: `repos/` plus every other top-level file or folder of the root (the Kiro work folder also holds
+ * the session's attachments and the files the agent made). Marks and the aside folder of a refresh are left out.
+ */
+function packEntries(root: string): string[] {
+  let names: string[] = [];
+  try { names = fs.readdirSync(root); } catch { /* nothing */ }
+  const extras = names.filter((n) => n !== 'repos' && n !== 'repos.previous' && !n.startsWith('.snapshot') && !/^[^/]*\.tar\.gz$/.test(n));
+  return ['repos', ...extras.sort()];
+}
+
 function hasRepos(root: string): boolean {
   try { return fs.readdirSync(path.join(root, 'repos')).length > 0; } catch { return false; }
 }
@@ -212,7 +223,7 @@ async function unpackSaved(
 async function changedSinceSave(root: string, signal: AbortSignal): Promise<boolean> {
   if (!fs.existsSync(path.join(root, STAMP))) { log('workspace_changed', { path: '(first save)' }); return true; }
   const r = await run('find', [
-    'repos', '-newer', STAMP,
+    ...packEntries(root), '-newer', STAMP,
     '(',
     '-type', 'f', '-not', '-path', '*/.git/FETCH_HEAD', '-not', '-path', '*/.git/index', '-not', '-path', '*/.git/shallow', '-not', '-path', '*/.git/ORIG_HEAD', '-not', '-path', '*/.git/logs/*',
     '-o',
@@ -244,7 +255,7 @@ async function saveWorkspaceNow(snap: WorkspaceSnapshot, root: string, signal: A
   const packed = path.join(os.tmpdir(), `workspace-${process.pid}.tar.gz`);
   const started = Date.now();
   try {
-    const t = await run('tar', ['--force-local', '--use-compress-program=gzip -1', '-cf', packed, 'repos'], root, 10 * 60_000, signal);
+    const t = await run('tar', ['--force-local', '--use-compress-program=gzip -1', '-cf', packed, ...packEntries(root)], root, 10 * 60_000, signal);
     if (signal.aborted) { log('workspace_save_cancelled', { step: 'pack' }); return; }
     if (t.code !== 0 && t.code !== 1) { // 1 = "file changed as we read it", still a usable archive
       log('workspace_save_failed', { step: 'pack', code: t.code, err: t.err.slice(0, 300) });

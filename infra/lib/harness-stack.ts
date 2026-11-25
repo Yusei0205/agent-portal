@@ -44,7 +44,7 @@ export class AgentPortalHarnessBuildStack extends cdk.Stack {
     const repos = [CLAUDE_REPO, KIRO_REPO].map((name, i) => new ecr.Repository(this, i === 0 ? 'ClaudeRunnerRepo' : 'KiroRunnerRepo', {
       repositoryName: name,
       imageScanOnPush: true,
-      lifecycleRules: [{ maxImageCount: 10, description: 'Keep the last 10 images' }],
+      lifecycleRules: [{ maxImageCount: 3, description: 'Keep the last 3 images' }],
       removalPolicy: cdk.RemovalPolicy.DESTROY,
       emptyOnDelete: true,
     }));

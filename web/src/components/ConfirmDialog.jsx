@@ -24,7 +24,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 export function useConfirm() {
   const [confirmState, setConfirmState] = useState(/** @type {ConfirmState} */({
-    open: false, message: '', confirmLabel: 'Confirm', variant: 'primary',
+    open: false, message: '', confirmLabel: 'Confirm', variant: 'primary', checkbox: null,
     resolve: () => {},
   }));
 
@@ -34,7 +34,8 @@ export function useConfirm() {
   const stateRef = useRef(confirmState);
   stateRef.current = confirmState;
 
-  const requestConfirm = useCallback((message, confirmLabel = 'Confirm', variant = 'primary') => {
+  // `extra.checkbox` ({ label, checked }) adds a tick box; the promise then resolves to { ok, checked } instead of a boolean.
+  const requestConfirm = useCallback((message, confirmLabel = 'Confirm', variant = 'primary', extra = undefined) => {
     return new Promise((resolve) => {
       // Resolve any currently-open dialog as false BEFORE opening the new one.
       // We do this outside the updater to avoid a nested setState side-effect.
@@ -43,9 +44,9 @@ export function useConfirm() {
         current.resolve(false);
       }
 
-      const wrappedResolve = (ok) => {
+      const wrappedResolve = (ok, checked = false) => {
         setConfirmState((s) => ({ ...s, open: false }));
-        resolve(ok);
+        resolve(extra?.checkbox ? { ok, checked } : ok);
       };
 
       setConfirmState({
@@ -53,6 +54,7 @@ export function useConfirm() {
         message,
         confirmLabel,
         variant,
+        checkbox: extra?.checkbox ?? null,
         resolve: wrappedResolve,
       });
     });
@@ -65,8 +67,10 @@ export function useConfirm() {
  * @param {{ state: ConfirmState }} props
  */
 export function ConfirmDialog({ state }) {
-  const { open, message, confirmLabel, variant, resolve } = state;
+  const { open, message, confirmLabel, variant, resolve, checkbox } = state;
   const cancelRef = useRef(null);
+  const [checked, setChecked] = useState(false);
+  useEffect(() => { if (open) setChecked(checkbox?.checked ?? false); }, [open, checkbox]);
 
   // Reliable Escape handler on the document so it fires regardless of which
   // element currently has focus (the backdrop div's onKeyDown only fires when
@@ -80,7 +84,7 @@ export function ConfirmDialog({ state }) {
 
   if (!open) return null;
 
-  const answer = (ok) => { resolve(ok); };
+  const answer = (ok) => { resolve(ok, checked); };
 
   return (
     <div
@@ -96,6 +100,12 @@ export function ConfirmDialog({ state }) {
         <p style={{ margin: '4px 0 20px', color: 'var(--ink-2)', fontSize: '0.9rem' }}>
           {message}
         </p>
+        {checkbox && (
+          <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', margin: '-8px 0 20px', fontSize: '0.88rem' }}>
+            <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} style={{ marginTop: 3 }} />
+            <span>{checkbox.label}</span>
+          </label>
+        )}
         <div className="modal-footer">
           <button
             ref={cancelRef}

@@ -305,6 +305,39 @@ describe('workspace snapshots', { skip: !haveTools && 'tar, gzip and find are ne
     }
   });
 
+  it("files next to repos/ (attachments, the agent's own output) are saved and restored too", async () => {
+    let stored: Buffer | null = null;
+    const server = http.createServer((req, res) => {
+      if (req.method === 'PUT') {
+        const chunks: Buffer[] = [];
+        req.on('data', (c: Buffer) => chunks.push(c));
+        req.on('end', () => { stored = Buffer.concat(chunks); res.writeHead(200); res.end(); });
+      } else if (stored) { res.writeHead(200, { 'content-length': stored.length }); res.end(stored); }
+      else { res.writeHead(404); res.end(); }
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/extras`;
+    const snap = { putUrl: url, getUrl: url };
+    const a = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-x1-'));
+    const b = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-x2-'));
+    try {
+      fs.mkdirSync(path.join(a, 'repos', 'app'), { recursive: true });
+      fs.writeFileSync(path.join(a, 'repos', 'app', 'main.ts'), 'code');
+      fs.mkdirSync(path.join(a, 'attachments'), { recursive: true });
+      fs.writeFileSync(path.join(a, 'attachments', 'spec.pdf'), 'pdf');
+      fs.writeFileSync(path.join(a, 'p99.png'), 'png');
+      saveWorkspaceInBackground(snap, a);
+      await settleSnapshot();
+      assert.equal(await restoreWorkspace(snap, b, () => {}), true);
+      assert.equal(fs.readFileSync(path.join(b, 'attachments', 'spec.pdf'), 'utf8'), 'pdf');
+      assert.equal(fs.readFileSync(path.join(b, 'p99.png'), 'utf8'), 'png');
+      assert.equal(fs.readFileSync(path.join(b, 'repos', 'app', 'main.ts'), 'utf8'), 'code');
+    } finally {
+      server.close();
+      for (const d of [a, b]) fs.rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   it('does nothing when there is no saved copy to download', async () => {
     const b = fs.mkdtempSync(path.join(os.tmpdir(), 'ws-c-'));
     assert.equal(await restoreWorkspace({ putUrl: 'http://127.0.0.1:9/x' }, b, () => {}), false);

@@ -556,8 +556,9 @@ export function registerWorkflowRoutes(): void {
 
     // deleteWorkflow owns the child-count decrement internally (both backends).
     await repo.deleteWorkflow(w.id);
-    // The saved workspace (repositories) of the session goes with it.
-    deleteSnapshot(w.id).catch(() => {/* non-fatal: the bucket expires it anyway */});
+    // The saved workspace (repositories and files) of the session goes with it, unless the person chose to keep it
+    // (`?keepFiles=1`). Kept files stay in S3 and are billed until removed by hand.
+    if (req.query.get('keepFiles') !== '1') deleteSnapshot(w.id).catch(() => {/* non-fatal: the bucket expires it anyway */});
 
     emit(String(project.id), { type: 'workflow.deleted', workflowId: w.id });
     sendJson(res, 200, { ok: true });

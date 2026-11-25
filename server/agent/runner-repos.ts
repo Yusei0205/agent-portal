@@ -307,6 +307,8 @@ export async function cloneRunnerRepos(
       if (persist) trusted.push(realDest);
       return;
     }
+    // A folder without .git (a broken or partial restore) would make `git clone` fail; start it clean.
+    try { if (fs.existsSync(dest) && !fs.lstatSync(dest).isSymbolicLink()) fs.rmSync(dest, { recursive: true, force: true }); } catch { /* ok */ }
     fs.mkdirSync(reposDir, { recursive: true });
     emit({ type: 'status', text: `Cloning ${repo.name}${repo.branch ? ` @ ${repo.branch}` : ''}…` });
     const args = ['clone', opts.onProgress ? '--progress' : '--quiet', ...(opts.shallow ? ['--depth', '1'] : []),
