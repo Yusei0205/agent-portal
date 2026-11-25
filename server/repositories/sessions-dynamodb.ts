@@ -73,6 +73,9 @@ function runsTable(): string {
   return process.env.DYNAMODB_TABLE_PORTAL_RUNS ?? 'portal-runs-test';
 }
 
+/** Run events expire from portal-events this long after they are written (DynamoDB TTL on the `ttl` attribute). */
+const RETENTION_SECONDS = 14 * 24 * 3600;
+
 function eventsTable(): string {
   return process.env.DYNAMODB_TABLE_PORTAL_EVENTS ?? 'portal-events-test';
 }
@@ -1212,6 +1215,7 @@ export class DynamoDbSessionsRepository implements SessionsRepository {
         PK: av(`RUN#${runId}`),
         SK: av(seqSk(seq)),
         ...marshalItem({ type, payload: safePayload, created_at: createdAt }),
+        ttl: { N: String(Math.floor(Date.now() / 1000) + RETENTION_SECONDS) },
       },
     }));
 

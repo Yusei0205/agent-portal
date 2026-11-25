@@ -351,3 +351,11 @@ describe('DynamoDB Local suite', async () => {
 
   runContract('DynamoDB', async () => new DynamoDbTestingRepository({ tableName }));
 });
+
+describe('DynamoDB retention', () => {
+  test('only run history and traces get a ttl; projects, scripts, vault and cases are kept', async () => {
+    const { EXPIRING_PK } = await import('../server/repositories/testing-data-dynamodb.ts');
+    for (const pk of ['TR#1', 'TRS#1', 'TRACE_CS#1', 'TRACE_GN#1', 'TGN#1']) assert.ok(EXPIRING_PK.test(pk), pk);
+    for (const pk of ['TP#1', 'TG#1', 'TS#1', 'TVI#1', 'TVF#1', 'TCS#1', 'TC#1']) assert.ok(!EXPIRING_PK.test(pk), pk);
+  });
+});

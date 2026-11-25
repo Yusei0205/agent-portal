@@ -337,6 +337,9 @@ async function genericUpdate(
   }));
 }
 
+/** Partition keys of test runs, run steps, traces and generations. */
+export const EXPIRING_PK = /^(TR|TRS|TRACE_CS|TRACE_GN|TGN)#/;
+
 // ── Implementation ─────────────────────────────────────────────────────────────
 
 export class DynamoDbTestingRepository implements TestingRepository {
@@ -352,7 +355,9 @@ export class DynamoDbTestingRepository implements TestingRepository {
   getTableName(): string { return this.tableName; }
 
   private async put(item: Record<string, JsVal>): Promise<void> {
-    await this.client.send(new PutItemCommand({ TableName: this.tableName, Item: marshalItem(item) }));
+    // Run history and traces expire after two weeks (DynamoDB TTL on `ttl`); projects, scripts, vault and cases are kept.
+    const expires = EXPIRING_PK.test(String(item['PK'])) ? { ttl: Math.floor(Date.now() / 1000) + 14 * 24 * 3600 } : {};
+    await this.client.send(new PutItemCommand({ TableName: this.tableName, Item: marshalItem({ ...item, ...expires }) }));
   }
 
   private async getItem<T>(pk: string, sk: string, converter: (item: Record<string, AttributeValue>) => T): Promise<T | null> {
