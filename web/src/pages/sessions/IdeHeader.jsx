@@ -207,6 +207,7 @@ export function IdeHeader({
   onEngineSwitched,
   integrationCount = 0,
 }) {
+  const { toast, toasts, removeToast } = useToast();
   const [renaming, setRenaming]       = useState(false);
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy]   = useState(false);
@@ -418,6 +419,7 @@ Click to change the title` : 'Click to give this session a short title'}
         </div>
       </div>
 
+      <ToastShelf toasts={toasts} onRemove={removeToast} />
       {/* Switch engine dialog */}
       {showSwitch && workflow && (
         <SwitchEngineDialog

@@ -103,6 +103,22 @@ describe('starting a session with terse replies', () => {
     assert.equal(withSessionGuidance('Next', b, false), `${PONYTAIL_REMINDER}\n\nNext\n\n${CAVEMAN_REMINDER}`);
   });
 
+  it('a duplicate keeps the settings and repositories but is an empty session', async () => {
+    const id = await start({ engine: 'claude-code', caveman: true, ponytail: true, goal: 'Original task' });
+    const r = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/${id}/duplicate`, { method: 'POST', body: {}, cookie });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    const copy = (r.body as any).workflow;
+    assert.notEqual(copy.id, id);
+    assert.equal(copy.engine, 'claude-code');
+    assert.equal(copy.goal, '');
+    assert.match(copy.title, /\(copy\)$/);
+    assert.deepEqual(copy.repo_ids, []);
+    assert.equal(cavemanMode(copy.id), true);
+    assert.equal(ponytailMode(copy.id), true);
+    const missing = await fetchJson(baseUrl, `/api/projects/${projectId}/workflows/nope/duplicate`, { method: 'POST', body: {}, cookie });
+    assert.equal(missing.status, 404);
+  });
+
   it('can be switched off again', async () => {
     const id = await start({ engine: 'claude-code', caveman: true });
     await setCavemanMode(id, false);

@@ -30,8 +30,8 @@ import { runPortalCommand, PORTAL_COMMANDS } from './slash-commands.ts';
 import { lostRunReason, closeLostRun } from './lost-runs.ts';
 import { parseSlashCommand, resolveSessionCommand, sessionCommands, unknownCommandText } from './session-commands.ts';
 import { requestRepoPrep, getRepoPrep } from '../agent/repo-prep.ts';
-import { setCavemanMode, setPonytailMode } from '../agent/caveman-guidance.ts';
-import { planMode } from '../agent/plan-guidance.ts';
+import { cavemanMode, ponytailMode, setCavemanMode, setPonytailMode } from '../agent/caveman-guidance.ts';
+import { planMode, setPlanMode } from '../agent/plan-guidance.ts';
 import { resolveApproval } from '../agent/approvals.ts';
 import { inputFingerprint, emitRunEvent } from '../agent/runner.ts';
 import { appendAudit } from '../audit.ts';
@@ -514,6 +514,55 @@ export function registerWorkflowRoutes(): void {
 
     const enriched = await enrichWorkflowRow(wfRecord);
     sendJson(res, 201, { workflow: workflowView(enriched) });
+  });
+
+  // POST /api/projects/:id/workflows/:wid/duplicate
+  // A new empty session with the same settings and repositories. Messages, runs and generated files are not copied.
+  router.post('/api/projects/:id/workflows/:wid/duplicate', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasTokenScope(req, 'write')) { sendJson(res, 403, { error: 'write scope required' }); return; }
+    const project = await requireProjectMember(req, res, req.params.id);
+    if (!project) return;
+    const repo = getSessionsRepository();
+    const w = await repo.getWorkflowByProjectId(req.params.id, req.params.wid);
+    if (!w) { sendJson(res, 404, { error: 'Workflow not found' }); return; }
+
+    const id = generateId();
+    const ts = now();
+    const baseTitle = (w.title?.trim() || w.goal.slice(0, 60)).trim();
+    const wfRecord = await repo.createWorkflow({
+      id,
+      project_id: w.project_id,
+      title: `${baseTitle} (copy)`.slice(0, 200),
+      goal: '',
+      status: 'pending',
+      engine: w.engine,
+      // API tokens cannot turn on "trust all tools" (see create); a copy made with one starts without it.
+      trust_tools: req.authViaToken ? 0 : Number((w as unknown as Row).trust_tools ?? 0),
+      lead_agent: w.lead_agent ?? null,
+      workspace_id: w.workspace_id ?? null,
+      output_files_enabled: Number((w as unknown as Row).output_files_enabled ?? 0),
+      repo_ids: String((w as unknown as Row).repo_ids ?? '[]'),
+      iteration_count: 0,
+      max_iterations: w.max_iterations ?? 10,
+      credential_id: w.credential_id ?? null,
+      model: (w.model as string | undefined) ?? '',
+      jira_key: (w as unknown as Row).jira_key ? String((w as unknown as Row).jira_key) : '',
+      jira_summary: (w as unknown as Row).jira_summary ? String((w as unknown as Row).jira_summary) : '',
+      jira_url: (w as unknown as Row).jira_url ? String((w as unknown as Row).jira_url) : '',
+      created_by: req.user!.id,
+      created_at: ts,
+      updated_at: ts,
+    });
+
+    if (cavemanMode(w.id)) await setCavemanMode(id, true);
+    if (ponytailMode(w.id)) await setPonytailMode(id, true);
+    if (planMode(w.id)) await setPlanMode(id, true);
+
+    emit(String(project.id), { type: 'workflow.created', workflowId: id });
+    if ((safeJson((w as unknown as Row).repo_ids as string, []) as unknown[]).length > 0) {
+      await requestRepoPrep(id).catch((e) => console.error('[repo-prep] request failed:', e));
+    }
+    sendJson(res, 201, { workflow: workflowView(await enrichWorkflowRow(wfRecord)) });
   });
 
   // GET /api/projects/:id/workflows/:wid

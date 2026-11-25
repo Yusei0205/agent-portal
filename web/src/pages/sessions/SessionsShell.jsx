@@ -29,9 +29,7 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
 
   // The sessions list can fold away to give the conversation the whole width. It stays mounted (search and filters are kept).
   const [listCollapsed, setListCollapsed] = useState(loadCollapsed);
-  const [layoutFolded, setLayoutFolded] = useState(false);
   const toggleList = () => {
-    if (layoutFolded) { setLayoutFolded(false); setListCollapsed(false); return; }
     setListCollapsed((collapsed) => {
       try { localStorage.setItem(LS_LIST_COLLAPSED, collapsed ? '0' : '1'); } catch { /* storage unavailable: not remembered */ }
       return !collapsed;
@@ -44,12 +42,7 @@ export function SessionsShell({ projectId, project, route, initialDialogTicket, 
     document.addEventListener('portal:session-focus', on);
     return () => document.removeEventListener('portal:session-focus', on);
   }, []);
-  useEffect(() => {
-    const onLayout = (event) => setLayoutFolded(['code', 'review'].includes(event.detail?.mode));
-    document.addEventListener('portal:session-layout', onLayout);
-    return () => document.removeEventListener('portal:session-layout', onLayout);
-  }, []);
-  const collapsed = Boolean(selectedId) && (listCollapsed || focus || layoutFolded);
+  const collapsed = Boolean(selectedId) && (listCollapsed || focus);
 
   const handleSelect = (id) => {
     navigate(href(projectId, 'sessions', id));
