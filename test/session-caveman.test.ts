@@ -4,10 +4,10 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
-import { cavemanMode, setCavemanMode, cavemanInstructions, withCavemanGuidance, CAVEMAN_REMINDER, ponytailMode, setPonytailMode, ponytailInstructions, withSessionGuidance, PONYTAIL_REMINDER } from '../server/agent/caveman-guidance.ts';
+import { cavemanMode, setCavemanMode, cavemanInstructions, withCavemanGuidance, CAVEMAN_REMINDER, ponytailMode, setPonytailMode, ponytailInstructions, withSessionGuidance, withPonytailGuidance, PONYTAIL_REMINDER } from '../server/agent/caveman-guidance.ts';
 
 describe('caveman guidance text', () => {
-  it('uses the bundled skill without its front matter', () => {
+  it('uses the bundled ruleset, first in the prompt', () => {
     const text = cavemanInstructions();
     assert.doesNotMatch(text, /^---/);
     assert.match(text, /Respond terse like smart caveman/);
@@ -34,7 +34,11 @@ describe('ponytail guidance text', () => {
     const text = ponytailInstructions();
     assert.doesNotMatch(text, /^---/);
     assert.match(text, /lazy senior developer/i);
-    assert.match(text, /stop ponytail/);
+    const first = withPonytailGuidance('Fix it', true, true);
+    assert.ok(first.startsWith('Coding rules for this whole session'), 'the rules come first');
+    assert.ok(first.endsWith('\n\nFix it'), 'the task stays last and unchanged');
+    assert.match(first, /stop ponytail/);
+    assert.equal(withPonytailGuidance('Next', true, false), `${PONYTAIL_REMINDER}\n\nNext`);
   });
 });
 
@@ -91,12 +95,12 @@ describe('starting a session with terse replies', () => {
     const first = withSessionGuidance('Fix it', a, true);
     assert.match(first, /lazy senior developer/i);
     assert.doesNotMatch(first, /Respond terse like smart caveman/);
-    assert.equal(withSessionGuidance('Next', a, false), `Next\n\n${PONYTAIL_REMINDER}`);
+    assert.equal(withSessionGuidance('Next', a, false), `${PONYTAIL_REMINDER}\n\nNext`);
     const b = await start({ engine: 'claude-code', caveman: true, ponytail: true });
     const both = withSessionGuidance('Fix it', b, true);
     assert.match(both, /Respond terse like smart caveman/);
     assert.match(both, /lazy senior developer/i);
-    assert.equal(withSessionGuidance('Next', b, false), `Next\n\n${CAVEMAN_REMINDER}\n\n${PONYTAIL_REMINDER}`);
+    assert.equal(withSessionGuidance('Next', b, false), `${PONYTAIL_REMINDER}\n\nNext\n\n${CAVEMAN_REMINDER}`);
   });
 
   it('can be switched off again', async () => {

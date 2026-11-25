@@ -33,7 +33,7 @@ starts a fresh session, each turn carries the full instructions; a Codex thread 
 (`server/agent/caveman-guidance.ts`). Saying "stop caveman" or "normal mode" in the chat switches it off, as the skill says. The choice
 is remembered in the browser for the next new session; nothing changes for a session that did not ask for it.
 
-**Lean code (ponytail) for one session.** Same mechanism as terse replies: the **New session** dialog (Advanced options) has **Lean code (ponytail)** for Claude, Kiro, Codex and Cursor sessions. When ticked, the skill's instructions go into the session's first message and a one-line reminder into later turns (`server/agent/caveman-guidance.ts`, setting `session.<id>.ponytail`). It can be combined with terse replies. Saying "stop ponytail" or "normal mode" switches it off. The plugin's hooks and status band are not installed; only the skill text is used.
+**Lean code (ponytail) for one session.** Same mechanism as terse replies: the **New session** dialog (Advanced options) has **Lean code (ponytail)** for Claude, Kiro, Codex and Cursor sessions. When ticked, ponytail's compact always-on ruleset (`AGENTS.md`, bundled next to `SKILL.md`) is put at the start of the prompt, like a rules file, and a one-line reminder at the start of later turns (`server/agent/caveman-guidance.ts`, setting `session.<id>.ponytail`). It can be combined with terse replies. Saying "stop ponytail" or "normal mode" switches it off. The plugin's hooks and status band are not installed; only the skill text is used.
 
 **Working on this repo with Claude Code.** `.claude/settings.json` registers the `DietrichGebert/ponytail` marketplace and enables `ponytail@ponytail`, so Claude Code offers to install it when someone opens the repo.
 

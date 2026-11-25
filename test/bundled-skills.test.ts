@@ -20,7 +20,7 @@ describe('bundled skills', () => {
     assert.deepEqual(BUNDLED_SKILLS.map((s) => s.name).sort(), ['caveman', 'frontend-design', 'ponytail', 'security-guidance']);
     for (const s of BUNDLED_SKILLS) {
       assert.match(s.name, SKILL_NAME);
-      assert.deepEqual(Object.keys(s.files).sort(), ['LICENSE.txt', 'NOTICE.txt', 'SKILL.md']);
+      assert.deepEqual(Object.keys(s.files).sort(), s.name === 'ponytail' ? ['AGENTS.md', 'LICENSE.txt', 'NOTICE.txt', 'SKILL.md'] : ['LICENSE.txt', 'NOTICE.txt', 'SKILL.md']);
       assert.match(s.files['LICENSE.txt'], s.name === 'ponytail' ? /MIT License/ : /Apache License\s+Version 2\.0/);
       assert.match(s.files['NOTICE.txt'], /anthropics\/claude-plugins-official|JuliusBrussee\/caveman|DietrichGebert\/ponytail/);
       const front = /^---\n([\s\S]*?)\n---\n/.exec(s.files['SKILL.md']);

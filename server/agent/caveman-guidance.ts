@@ -52,25 +52,23 @@ export async function setPonytailMode(workflowId: string, on: boolean): Promise<
   await setSetting(getDb(), ponytailKey(workflowId), on ? '1' : '0');
 }
 
-/** The ponytail skill's instructions without its front matter. */
+/** The ponytail ruleset: the compact always-on version (AGENTS.md) that ponytail ships for agents that read a rules file. */
 export function ponytailInstructions(): string {
-  const skill = BUNDLED_SKILLS.find((s) => s.name === 'ponytail')?.files['SKILL.md'] ?? '';
-  return skill.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim();
+  return (BUNDLED_SKILLS.find((s) => s.name === 'ponytail')?.files['AGENTS.md'] ?? '').trim();
 }
 
-export const PONYTAIL_REMINDER = 'Coding style: ponytail (the smallest change that fully solves the task), as set at the start of this session, until the person says "stop ponytail" or "normal mode".';
+export const PONYTAIL_REMINDER = 'Coding rules: ponytail (the smallest change that fully solves the task), as set at the start of this session, until the person says "stop ponytail" or "normal mode".';
 
-/** The prompt with the ponytail instructions added: in full on a session's first turn, as a reminder after that. */
+/**
+ * The prompt with the ponytail rules put first, like a rules file, so they are not read as a note on the end of the message:
+ * in full on a session's first turn, as a reminder after that.
+ */
 export function withPonytailGuidance(prompt: string, on: boolean, firstTurn: boolean): string {
   if (!on) return prompt;
   const text = firstTurn
-    ? `Coding style for this whole session, chosen by the person who started it. Follow these instructions in all your work:
-
-${ponytailInstructions()}`
-    : PONYTAIL_REMINDER;
-  return `${prompt}
-
-${text}`;
+    ? `Coding rules for this whole session, chosen by the person who started it. Follow them in all your work until the person says "stop ponytail" or "normal mode".\n\n${ponytailInstructions()}\n\n---\n\n`
+    : `${PONYTAIL_REMINDER}\n\n`;
+  return text + prompt;
 }
 
 /** Both session styles (terse replies, ponytail) for a session. Each engine calls this on the prompt it sends. */
