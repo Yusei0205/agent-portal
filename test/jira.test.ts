@@ -139,6 +139,7 @@ test('JQL building: multiple project keys, filters, escaping', () => {
   assert.match(jql2, /^project = "PAY"/);
   assert.match(jql2, /statusCategory != Done/);
   assert.ok(!/assignee/.test(jql2));
+  assert.ok(!/statusCategory/.test(buildJql(m, { projectKey: 'PAY', includeDone: true })));
 
   // assignee: a person, unassigned, anyone; a bad id never reaches the JQL
   const jqlPerson = buildJql(m, { projectKey: 'RLP', assignee: '5b10ac8d82e05b22cc7d4ef5' });

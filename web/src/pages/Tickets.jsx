@@ -770,6 +770,7 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
   const [status, setStatus]           = useState('');
   // 'me' | 'any' | 'unassigned' | a Jira account id (then `person` says whose)
   const [assignee, setAssignee]       = useState('me');
+  const [includeDone, setIncludeDone] = useState(false);
   const [person, setPerson]           = useState(null);
   const [statuses, setStatuses]       = useState([]);
   const [issues, setIssues]           = useState(null);
@@ -820,6 +821,7 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
         if (jiraProject) params.set('project', jiraProject);
         if (debouncedQ) params.set('q', debouncedQ);
         if (status) params.set('status', status);
+        if (includeDone) params.set('includeDone', '1');
         if (more && nextPage) params.set('page', String(nextPage));
 
         const r = await api.get(
@@ -837,7 +839,7 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
         if (id === loadIdRef.current) setLoading(false);
       }
     },
-    [projectId, jiraProject, debouncedQ, status, assignee, nextPage],
+    [projectId, jiraProject, debouncedQ, status, assignee, includeDone, nextPage],
   );
 
   useEffect(() => {
@@ -845,7 +847,7 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
     setNextPage(null);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jiraProject, debouncedQ, status, assignee]);
+  }, [jiraProject, debouncedQ, status, assignee, includeDone]);
 
   return (
     <div
@@ -964,6 +966,16 @@ function TicketBrowser({ projectId, allowedKeys, onNewSession }) {
             value={person}
             onPick={(p) => { setPerson(p); setAssignee(p ? p.accountId : 'any'); }}
           />
+
+          {/* Include-completed toggle */}
+          <label className="choice ticket-filter-toggle">
+            <input
+              type="checkbox"
+              checked={includeDone}
+              onChange={(e) => setIncludeDone(e.target.checked)}
+            />
+            <span>Include completed</span>
+          </label>
         </div>
 
         {/* Issue list */}

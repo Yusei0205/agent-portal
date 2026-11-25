@@ -61,7 +61,7 @@ export const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '\
  */
 export function buildJql(
   m: Mapping,
-  o: { projectKey?: string; projectKeys?: string[]; status?: string; q?: string; assignee?: string },
+  o: { projectKey?: string; projectKeys?: string[]; status?: string; q?: string; assignee?: string; includeDone?: boolean },
 ): string {
   // Resolve the effective list of project keys to filter on
   const keys = o.projectKeys ?? (o.projectKey ? [o.projectKey] : []);
@@ -80,7 +80,7 @@ export function buildJql(
   if (a === 'me') parts.push('assignee = currentUser()');
   else if (a === 'unassigned') parts.push('assignee is EMPTY');
   else if (ACCOUNT_ID_RE.test(a) && a !== 'any') parts.push(`assignee = ${jqlStr(a)}`);
-  parts.push('statusCategory != Done');
+  if (!o.includeDone) parts.push('statusCategory != Done');
   if (o.status) parts.push(`status = ${jqlStr(o.status)}`);
   const q = (o.q ?? '').trim();
   if (q) {

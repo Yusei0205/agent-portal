@@ -1147,6 +1147,7 @@ export function registerJiraRoutes(): void {
       status: req.query.get('status') ?? '',
       q: req.query.get('q') ?? '',
       assignee: assigneeParam,
+      includeDone: req.query.get('includeDone') === '1',
     });
 
     // Pagination: /rest/api/3/search/jql uses nextPageToken (opaque string), not numeric startAt
