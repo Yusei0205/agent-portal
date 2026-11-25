@@ -6,6 +6,8 @@ import { api } from '../../lib/api.js';
 import { sessionStatusPill, runElapsedMs } from '../../lib/session-status.js';
 import { formatDuration } from '../../lib/agent-timeline.js';
 import { Icon } from '../../components/Icon.jsx';
+import { navigate, href } from '../../lib/router.js';
+import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { SwitchEngineDialog } from './SwitchEngineDialog.jsx';
@@ -273,6 +275,17 @@ export function IdeHeader({
     finally { setStopping(false); }
   };
 
+  // A new empty session with the same settings and repositories (no messages or files).
+  const duplicate = async () => {
+    setMenuOpen(false);
+    try {
+      const { workflow: copy } = await api.post(`/api/projects/${projectId}/workflows/${workflow.id}/duplicate`, {});
+      navigate(href(projectId, 'sessions', copy.id));
+    } catch (err) {
+      toast(err?.message || 'Could not duplicate the session.', 'error');
+    }
+  };
+
   const openDelegate = () => {
     setMenuOpen(false);
     setShowDelegate(true);
@@ -392,6 +405,16 @@ Click to change the title` : 'Click to give this session a short title'}
                 <button type="button" role="menuitem" className="account-menu-item" onClick={startRename}>
                   <Icon name="rename" size={14} />
                   Rename session
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="account-menu-item"
+                  onClick={duplicate}
+                  title="New session with the same settings and repositories; messages and files are not copied"
+                >
+                  <Icon name="copy" size={14} />
+                  Duplicate session
                 </button>
                 <button
                   type="button"
