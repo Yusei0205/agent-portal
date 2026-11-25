@@ -16,13 +16,13 @@ describe('bundled skills', () => {
   afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
   const skills = () => path.join(dir, '.claude', 'skills');
 
-  it('ships the three skills, each with its licence and a notice of where it came from', () => {
-    assert.deepEqual(BUNDLED_SKILLS.map((s) => s.name).sort(), ['caveman', 'frontend-design', 'security-guidance']);
+  it('ships the four skills, each with its licence and a notice of where it came from', () => {
+    assert.deepEqual(BUNDLED_SKILLS.map((s) => s.name).sort(), ['caveman', 'frontend-design', 'ponytail', 'security-guidance']);
     for (const s of BUNDLED_SKILLS) {
       assert.match(s.name, SKILL_NAME);
       assert.deepEqual(Object.keys(s.files).sort(), ['LICENSE.txt', 'NOTICE.txt', 'SKILL.md']);
-      assert.match(s.files['LICENSE.txt'], /Apache License\s+Version 2\.0/);
-      assert.match(s.files['NOTICE.txt'], /anthropics\/claude-plugins-official|JuliusBrussee\/caveman/);
+      assert.match(s.files['LICENSE.txt'], s.name === 'ponytail' ? /MIT License/ : /Apache License\s+Version 2\.0/);
+      assert.match(s.files['NOTICE.txt'], /anthropics\/claude-plugins-official|JuliusBrussee\/caveman|DietrichGebert\/ponytail/);
       const front = /^---\n([\s\S]*?)\n---\n/.exec(s.files['SKILL.md']);
       assert.ok(front, `${s.name} has front matter`);
       assert.match(front[1], new RegExp(`^name: ${s.name}$`, 'm'));
@@ -32,7 +32,7 @@ describe('bundled skills', () => {
 
   it('writes them into .claude/skills, and the agent skill reader can load each one', async () => {
     const written = await ensureBundledSkills(dir);
-    assert.deepEqual(written.sort(), ['caveman', 'frontend-design', 'security-guidance']);
+    assert.deepEqual(written.sort(), ['caveman', 'frontend-design', 'ponytail', 'security-guidance']);
     const read = skillReader([skills()]);
     for (const name of written) {
       assert.ok(fs.existsSync(path.join(skills(), name, 'LICENSE.txt')));
@@ -43,6 +43,7 @@ describe('bundled skills', () => {
     assert.match(String(read('security-guidance')), /execFile\(/);
     assert.match(String(read('security-guidance')), /\^\[0-9\]\+\$/);
     assert.match(String(read('caveman')), /Answer first/);
+    assert.match(String(read('ponytail')), /smallest/i);
     assert.match(String(read('frontend-design')), /Typography/);
   });
 
@@ -61,7 +62,7 @@ describe('bundled skills', () => {
     fs.mkdirSync(path.join(skills(), 'caveman'), { recursive: true });
     fs.writeFileSync(path.join(skills(), 'caveman', 'SKILL.md'), '# theirs\n');
     const written = await ensureBundledSkills(dir);
-    assert.deepEqual(written.sort(), ['frontend-design', 'security-guidance']);
+    assert.deepEqual(written.sort(), ['frontend-design', 'ponytail', 'security-guidance']);
     assert.equal(fs.readFileSync(path.join(skills(), 'caveman', 'SKILL.md'), 'utf8'), '# theirs\n');
     assert.equal(fs.existsSync(path.join(skills(), 'caveman', 'LICENSE.txt')), false);
   });

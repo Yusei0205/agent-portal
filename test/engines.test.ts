@@ -296,6 +296,21 @@ describe('Claude Code engine — terse replies (caveman)', () => {
     assert.ok(continued.includes(CAVEMAN_REMINDER));
     assert.doesNotMatch(continued, /Respond terse like smart caveman/);
   });
+
+  it('adds the ponytail instructions and reminder the same way, and leaves them out when off', async () => {
+    const { setCavemanMode, setPonytailMode, PONYTAIL_REMINDER } = await import('../server/agent/caveman-guidance.ts');
+    await setCavemanMode(t.workflowId, false);
+    await setPonytailMode(t.workflowId, false);
+    assert.doesNotMatch(await promptSent({}), /ponytail/i);
+    await setPonytailMode(t.workflowId, true);
+    const first = await promptSent({});
+    assert.match(first, /lazy senior developer/i);
+    assert.doesNotMatch(first, /Respond terse like smart caveman/);
+    const continued = await promptSent({ engineSessionId: 'prev-session' });
+    assert.ok(continued.includes(PONYTAIL_REMINDER));
+    assert.doesNotMatch(continued, /lazy senior developer/i);
+    await setPonytailMode(t.workflowId, false);
+  });
 });
 
 describe('Claude Code engine — usage and cost', () => {

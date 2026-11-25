@@ -259,6 +259,35 @@ describe('Codex integration', () => {
     } finally { setCodexClientFactoryForTests(fakeFactory); }
   });
 
+  it('adds the ponytail instructions to a new Codex thread and a reminder to a continued one, only when asked', async () => {
+    const { setPonytailMode, PONYTAIL_REMINDER } = await import('../server/agent/caveman-guidance.ts');
+    const sent: string[] = [];
+    setCodexClientFactoryForTests(async (home, env, cwd) => {
+      const client = await fakeFactory(home, env, cwd);
+      const request = client.request.bind(client);
+      client.request = ((method: string, params?: any) => {
+        if (method === 'turn/start') sent.push(String(params?.input?.[0]?.text ?? ''));
+        return request(method, params);
+      }) as typeof client.request;
+      return client;
+    });
+    try {
+      const off = await makeContext('Plain goal');
+      await runCodex(off);
+      const on = await makeContext('Lean goal');
+      await setPonytailMode(on.run.workflowId, true);
+      await runCodex(on);
+      const cont = await makeContext('Follow up', 'thread-fixture');
+      await setPonytailMode(cont.run.workflowId, true);
+      await runCodex(cont);
+      assert.equal(sent.length, 3);
+      assert.doesNotMatch(sent[0], /ponytail/i);
+      assert.match(sent[1], /lazy senior developer/i);
+      assert.ok(sent[2].includes(PONYTAIL_REMINDER));
+      assert.doesNotMatch(sent[2], /lazy senior developer/i);
+    } finally { setCodexClientFactoryForTests(fakeFactory); }
+  });
+
   it('streams text once, persists resume identity, and records token usage', async () => {
     const ctx = await makeContext();
     assert.equal(await runCodex(ctx), 'Hello from Codex');

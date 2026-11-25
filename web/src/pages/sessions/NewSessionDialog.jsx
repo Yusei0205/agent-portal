@@ -275,6 +275,8 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
   const [trustTools, setTrustTools] = useState(false);
   // Terse (caveman) replies for a Claude, Kiro or Codex session; the choice is remembered on this browser.
   const [caveman, setCaveman] = useState(() => { try { return localStorage.getItem('portal.newSession.caveman') === '1'; } catch { return false; } });
+  // Lean code (ponytail): the smallest change that solves the task; also remembered on this browser.
+  const [ponytail, setPonytail] = useState(() => { try { return localStorage.getItem('portal.newSession.ponytail') === '1'; } catch { return false; } });
   const [leadAgent, setLeadAgent] = useState('');
   const [model, setModel] = useState('');
   const [credentialId, setCredentialId] = useState('');
@@ -450,6 +452,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
         engine,
         trustTools: engine !== 'demo' ? trustTools : false,
         ...(engine !== 'demo' && caveman ? { caveman: true } : {}),
+        ...(engine !== 'demo' && ponytail ? { ponytail: true } : {}),
         leadAgent: leadAgent.trim() || undefined,
         maxIterations: Number(maxIterations),
         repoIds: [...selectedRepos],
@@ -700,6 +703,26 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
                       <strong>Terse replies (caveman)</strong>{' '}
                       <span className="muted">
                         Short answers with no filler, code and commands unchanged. Say &ldquo;normal mode&rdquo; in the chat to switch it off.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+              )}
+              {engine !== 'demo' && (
+                <div className="field">
+                  <label className="choice" style={{ cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={ponytail}
+                      onChange={(e) => {
+                        setPonytail(e.target.checked);
+                        try { localStorage.setItem('portal.newSession.ponytail', e.target.checked ? '1' : '0'); } catch { /* not remembered */ }
+                      }}
+                    />
+                    <span>
+                      <strong>Lean code (ponytail)</strong>{' '}
+                      <span className="muted">
+                        The smallest change that fully solves the task, with no extra features or layers. Say &ldquo;stop ponytail&rdquo; in the chat to switch it off.
                       </span>
                     </span>
                   </label>

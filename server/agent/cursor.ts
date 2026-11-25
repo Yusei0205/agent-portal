@@ -19,7 +19,7 @@ import { CursorArgError, cursorArgs as buildArgs, driveCursorTurn, turnFailure, 
 import { buildConversationRecap } from './recap.ts';
 import { getSessionsRepository } from '../repositories/sessions.ts';
 import { getBudgetRepository } from '../repositories/budget.ts';
-import { cavemanMode, withCavemanGuidance } from './caveman-guidance.ts';
+import { withSessionGuidance } from './caveman-guidance.ts';
 import { planMode, withPlanGuidance } from './plan-guidance.ts';
 import { applyCursorRules } from './cursor-config.ts';
 import { getCursorConfigFiles } from '../user-config.ts';
@@ -55,7 +55,7 @@ export async function runCursor(ctx: RunContext): Promise<string> {
 
   const resumeId = run.engineSessionId;
   const recap = resumeId ? '' : await buildConversationRecap(run.workflowId, run.runId);
-  const prompt = withPlanGuidance(withCavemanGuidance(recap + run.goal, cavemanMode(run.workflowId), !resumeId), planMode(run.workflowId));
+  const prompt = withPlanGuidance(withSessionGuidance(recap + run.goal, run.workflowId, !resumeId), planMode(run.workflowId));
 
   if (process.env.PORTAL_CURSOR_AGENTCORE_RUNTIME_ARN) {
     const { runCursorViaAgentCore } = await import('./cursor-agentcore.ts');

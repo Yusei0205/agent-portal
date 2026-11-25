@@ -4,7 +4,7 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
-import { cavemanMode, setCavemanMode, cavemanInstructions, withCavemanGuidance, CAVEMAN_REMINDER } from '../server/agent/caveman-guidance.ts';
+import { cavemanMode, setCavemanMode, cavemanInstructions, withCavemanGuidance, CAVEMAN_REMINDER, ponytailMode, setPonytailMode, ponytailInstructions, withSessionGuidance, PONYTAIL_REMINDER } from '../server/agent/caveman-guidance.ts';
 
 describe('caveman guidance text', () => {
   it('uses the bundled skill without its front matter', () => {
@@ -26,6 +26,15 @@ describe('caveman guidance text', () => {
     const later = withCavemanGuidance('And the tests', true, false);
     assert.equal(later, `And the tests\n\n${CAVEMAN_REMINDER}`);
     assert.ok(later.length < first.length / 4, 'the reminder is short');
+  });
+});
+
+describe('ponytail guidance text', () => {
+  it('uses the bundled skill without its front matter', () => {
+    const text = ponytailInstructions();
+    assert.doesNotMatch(text, /^---/);
+    assert.match(text, /lazy senior developer/i);
+    assert.match(text, /stop ponytail/);
   });
 });
 
@@ -64,6 +73,30 @@ describe('starting a session with terse replies', () => {
     assert.equal(cavemanMode(await start({ engine: 'claude-code' })), false);
     assert.equal(cavemanMode(await start({ engine: 'kiro' })), false);
     assert.equal(cavemanMode(await start({ engine: 'demo', caveman: true })), false);
+  });
+
+  it('turns ponytail on for a real engine that asks, and not for the demo engine or a session that does not ask', async () => {
+    assert.equal(ponytailMode(await start({ engine: 'claude-code', ponytail: true })), true);
+    assert.equal(ponytailMode(await start({ engine: 'kiro', ponytail: true })), true);
+    assert.equal(ponytailMode(await start({ engine: 'claude-code' })), false);
+    assert.equal(ponytailMode(await start({ engine: 'demo', ponytail: true })), false);
+    const both = await start({ engine: 'codex', caveman: true, ponytail: true });
+    assert.equal(cavemanMode(both) && ponytailMode(both), true);
+  });
+
+  it('guidance: nothing when both styles are off, each style on its own, or both together', async () => {
+    const a = await start({ engine: 'claude-code' });
+    assert.equal(withSessionGuidance('Fix it', a, true), 'Fix it');
+    await setPonytailMode(a, true);
+    const first = withSessionGuidance('Fix it', a, true);
+    assert.match(first, /lazy senior developer/i);
+    assert.doesNotMatch(first, /Respond terse like smart caveman/);
+    assert.equal(withSessionGuidance('Next', a, false), `Next\n\n${PONYTAIL_REMINDER}`);
+    const b = await start({ engine: 'claude-code', caveman: true, ponytail: true });
+    const both = withSessionGuidance('Fix it', b, true);
+    assert.match(both, /Respond terse like smart caveman/);
+    assert.match(both, /lazy senior developer/i);
+    assert.equal(withSessionGuidance('Next', b, false), `Next\n\n${CAVEMAN_REMINDER}\n\n${PONYTAIL_REMINDER}`);
   });
 
   it('can be switched off again', async () => {

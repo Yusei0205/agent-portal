@@ -30,7 +30,7 @@ import { runPortalCommand, PORTAL_COMMANDS } from './slash-commands.ts';
 import { lostRunReason, closeLostRun } from './lost-runs.ts';
 import { parseSlashCommand, resolveSessionCommand, sessionCommands, unknownCommandText } from './session-commands.ts';
 import { requestRepoPrep, getRepoPrep } from '../agent/repo-prep.ts';
-import { setCavemanMode } from '../agent/caveman-guidance.ts';
+import { setCavemanMode, setPonytailMode } from '../agent/caveman-guidance.ts';
 import { planMode } from '../agent/plan-guidance.ts';
 import { resolveApproval } from '../agent/approvals.ts';
 import { inputFingerprint, emitRunEvent } from '../agent/runner.ts';
@@ -505,6 +505,7 @@ export function registerWorkflowRoutes(): void {
 
     // Terse replies (caveman) for a Claude, Kiro or Codex session that asked for them.
     if (body.caveman === true && (engine === 'claude-code' || engine === 'kiro' || engine === 'codex' || engine === 'cursor')) await setCavemanMode(id, true);
+    if (body.ponytail === true && (engine === 'claude-code' || engine === 'kiro' || engine === 'codex' || engine === 'cursor')) await setPonytailMode(id, true);
 
     // createWorkflow owns the child-count increment internally (both backends).
     emit(projectId, { type: 'workflow.created', workflowId: id });

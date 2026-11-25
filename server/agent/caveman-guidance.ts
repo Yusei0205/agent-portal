@@ -39,3 +39,41 @@ export function withCavemanGuidance(prompt: string, on: boolean, firstTurn: bool
     : CAVEMAN_REMINDER;
   return `${prompt}\n\n${text}`;
 }
+
+const ponytailKey = (workflowId: string): string => `session.${workflowId}.ponytail`;
+
+/** Is lean-code (ponytail) mode on for this session? */
+export function ponytailMode(workflowId: string | null | undefined): boolean {
+  if (!workflowId) return false;
+  try { return getSetting(getDb(), ponytailKey(workflowId)) === '1'; } catch { return false; }
+}
+
+export async function setPonytailMode(workflowId: string, on: boolean): Promise<void> {
+  await setSetting(getDb(), ponytailKey(workflowId), on ? '1' : '0');
+}
+
+/** The ponytail skill's instructions without its front matter. */
+export function ponytailInstructions(): string {
+  const skill = BUNDLED_SKILLS.find((s) => s.name === 'ponytail')?.files['SKILL.md'] ?? '';
+  return skill.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim();
+}
+
+export const PONYTAIL_REMINDER = 'Coding style: ponytail (the smallest change that fully solves the task), as set at the start of this session, until the person says "stop ponytail" or "normal mode".';
+
+/** The prompt with the ponytail instructions added: in full on a session's first turn, as a reminder after that. */
+export function withPonytailGuidance(prompt: string, on: boolean, firstTurn: boolean): string {
+  if (!on) return prompt;
+  const text = firstTurn
+    ? `Coding style for this whole session, chosen by the person who started it. Follow these instructions in all your work:
+
+${ponytailInstructions()}`
+    : PONYTAIL_REMINDER;
+  return `${prompt}
+
+${text}`;
+}
+
+/** Both session styles (terse replies, ponytail) for a session. Each engine calls this on the prompt it sends. */
+export function withSessionGuidance(prompt: string, workflowId: string | null | undefined, firstTurn: boolean): string {
+  return withPonytailGuidance(withCavemanGuidance(prompt, cavemanMode(workflowId), firstTurn), ponytailMode(workflowId), firstTurn);
+}

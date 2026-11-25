@@ -1,6 +1,6 @@
 # Bundled skills and integrations
 
-The portal ships three skills and two MCP presets taken from popular Claude Code plugins. The plugins themselves are not
+The portal ships four skills and two MCP presets taken from popular Claude Code plugins. The plugins themselves are not
 installed (a cloud runner does not run `claude plugin install`); their content is.
 
 ## Skills (every project)
@@ -14,6 +14,7 @@ never overwritten and one they deleted does not come back. A skill folder that a
 |---|---|---|---|
 | `frontend-design` | `anthropics/claude-plugins-official`, `plugins/frontend-design` (unchanged) | Apache-2.0 | Guidance for distinctive, intentional UI design: aesthetic direction, typography, avoiding templated defaults, plan-then-critique |
 | `caveman` | `JuliusBrussee/caveman`, `skills/caveman` (unchanged) | Apache-2.0 | Terse answers (answer first, no ceremony, technical facts kept); on until "stop caveman" or "normal mode" |
+| `ponytail` | `DietrichGebert/ponytail`, `skills/ponytail` (unchanged) | MIT | Lean-code mode: the smallest change that fully solves the task, no extra features or layers; ends each reply with what was skipped |
 | `security-guidance` | adapted from `anthropics/claude-plugins-official`, `plugins/security-guidance` | Apache-2.0 | Security checks for code that runs commands, evaluates code, renders HTML, loads serialized data, configures crypto/TLS or edits GitHub Actions workflows |
 
 `security-guidance` is different from the other two: the plugin is a Claude Code **hook** that warns while a file is being
@@ -31,6 +32,10 @@ the session's first message (and a one-line reminder to later turns of a continu
 starts a fresh session, each turn carries the full instructions; a Codex thread is continued, so it gets the reminder). It is stored as the setting `session.<id>.caveman`
 (`server/agent/caveman-guidance.ts`). Saying "stop caveman" or "normal mode" in the chat switches it off, as the skill says. The choice
 is remembered in the browser for the next new session; nothing changes for a session that did not ask for it.
+
+**Lean code (ponytail) for one session.** Same mechanism as terse replies: the **New session** dialog (Advanced options) has **Lean code (ponytail)** for Claude, Kiro, Codex and Cursor sessions. When ticked, the skill's instructions go into the session's first message and a one-line reminder into later turns (`server/agent/caveman-guidance.ts`, setting `session.<id>.ponytail`). It can be combined with terse replies. Saying "stop ponytail" or "normal mode" switches it off. The plugin's hooks and status band are not installed; only the skill text is used.
+
+**Working on this repo with Claude Code.** `.claude/settings.json` registers the `DietrichGebert/ponytail` marketplace and enables `ponytail@ponytail`, so Claude Code offers to install it when someone opens the repo.
 
 To change a skill for one project, edit its `SKILL.md` under that project's `.claude/skills`. To update the bundled text for
 everyone, change the originals and regenerate `server/bundled-skills.ts`.
