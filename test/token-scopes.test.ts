@@ -135,6 +135,13 @@ const WRITE_ROUTES: RouteSpec[] = [
   { method: 'POST', path: () => `/api/projects/${projectId}/workflows/${workflowId}/message`, body: { message: 'hi' }, requiredScope: 'write' },
   { method: 'POST', path: () => `/api/projects/${projectId}/workflows/${workflowId}/delegate`, body: { task: 'child task' }, requiredScope: 'write' },
   { method: 'PATCH', path: () => `/api/projects/${projectId}/workflows/${workflowId}`, body: { title: 'new' }, requiredScope: 'write' },
+  // Project writes: a read-only token may list and open projects, never create, change or delete them
+  { method: 'POST', path: '/api/projects', body: { name: 'made by a read-only token' }, requiredScope: 'write' },
+  { method: 'PUT', path: () => `/api/projects/${projectId}`, body: { name: 'renamed' }, requiredScope: 'write' },
+  { method: 'DELETE', path: () => `/api/projects/${projectId}`, requiredScope: 'write' },
+  { method: 'POST', path: () => `/api/projects/${projectId}/members`, body: { userId: 'nobody', role: 'member' }, requiredScope: 'write' },
+  { method: 'PUT', path: () => `/api/projects/${projectId}/members/nobody`, body: { role: 'member' }, requiredScope: 'write' },
+  { method: 'DELETE', path: () => `/api/projects/${projectId}/members/nobody`, requiredScope: 'write' },
   // IDE writes
   { method: 'POST', path: () => `/api/workflows/${workflowId}/ide/file`, body: { path: 'test.txt', content: 'x', scope: 'uploads' }, requiredScope: 'write' },
   { method: 'PUT', path: () => `/api/workflows/${workflowId}/ide/file`, body: { path: 'test.txt', content: 'x', scope: 'uploads' }, requiredScope: 'write' },

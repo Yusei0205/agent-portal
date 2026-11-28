@@ -218,6 +218,9 @@ describe('bridge against a running portal', () => {
     await b.handleMessage(msg('/project 1'));
     await b.handleMessage(msg('/new demo anything'));
     assert.match(sent.at(-1)!.text, /The portal said: write scope required/);
+    await b.handleMessage(msg('/newproject Not allowed'));
+    assert.match(sent.at(-1)!.text, /The portal said: write scope required/);
+    assert.ok(!(await portal.listProjects()).some((p) => p.name === 'Not allowed'));
   });
 
   test('startTelegramBridge checks the portal token before starting', async () => {

@@ -226,6 +226,14 @@ async function requireMember(req: PortalRequest, res: PortalResponse, projectId:
   return project as Project;
 }
 
+// ── Scope helper ──────────────────────────────────────────────────────────────
+
+/** A browser session may change projects; an API token needs the write scope (a read-only token may only look). */
+function hasWriteScope(req: PortalRequest): boolean {
+  if (!req.authViaToken) return true;
+  return (req.tokenScopes ?? []).includes('write');
+}
+
 // ── Route registration ────────────────────────────────────────────────────────
 
 export function registerProjectRoutes(): void {
@@ -255,6 +263,7 @@ export function registerProjectRoutes(): void {
 
   // POST /api/projects
   router.post('/api/projects', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasWriteScope(req)) { sendJson(res, 403, { error: 'write scope required' }); return; }
     if (!req.user) { sendJson(res, 401, { error: 'Sign in to continue' }); return; }
 
     const body = req.body as Record<string, unknown>;
@@ -347,6 +356,7 @@ export function registerProjectRoutes(): void {
 
   // PUT /api/projects/:id
   router.put('/api/projects/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasWriteScope(req)) { sendJson(res, 403, { error: 'write scope required' }); return; }
     if (!await requireOwner(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
@@ -365,6 +375,7 @@ export function registerProjectRoutes(): void {
 
   // DELETE /api/projects/:id
   router.delete('/api/projects/:id', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasWriteScope(req)) { sendJson(res, 403, { error: 'write scope required' }); return; }
     if (!await requireOwner(req, res, req.params.id)) return;
     if (!await requireStepUp(req, res)) return;
     await getProjectRepository().archiveProject(req.params.id);
@@ -406,6 +417,7 @@ export function registerProjectRoutes(): void {
 
   // POST /api/projects/:id/members
   router.post('/api/projects/:id/members', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasWriteScope(req)) { sendJson(res, 403, { error: 'write scope required' }); return; }
     if (!await requireOwner(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
@@ -435,6 +447,7 @@ export function registerProjectRoutes(): void {
 
   // PUT /api/projects/:id/members/:userId
   router.put('/api/projects/:id/members/:userId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasWriteScope(req)) { sendJson(res, 403, { error: 'write scope required' }); return; }
     if (!await requireOwner(req, res, req.params.id)) return;
 
     const body = req.body as Record<string, unknown>;
@@ -457,6 +470,7 @@ export function registerProjectRoutes(): void {
 
   // DELETE /api/projects/:id/members/:userId
   router.delete('/api/projects/:id/members/:userId', async (req: PortalRequest, res: PortalResponse): Promise<void> => {
+    if (!hasWriteScope(req)) { sendJson(res, 403, { error: 'write scope required' }); return; }
     if (!await requireOwner(req, res, req.params.id)) return;
 
     const repo = getProjectRepository();
