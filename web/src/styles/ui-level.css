@@ -76,7 +76,7 @@
 
 [data-template="pixel"] .ui-level-switch button {
   font-family: var(--pixel-label);
-  font-size: 13px;
+  font-size: 14px;
 }
 
 [data-template="pixel"] .ui-level-switch button + button {
