@@ -88,6 +88,7 @@ import { registerPortalEventsRoutes } from './portal-events.ts';
 import { registerAiAttachmentRoutes, cleanupOrphanedAttachments } from './ai-attachments.ts';
 import { runDueTriggers } from './loop-triggers.ts';
 import { startScheduleTimer } from './api-sim/api-schedule.ts';
+import { startTelegramBridge, stopTelegramBridge } from './telegram/index.ts';
 import { registerBedrockSsoRoutes } from './bedrock-sso.ts';
 import { registerKiroSettingsRoutes } from './kiro-settings.ts';
 import { registerEngineModelRoutes } from './models.ts';
@@ -439,10 +440,21 @@ export async function startServer(
   // 9c. Scheduled API test runs (on Lambda: the `api-test-runs` schedule)
   startScheduleTimer(onLambda);
 
+  // 9d. Telegram bridge (only when TELEGRAM_BOT_TOKEN is set; long polling, so no public address is needed)
+  if (!onLambda && process.env.TELEGRAM_BOT_TOKEN) {
+    const addr = server.address();
+    const listenPort = addr && typeof addr === 'object' ? addr.port : port;
+    const loopback = host === '0.0.0.0' || host === '::' || !host ? '127.0.0.1' : host;
+    const urlHost = loopback.includes(':') ? `[${loopback}]` : loopback;
+    void startTelegramBridge({ baseUrl: `http://${urlHost}:${listenPort}`, dataDir: cfg.dataDir })
+      .catch((e) => console.error('[telegram] failed to start:', e));
+  }
+
   // 10. Graceful shutdown
   if (!onLambda) await recoverLocalAutomations();
   server.on('close', () => {
     stopLocalAutomationTimers();
+    void stopTelegramBridge();
     clearInterval(sessionCleanupTimer);
     clearInterval(attachmentCleanupTimer);
     stopIdleStopTimer();

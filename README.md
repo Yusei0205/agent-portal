@@ -350,6 +350,12 @@ Run it behind HTTPS (Caddy is the least work: `reverse_proxy 127.0.0.1:8787`), a
 `TRUST_PROXY=1` in `.env`. Do not expose port 8787 directly. On EC2, give the instance a
 role with Bedrock invoke and CodeCommit access and choose "Server's own AWS identity" in
 Settings, so no AWS keys are stored at all.
+## Control it from Telegram
+
+A local portal can be driven from a Telegram chat: pick a project, start or message a session, stop it,
+and get the agent's reply when a turn ends. It uses long polling, so no public address is needed, and
+only allowlisted chats are answered. Setup takes about five minutes: see [docs/telegram.md](docs/telegram.md).
+
 ## How to test it (about 15 minutes, Demo mode)
 
 1. **Project**: create “Refund service”. Under *Setup › Team & members*, add a colleague
