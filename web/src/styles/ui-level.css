@@ -1,0 +1,97 @@
+/* Simple / Advanced switch (rail) and the advanced-page bar.
+   Works with every template: only theme tokens are used. */
+
+.ui-level-switch {
+  display: flex;
+  margin: 8px 12px 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 8px);
+  overflow: hidden;
+}
+
+.ui-level-switch button {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 4px;
+  border: 0;
+  background: var(--panel);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.ui-level-switch button + button {
+  border-left: 1px solid var(--line);
+}
+
+.ui-level-switch button[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.ui-level-switch button:focus-visible,
+.ui-level-mini:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.ui-level-mini {
+  display: block;
+  width: 32px;
+  height: 28px;
+  margin: 8px auto 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.advanced-page-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-md, 8px);
+  background: var(--accent-wash);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+/* Pixel template: square, outlined, label font */
+[data-template="pixel"] .ui-level-switch {
+  border: 3px solid var(--line);
+  border-radius: 0;
+}
+
+[data-template="pixel"] .ui-level-switch button {
+  font-family: var(--pixel-label);
+  font-size: 13px;
+}
+
+[data-template="pixel"] .ui-level-switch button + button {
+  border-left: 3px solid var(--line);
+}
+
+[data-template="pixel"] .ui-level-mini {
+  border: 2px solid var(--line);
+  border-radius: 0;
+  font-family: var(--pixel-label);
+}
+
+[data-template="pixel"] .advanced-page-bar {
+  border: 3px solid var(--line);
+  border-left: 8px solid var(--accent);
+  border-radius: 0;
+  box-shadow: var(--pixel-shadow-sm);
+}

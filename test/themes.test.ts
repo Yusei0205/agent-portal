@@ -30,6 +30,7 @@ import {
   AURORA_GLASS,
   CYBER_HUD,
   TWILIGHT,
+  PIXEL,
   FONT_ALLOW_LIST,
   ALLOWED_TOKEN_NAMES,
 } from '../server/themes.ts';
@@ -107,6 +108,22 @@ describe('validateTemplate — unit', () => {
     assert.ok(r1.ok, `aethrix-night: ${JSON.stringify(r1.errors)}`);
     const r2 = validateTemplate(CLASSIC_TEAL);
     assert.ok(r2.ok, `classic-teal: ${JSON.stringify(r2.errors)}`);
+  });
+
+  it('accepts the Pixel built-in template, with both modes, allowed fonts and every token', () => {
+    const result = validateTemplate(PIXEL);
+    assert.ok(result.ok, `pixel: ${JSON.stringify(result.errors)}`);
+    const fontSet = new Set(FONT_ALLOW_LIST);
+    for (const role of ['display', 'body', 'mono'] as const) {
+      assert.ok(fontSet.has(PIXEL.fonts[role]), `pixel ${role} font "${PIXEL.fonts[role]}" should be in allow-list`);
+    }
+    for (const mode of ['dark', 'light'] as const) {
+      const tokens = PIXEL.modes[mode]!;
+      for (const token of ALLOWED_TOKEN_NAMES) {
+        assert.ok(token in tokens, `pixel ${mode} mode missing token "${token}"`);
+      }
+    }
+    assert.deepEqual(PIXEL.radius, { sm: 0, md: 0, lg: 0 });
   });
 
   it('accepts the Clovi built-in template', () => {

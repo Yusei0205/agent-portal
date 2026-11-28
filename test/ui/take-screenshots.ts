@@ -145,6 +145,7 @@ async function main() {
   for (const mode of ['dark', 'light'] as const) {
     console.log(`\n— Aethrix Night ${mode}`);
     const context: BrowserContext = await browser.newContext({ baseURL: BASE, viewport: { width: 1280, height: 800 } });
+    await context.addInitScript(() => { try { localStorage.setItem('portal-ui-level', 'advanced'); } catch { /* storage blocked */ } });
     const page: Page = await context.newPage();
 
     await login(page);
@@ -156,6 +157,7 @@ async function main() {
     // For simplicity, just take it as the first screen on a fresh context
     {
       const ctx2 = await browser.newContext({ baseURL: BASE, viewport: { width: 1280, height: 800 } });
+      await ctx2.addInitScript(() => { try { localStorage.setItem('portal-ui-level', 'advanced'); } catch { /* storage blocked */ } });
       const p2 = await ctx2.newPage();
       await p2.goto(BASE, { waitUntil: 'domcontentloaded' });
       await p2.waitForTimeout(600);
@@ -342,6 +344,7 @@ async function main() {
   console.log('\n— Classic Teal light');
   {
     const context: BrowserContext = await browser.newContext({ baseURL: BASE, viewport: { width: 1280, height: 800 } });
+    await context.addInitScript(() => { try { localStorage.setItem('portal-ui-level', 'advanced'); } catch { /* storage blocked */ } });
     const page: Page = await context.newPage();
     await login(page);
     await setTemplate(page, 'classic-teal');

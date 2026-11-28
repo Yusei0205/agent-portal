@@ -540,6 +540,8 @@ async function main() {
   try {
     browser = await chromium.launch({ headless: true });
     context = await browser.newContext({ baseURL: BASE });
+    // The smoke suite walks every page from the rail, so it runs in Advanced mode (Simple hides some items).
+    await context.addInitScript(() => { try { localStorage.setItem('portal-ui-level', 'advanced'); } catch { /* storage blocked */ } });
     page    = await context.newPage();
 
     // Changes to what the portal trusts (credentials, tools, ...) ask the person for their password.

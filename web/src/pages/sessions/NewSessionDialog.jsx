@@ -23,6 +23,7 @@ import { useFocusTrap } from '../../lib/useFocusTrap.js';
 import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 import { JiraTicketPicker } from '../../components/JiraTicketPicker.jsx';
 import { fillGoalVars } from './ticketVars.js';
+import { Advanced } from '../../components/UiLevel.jsx';
 
 const GOAL_MAX = 8000;
 
@@ -676,6 +677,8 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
             </div>
           )}
 
+          {/* Simple mode uses the defaults for model, reply style and iterations */}
+          <Advanced>
           <details className="launch-advanced">
             <summary>Advanced options · model, reply style, iterations</summary>
             <div className="stack">
@@ -742,6 +745,7 @@ export function NewSessionDialog({ project, repos = [], workspaces = [], onClose
               </div>
             </div>
           </details>
+          </Advanced>
 
           {/* Repositories (legacy: shown when no workspaces and repos exist) */}
           {workspaces.length === 0 && readyRepos.length > 0 && (

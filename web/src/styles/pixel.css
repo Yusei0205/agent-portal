@@ -1,0 +1,244 @@
+/**
+ * Pixel — template-specific visual enhancements.
+ *
+ * All rules are gated on [data-template="pixel"] so they have zero effect
+ * when another template is active.
+ *
+ * Idea: pixel-art chrome, readable content.
+ *   - Headings, labels, buttons, badges and tabs use the pixel faces
+ *     (Pixelify Sans for titles, Silkscreen for small labels).
+ *   - Chat, documents, tables and code keep IBM Plex Sans / JetBrains Mono.
+ *   - Square corners, 3px outlines in --line, hard stepped drop shadows.
+ *   - Buttons press down on click; motion moves in steps.
+ *
+ * No url(), no external assets. prefers-reduced-motion and data-fx-motion
+ * respected.
+ */
+
+[data-template="pixel"] {
+  --pixel-label: 'Silkscreen', 'Pixelify Sans Variable', 'Pixelify Sans', monospace;
+  --pixel-outline: 3px solid var(--line);
+  --pixel-shadow: 4px 4px 0 var(--line);
+  --pixel-shadow-sm: 3px 3px 0 var(--line);
+  --radius: 0px;
+}
+
+/* Page cards and panels that hard-code their own rounding go square too.
+   Round things (avatars, dots, pills) keep their shape: they are not cards. */
+[data-template="pixel"] .main :is([class*="card"], [class*="panel"], [class*="tile"], [class*="-box"]) {
+  border-radius: 0;
+}
+
+/* ── Canvas: faint 8px pixel grid ───────────────────────────────── */
+[data-template="pixel"][data-fx-grid="true"] .shell > .shell-right > .main {
+  background-image:
+    repeating-linear-gradient(90deg, transparent 0 15px, color-mix(in srgb, var(--line-2) 45%, transparent) 15px 16px),
+    repeating-linear-gradient(0deg,  transparent 0 15px, color-mix(in srgb, var(--line-2) 45%, transparent) 15px 16px);
+  background-size: 16px 16px;
+}
+
+/* ── Type ───────────────────────────────────────────────────────── */
+[data-template="pixel"] h1,
+[data-template="pixel"] h2,
+[data-template="pixel"] h3,
+[data-template="pixel"] .page-title,
+[data-template="pixel"] .brand {
+  font-family: var(--font-display);
+  letter-spacing: 0;
+  font-weight: 700;
+}
+
+[data-template="pixel"] .panel-title,
+[data-template="pixel"] .card-title,
+[data-template="pixel"] .stat-label,
+[data-template="pixel"] .rail-section-label,
+[data-template="pixel"] .rail-section-toggle,
+[data-template="pixel"] .badge,
+[data-template="pixel"] .tab-btn,
+[data-template="pixel"] .btn,
+[data-template="pixel"] th {
+  font-family: var(--pixel-label);
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+[data-template="pixel"] .kpi-value,
+[data-template="pixel"] .stat-value {
+  font-family: var(--font-display);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Surfaces: square, outlined, hard shadow ────────────────────── */
+[data-template="pixel"] .panel,
+[data-template="pixel"] .card,
+[data-template="pixel"] .project-card,
+[data-template="pixel"] .stat-card,
+[data-template="pixel"] .modal,
+[data-template="pixel"] .palette-dialog {
+  border: var(--pixel-outline);
+  box-shadow: var(--pixel-shadow);
+  border-radius: 0;
+}
+
+[data-template="pixel"] .project-card:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0 var(--line);
+}
+
+[data-template="pixel"] .stat-card.ok,
+[data-template="pixel"] .stat-card[data-status="ok"]       { border-left: 8px solid var(--ok); }
+[data-template="pixel"] .stat-card.warn,
+[data-template="pixel"] .stat-card[data-status="warn"]     { border-left: 8px solid var(--warn); }
+[data-template="pixel"] .stat-card.danger,
+[data-template="pixel"] .stat-card[data-status="danger"]   { border-left: 8px solid var(--danger); }
+[data-template="pixel"] .stat-card.info,
+[data-template="pixel"] .stat-card[data-status="info"]     { border-left: 8px solid var(--info); }
+
+/* ── Buttons: press down on click ───────────────────────────────── */
+[data-template="pixel"] .btn {
+  border-radius: 0;
+  border: var(--pixel-outline);
+  box-shadow: var(--pixel-shadow-sm);
+  transition: transform 60ms steps(2), box-shadow 60ms steps(2);
+}
+
+[data-template="pixel"] .btn:active:not(:disabled) {
+  transform: translate(3px, 3px);
+  box-shadow: none;
+}
+
+[data-template="pixel"] .btn-primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+[data-template="pixel"] .btn-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, #ffffff);
+}
+
+[data-template="pixel"] .btn-secondary,
+[data-template="pixel"] .btn-outline {
+  background: var(--panel);
+  color: var(--ink);
+}
+
+[data-template="pixel"] .btn-secondary:hover:not(:disabled),
+[data-template="pixel"] .btn-outline:hover:not(:disabled) {
+  background: var(--raised);
+}
+
+[data-template="pixel"] .btn:focus-visible,
+[data-template="pixel"] .rail-link:focus-visible,
+[data-template="pixel"] .tab-btn:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ── Inputs ─────────────────────────────────────────────────────── */
+[data-template="pixel"] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+[data-template="pixel"] select,
+[data-template="pixel"] textarea {
+  border-radius: 0;
+  border: 2px solid var(--line);
+  box-shadow: inset 2px 2px 0 color-mix(in srgb, var(--line) 25%, transparent);
+}
+
+[data-template="pixel"] input:focus-visible,
+[data-template="pixel"] select:focus-visible,
+[data-template="pixel"] textarea:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 0;
+}
+
+/* ── Badges and tabs ────────────────────────────────────────────── */
+[data-template="pixel"] .badge {
+  border-radius: 0;
+  border: 2px solid currentColor;
+}
+
+[data-template="pixel"] .tab-btn {
+  border-radius: 0;
+}
+
+[data-template="pixel"] .tab-btn[aria-selected="true"],
+[data-template="pixel"] .tab-btn.is-active {
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: inset 0 -3px 0 var(--line);
+}
+
+/* ── Progress bars fill in blocks ───────────────────────────────── */
+[data-template="pixel"] .progress-fill {
+  border-radius: 0;
+  background: repeating-linear-gradient(90deg,
+    var(--accent-2) 0 6px,
+    color-mix(in srgb, var(--accent-2) 70%, #000000) 6px 8px);
+}
+
+/* ── Rail ───────────────────────────────────────────────────────── */
+[data-template="pixel"] .rail {
+  border-right: var(--pixel-outline);
+}
+
+[data-template="pixel"] .rail-link {
+  border-radius: 0;
+  border: 2px solid transparent;
+}
+
+[data-template="pixel"] .rail-link.is-active {
+  background: var(--panel);
+  border-color: var(--line);
+  color: var(--ink);
+  box-shadow: var(--pixel-shadow-sm);
+}
+
+[data-template="pixel"] .rail-link.is-active svg {
+  color: var(--accent-2);
+}
+
+[data-template="pixel"] .rail-active-bar {
+  display: none;
+}
+
+[data-template="pixel"] .brand-icon {
+  image-rendering: pixelated;
+}
+
+/* ── Header and palette ─────────────────────────────────────────── */
+[data-template="pixel"] .app-header {
+  border-bottom: var(--pixel-outline);
+}
+
+[data-template="pixel"] .palette-trigger-btn {
+  border-radius: 0;
+  border: 2px solid var(--line);
+}
+
+/* ── Code and kbd ───────────────────────────────────────────────── */
+[data-template="pixel"] kbd {
+  border-radius: 0;
+  border: 2px solid var(--line);
+  box-shadow: 2px 2px 0 var(--line);
+  font-family: var(--mono);
+}
+
+[data-template="pixel"] pre,
+[data-template="pixel"] code {
+  border-radius: 0;
+}
+
+/* ── Motion ─────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  [data-template="pixel"] .btn,
+  [data-template="pixel"] .project-card { transition: none; }
+  [data-template="pixel"] .btn:active:not(:disabled),
+  [data-template="pixel"] .project-card:hover { transform: none; }
+}
+
+[data-template="pixel"][data-fx-motion="none"] *,
+[data-template="pixel"][data-fx-motion="none"] *::before,
+[data-template="pixel"][data-fx-motion="none"] *::after {
+  transition: none !important;
+  animation: none !important;
+}

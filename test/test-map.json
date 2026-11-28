@@ -1222,7 +1222,7 @@
       ]
     },
     "theme": {
-      "description": "Theme system — theme cycling, persistence, and custom CSS templates",
+      "description": "Theme system — theme cycling, persistence, custom CSS templates, the Pixel template and the Simple / Advanced interface level",
       "sources": [
         "server/themes.ts",
         "server/repositories/themes.ts",
@@ -1251,12 +1251,18 @@
         "shared/themes/kiro-ide.json",
         "shared/themes/kyuubit.json",
         "web/src/pages/settings/Appearance.jsx",
-        "web/src/components/Rail.jsx"
+        "web/src/components/Rail.jsx",
+        "web/src/styles/pixel.css",
+        "shared/themes/pixel.json",
+        "web/src/lib/uiLevel.js",
+        "web/src/components/UiLevel.jsx",
+        "web/src/styles/ui-level.css"
       ],
       "tests": [
         "test/themes.test.ts",
         "test/kyuubit-brand.test.ts",
-        "test/themes-repo.test.ts"
+        "test/themes-repo.test.ts",
+        "test/ui-level.test.ts"
       ],
       "smokeIds": [
         "theme"

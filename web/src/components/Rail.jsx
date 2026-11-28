@@ -11,6 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { Icon } from './Icon.jsx';
 import { navigate, href } from '../lib/router.js';
 import { useActiveTemplate } from '../lib/theme.js';
+import { UiLevelSwitch, useUiLevel } from './UiLevel.jsx';
 
 // ── Local storage keys ────────────────────────────────────────────────────────
 
@@ -31,6 +32,7 @@ export const COLLAPSED_RAIL_W = 56;
 // adminOnly: hide from non-admin users.
 // subTab:    default sub-route appended to the nav link (e.g. 'git' for connections).
 // activeFor: extra tab names that should also highlight this rail item.
+// advanced:  only shown in Advanced mode (keep in sync with ADVANCED_TABS in lib/uiLevel.js).
 
 const NAV_SECTIONS = [
   {
@@ -39,7 +41,7 @@ const NAV_SECTIONS = [
     items: [
       { tab: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
       { tab: 'inbox', label: 'Inbox', icon: 'inbox', badge: true },
-      { tab: 'usage', label: 'Usage', icon: 'chart' },
+      { tab: 'usage', label: 'Usage', icon: 'chart', advanced: true },
     ],
   },
   {
@@ -51,7 +53,7 @@ const NAV_SECTIONS = [
       { tab: 'sessions',   label: 'Sessions',   icon: 'terminal'  },
       { tab: 'automations', label: 'Workflows', icon: 'workflow' },
       // repositories are a tab of Workspaces; project setup (team, permissions) is reached from there
-      { tab: 'workspaces', label: 'Workspaces', icon: 'projects', activeFor: ['setup'] },
+      { tab: 'workspaces', label: 'Workspaces', icon: 'projects', activeFor: ['setup'], advanced: true },
       // defaults to /p/:pid/reviews/code; also highlights for the legacy 'review' and 'branchscans' tabs
       { tab: 'reviews',    label: 'Reviews',    icon: 'git-pull-request', subTab: 'code', activeFor: ['review', 'branchscans'] },
     ],
@@ -62,9 +64,9 @@ const NAV_SECTIONS = [
     projectScoped: true,
     secondary: true,
     items: [
-      { tab: 'tests',      label: 'Tests',      icon: 'flask'     },
-      { tab: 'tickets',    label: 'Tickets',    icon: 'ticket'    },
-      { tab: 'mail',       label: 'Mail',       icon: 'inbox'     },
+      { tab: 'tests',      label: 'Tests',      icon: 'flask',  advanced: true },
+      { tab: 'tickets',    label: 'Tickets',    icon: 'ticket', advanced: true },
+      { tab: 'mail',       label: 'Mail',       icon: 'inbox',  advanced: true },
     ],
   },
   {
@@ -84,7 +86,7 @@ const NAV_SECTIONS = [
     label: 'Connect',
     secondary: true,
     items: [
-      { tab: 'connect', label: 'Connections', icon: 'plug', subTab: 'code-hosts', activeFor: ['connect'] },
+      { tab: 'connect', label: 'Connections', icon: 'plug', subTab: 'code-hosts', activeFor: ['connect'], advanced: true },
     ],
   },
   {
@@ -93,7 +95,7 @@ const NAV_SECTIONS = [
     label: 'Agents',
     secondary: true,
     items: [
-      { tab: 'config', label: 'Agent setup', icon: 'file-cog' },
+      { tab: 'config', label: 'Agent setup', icon: 'file-cog', advanced: true },
     ],
   },
   {
@@ -103,10 +105,10 @@ const NAV_SECTIONS = [
     secondary: true,
     items: [
       { tab: 'settings', label: 'Settings',   icon: 'settings' },
-      { tab: 'users',    label: 'Users',      icon: 'shield-user', adminOnly: true },
-      { tab: 'agentcore', label: 'AgentCore', icon: 'chart', adminOnly: true },
-      { tab: 'api',      label: 'API access', icon: 'code-2' },
-      { tab: 'feedback', label: 'Feedback',   icon: 'inbox' },
+      { tab: 'users',    label: 'Users',      icon: 'shield-user', adminOnly: true, advanced: true },
+      { tab: 'agentcore', label: 'AgentCore', icon: 'chart', adminOnly: true, advanced: true },
+      { tab: 'api',      label: 'API access', icon: 'code-2', advanced: true },
+      { tab: 'feedback', label: 'Feedback',   icon: 'inbox', advanced: true },
       { tab: 'help',     label: 'Help',       icon: 'help' },
     ],
   },
@@ -392,8 +394,9 @@ function NavSection({
   const [expanded, setExpanded] = useState(containsRoute);
   useEffect(() => { if (containsRoute) setExpanded(true); }, [containsRoute, route.tab]);
   const disclosure = section.secondary && !collapsed;
+  const uiLevel = useUiLevel();
   const visibleItems = section.items.filter(
-    (item) => !item.adminOnly || user?.is_admin,
+    (item) => (!item.adminOnly || user?.is_admin) && (!item.advanced || uiLevel === 'advanced'),
   );
 
   if (visibleItems.length === 0) return null;
@@ -734,6 +737,9 @@ export function Rail({
             collapsed={effectiveCollapsed}
           />
         </div>
+
+        {/* Simple / Advanced: Simple shows the core pages only */}
+        <UiLevelSwitch collapsed={effectiveCollapsed} />
 
         {/* Sectioned nav — only this region scrolls */}
         <div className="rail-nav-outer" ref={navOuterRef}>

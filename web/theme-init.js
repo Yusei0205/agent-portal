@@ -23,6 +23,8 @@
     'Inter':          "'Inter Variable','Inter',system-ui,sans-serif",
     'Geist Sans':     "'Geist Sans',system-ui,sans-serif",
     'JetBrains Mono': "'JetBrains Mono Variable','JetBrains Mono','SF Mono',Consolas,monospace",
+    'Pixelify Sans':  "'Pixelify Sans Variable','Pixelify Sans',ui-monospace,monospace",
+    'IBM Plex Sans':  "'IBM Plex Sans',system-ui,sans-serif",
     'system-ui':      "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif",
     'ui-monospace':   "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace",
   };
@@ -39,6 +41,12 @@
     templateId = localStorage.getItem('portal-template-id') || templateId;
     mode       = localStorage.getItem('portal-mode')        || mode;
   } catch (e) { /* storage blocked */ }
+
+  /* ── Simple / Advanced interface level (see web/src/lib/uiLevel.js) ── */
+  try {
+    var uiLevel = localStorage.getItem('portal-ui-level');
+    document.documentElement.setAttribute('data-ui-level', uiLevel === 'advanced' ? 'advanced' : 'simple');
+  } catch (e) { document.documentElement.setAttribute('data-ui-level', 'simple'); }
 
   /* ── Resolve effective mode ───────────────────────────────────────── */
   var effective = mode;
