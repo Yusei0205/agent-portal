@@ -1,0 +1,100 @@
+/**
+ * Esc on a Kiro session: only the current prompt ends (ACP session/cancel) and kiro-cli stays, so the next message carries on in the same
+ * conversation. When kiro-cli does not end the prompt in time, it is stopped the hard way and the next message starts a new one.
+ * Real runner code (runKiroRun) against the fake kiro-cli; needs a shell script on the PATH, so Linux and macOS only.
+ */
+import { describe, it, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { execFileSync } from 'node:child_process';
+
+// The runner imports files that its build copies into kiro-runner/shared, which a clean checkout does not have when the portal's typecheck
+// runs: load it by path at run time (the test job builds the runner first).
+const runnerDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'kiro-runner');
+// A clean checkout (CI runs the tests before the build step) has no shared/ folder yet: the runner's own build creates it.
+if (process.platform !== 'win32' && !fs.existsSync(path.join(runnerDir, 'shared', 'runner-files.ts'))) {
+  execFileSync(process.execPath, ['build.mjs'], { cwd: runnerDir, stdio: 'inherit' });
+}
+const runnerModule = pathToFileURL(path.join(runnerDir, 'src', 'run.ts')).href;
+const { runKiroRun, disposeWarmKiro } = await import(runnerModule) as {
+  runKiroRun(payload: unknown, emit: (e: Record<string, unknown>) => void, startMs: number, broker?: unknown, stop?: AbortSignal): Promise<void>;
+  disposeWarmKiro(): Promise<void>;
+};
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const skip = process.platform === 'win32' ? 'needs a kiro-cli shell script on the PATH' : false;
+
+const payload = (prompt: string, runId: string) => ({
+  mode: 'kiro-run' as const, runId, prompt,
+  token: { accessToken: 'a', expiresAt: '2030-01-01T00:00:00Z', region: 'us-east-1', startUrl: 'https://d-1.awsapps.com/start' },
+});
+
+describe('Kiro runner: Esc ends the turn and keeps the session', { skip }, () => {
+  let bin = '';
+  const saved = { PATH: process.env.PATH, SC: process.env.PORTAL_FAKE_KIRO_SCENARIO, SLOW: process.env.PORTAL_FAKE_KIRO_SLOW_MS };
+
+  before(() => {
+    bin = fs.mkdtempSync(path.join(os.tmpdir(), 'fake-kiro-bin-'));
+    fs.writeFileSync(path.join(bin, 'kiro-cli'), `#!/bin/sh\nexec node ${JSON.stringify(path.join(here, 'fake-kiro.mjs'))} "$@"\n`, { mode: 0o755 });
+    process.env.PATH = `${bin}${path.delimiter}${process.env.PATH}`;
+  });
+  after(async () => {
+    await disposeWarmKiro();
+    process.env.PATH = saved.PATH;
+    for (const [k, v] of [['PORTAL_FAKE_KIRO_SCENARIO', saved.SC], ['PORTAL_FAKE_KIRO_SLOW_MS', saved.SLOW]] as const) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    fs.rmSync(bin, { recursive: true, force: true });
+  });
+
+  const text = (events: Array<Record<string, unknown>>): string => events.map((e) => JSON.stringify(e)).join('\n');
+
+  it('keeps kiro-cli after an interruption: the next message is another prompt in the same process', async () => {
+    process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-interruptible';
+    const first: Array<Record<string, unknown>> = [];
+    const ctrl = new AbortController();
+    const running = runKiroRun(payload('WAIT for me', 'r1'), (e) => { first.push(e); if (JSON.stringify(e).includes('working on it')) setTimeout(() => ctrl.abort(), 100); }, Date.now(), undefined, ctrl.signal);
+    const started = Date.now();
+    await running;
+    assert.ok(Date.now() - started < 7_000, 'the prompt ended at once, not after the hard-stop wait');
+    assert.match(text(first), /Interrupted\. The session stays open/);
+    assert.doesNotMatch(text(first), /Stopping kiro-cli/);
+
+    const second: Array<Record<string, unknown>> = [];
+    await runKiroRun(payload('hello again', 'r2'), (e) => { second.push(e); }, Date.now());
+    assert.match(text(second), /Continuing in the same kiro-cli session/, 'the same kiro-cli carried on');
+    assert.match(text(second), /PROMPTS:2/, 'it has seen both prompts (one process)');
+    await disposeWarmKiro();
+  });
+
+  it('stops it the hard way when kiro-cli does not end the prompt, and the next message starts a new one', async () => {
+    process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-slow';
+    process.env.PORTAL_FAKE_KIRO_SLOW_MS = '60000';
+    const first: Array<Record<string, unknown>> = [];
+    const ctrl = new AbortController();
+    const running = runKiroRun(payload('anything', 'r3'), (e) => { first.push(e); if (JSON.stringify(e).includes('kiro-cli ACP starting')) setTimeout(() => ctrl.abort(), 4_000); }, Date.now(), undefined, ctrl.signal);
+    await running;
+    assert.match(text(first), /did not stop in time/);
+    process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-interruptible';
+    const second: Array<Record<string, unknown>> = [];
+    await runKiroRun(payload('hello', 'r4'), (e) => { second.push(e); }, Date.now());
+    assert.doesNotMatch(text(second), /Continuing in the same kiro-cli session/, 'a new kiro-cli');
+    assert.match(text(second), /PROMPTS:1/);
+    await disposeWarmKiro();
+  });
+
+  it('a file attached to a follow-up message is in the work folder of the session that carries on (not only on its first turn)', async () => {
+    process.env.PORTAL_FAKE_KIRO_SCENARIO = 'acp-interruptible';
+    const first: Array<Record<string, unknown>> = [];
+    await runKiroRun(payload('hello', 'r5'), (e) => { first.push(e); }, Date.now());
+    assert.match(text(first), /ATTACHED:\[\]/, 'nothing attached yet');
+    const second: Array<Record<string, unknown>> = [];
+    const withFile = { ...payload('read the zip I attached', 'r6'), inputFiles: [{ path: 'attachments/sonarscan.zip.txt', data: Buffer.from('findings').toString('base64') }] };
+    await runKiroRun(withFile, (e) => { second.push(e); }, Date.now());
+    assert.match(text(second), /Continuing in the same kiro-cli session/);
+    assert.match(text(second), /1 input file placed in the work folder/);
+    assert.match(text(second), /ATTACHED:\[sonarscan\.zip\.txt\]/, 'the agent can see the file');
+    await disposeWarmKiro();
+  });
+});

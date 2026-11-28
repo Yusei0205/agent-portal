@@ -1,0 +1,171 @@
+/**
+ * Twilight — template-specific visual enhancements.
+ *
+ * All rules are gated on [data-template="twilight"] so they have
+ * zero effect when another template is active.
+ *
+ * Effects:
+ *   - Flowing violet/magenta wave gradient across the main area top (data-fx-gradient)
+ *   - Rounded 18px radius cards and panels
+ *   - Soft purple glowing borders on hover
+ *   - Rail active pill with violet wash
+ *   - Stat icon tint squares in accent/wash
+ */
+
+/* ── Main area: violet/magenta wave gradient top ──────────────────── */
+[data-template="twilight"][data-fx-gradient="true"] .shell > .shell-right > .main {
+  background-image:
+    /* Wave conic gradient — violet/magenta sweep */
+    radial-gradient(ellipse 80% 35% at 50% 0%, rgba(157,107,255,0.16) 0%, transparent 55%),
+    /* Outer left violet bloom */
+    radial-gradient(ellipse 55% 28% at 0% 15%, rgba(157,107,255,0.10) 0%, transparent 50%),
+    /* Right magenta bloom */
+    radial-gradient(ellipse 50% 22% at 100% 10%, rgba(244,114,182,0.10) 0%, transparent 50%),
+    /* Deep-mid magenta accent */
+    radial-gradient(ellipse 35% 18% at 65% 25%, rgba(244,114,182,0.06) 0%, transparent 45%);
+  background-size: 100% 100%;
+}
+
+[data-template="twilight"][data-mode="light"][data-fx-gradient="true"] .shell > .shell-right > .main {
+  background-image:
+    radial-gradient(ellipse 80% 35% at 50% 0%, rgba(124,58,237,0.10) 0%, transparent 55%),
+    radial-gradient(ellipse 55% 28% at 0% 15%, rgba(124,58,237,0.07) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 22% at 100% 10%, rgba(219,39,119,0.07) 0%, transparent 50%);
+  background-size: 100% 100%;
+}
+
+/* Disable behind IDE/editor/terminal */
+[data-template="twilight"][data-fx-gradient="true"] .ide-workspace,
+[data-template="twilight"][data-fx-gradient="true"] .ide-body,
+[data-template="twilight"][data-fx-gradient="true"] .ide-codemirror-host,
+[data-template="twilight"][data-fx-gradient="true"] .ide-terminal-panel {
+  background-image: none !important;
+}
+
+/* ── Rail active pill ──────────────────────────────────────────────── */
+[data-template="twilight"] .rail-link.is-active {
+  background: rgba(157,107,255,0.14);
+  color: var(--accent);
+  box-shadow:
+    inset 0 0 0 1px rgba(157,107,255,0.28),
+    0 0 12px rgba(157,107,255,0.10);
+  border-radius: var(--radius-md);
+  border: none;
+}
+
+[data-template="twilight"] .rail-link.is-active svg {
+  color: var(--accent);
+}
+
+[data-template="twilight"] .rail-group-btn.has-active-child {
+  background: rgba(157,107,255,0.10);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(157,107,255,0.22);
+  border: none;
+}
+
+[data-template="twilight"][data-mode="light"] .rail-link.is-active {
+  background: rgba(124,58,237,0.10);
+  box-shadow: inset 0 0 0 1px rgba(124,58,237,0.22);
+}
+
+[data-template="twilight"][data-mode="light"] .rail-group-btn.has-active-child {
+  background: rgba(124,58,237,0.08);
+  box-shadow: inset 0 0 0 1px rgba(124,58,237,0.16);
+}
+
+/* ── Cards — rounded with soft purple border + hover glow ──────────── */
+[data-template="twilight"] .project-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+}
+
+[data-template="twilight"] .project-card:hover {
+  border-color: rgba(157,107,255,0.45);
+  box-shadow:
+    0 0 0 1px rgba(157,107,255,0.20),
+    0 0 20px rgba(157,107,255,0.12),
+    var(--shadow);
+}
+
+[data-template="twilight"][data-mode="light"] .project-card:hover {
+  border-color: rgba(124,58,237,0.38);
+  box-shadow:
+    0 0 0 1px rgba(124,58,237,0.16),
+    0 0 14px rgba(124,58,237,0.08),
+    var(--shadow);
+}
+
+/* ── Panel subtle inner glow ────────────────────────────────────────── */
+[data-template="twilight"][data-fx-glow="true"] .panel {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+/* ── Stat icon squares — accent/pink tint ────────────────────────────── */
+[data-template="twilight"] .stat-icon {
+  background: var(--accent-wash);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+}
+
+/* ── Primary button glow ────────────────────────────────────────────── */
+[data-template="twilight"] .btn-primary:hover,
+[data-template="twilight"] .btn-primary:focus-visible {
+  box-shadow: 0 0 18px rgba(157,107,255,0.38), inset 0 0 0 1px rgba(255,255,255,0.10);
+  outline: none;
+}
+
+[data-template="twilight"][data-mode="light"] .btn-primary:hover,
+[data-template="twilight"][data-mode="light"] .btn-primary:focus-visible {
+  box-shadow: 0 0 14px rgba(124,58,237,0.25), inset 0 0 0 1px rgba(255,255,255,0.06);
+  outline: none;
+}
+
+/* ── Brand mark ─────────────────────────────────────────────────────── */
+[data-template="twilight"] .brand {
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-size: 1rem;
+}
+
+/* ── App header ─────────────────────────────────────────────────────── */
+[data-template="twilight"] .app-header {
+  background: var(--rail);
+  border-bottom-color: var(--line);
+}
+
+/* ── Search palette trigger ─────────────────────────────────────────── */
+[data-template="twilight"] .palette-trigger-btn {
+  background: var(--panel);
+  border-color: var(--line);
+  border-radius: var(--radius-md);
+}
+
+[data-template="twilight"] .palette-trigger-btn:hover {
+  border-color: rgba(157,107,255,0.45);
+  box-shadow: 0 0 0 1px rgba(157,107,255,0.18);
+}
+
+[data-template="twilight"][data-fx-glow="true"] .palette-dialog {
+  box-shadow: 0 20px 60px rgba(0,0,0,0.45), 0 0 0 1px rgba(157,107,255,0.22);
+}
+
+/* ── Motion: friendly easing when full ──────────────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  [data-template="twilight"][data-fx-motion="full"] *,
+  [data-template="twilight"][data-fx-motion="full"] *::before,
+  [data-template="twilight"][data-fx-motion="full"] *::after {
+    transition-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+}
+
+/* ── Motion: none ─────────────────────────────────────────────────────── */
+[data-template="twilight"][data-fx-motion="none"] *,
+[data-template="twilight"][data-fx-motion="none"] *::before,
+[data-template="twilight"][data-fx-motion="none"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}

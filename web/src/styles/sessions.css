@@ -1,0 +1,1418 @@
+/* ── Session workspace – extended styles ─────────────────────── */
+
+/* ── Sessions list panel: 2-line title clamp ─────────────────── */
+/*
+ * Override workspace.css .ws-item-title (white-space: nowrap; text-overflow: ellipsis)
+ * so titles can wrap up to 2 lines instead of being hard-clipped.
+ */
+.sessions-list-panel .ws-item-title {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: unset;
+  word-break: break-word;
+}
+
+/* ── Sessions detail panel: compact centred placeholder ──────── */
+/*
+ * workspace.css .ws-placeholder uses display:grid + flex:1, which spreads
+ * children across the full panel height.  Override with a compact flex
+ * column so the icon, heading and button are clustered together in the
+ * centre of the panel.
+ */
+.sessions-detail-panel > .sessions-empty-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+}
+.sessions-detail-panel > .sessions-empty-placeholder p {
+  margin: 0;
+}
+
+/* ── Session list search bar ─────────────────────────────────── */
+.session-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.session-search-icon {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-3);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  z-index: 1;
+}
+.session-search-input {
+  padding-left: 28px !important;
+  padding-right: 32px !important;
+  width: 100%;
+}
+.session-search-kbd {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.7rem;
+  font-family: var(--font-body, inherit);
+  color: var(--ink-3);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 1px 4px;
+  pointer-events: none;
+  background: var(--panel);
+  line-height: 1.2;
+}
+
+/* ── Dialog overlay ──────────────────────────────────────────── */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+  z-index: 200;
+  padding: 16px;
+}
+.dialog {
+  background: linear-gradient(var(--panel), var(--panel)), var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+}
+.dialog-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.dialog-title {
+  font-size: 1rem;
+  font-weight: 680;
+  flex: 1;
+}
+.dialog-body {
+  padding: 18px;
+  overflow-y: auto;
+  flex: 1;
+}
+.dialog-foot {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+/* ── Bulk action bar ─────────────────────────────────────────── */
+.bulk-action-bar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.06);
+  font-size: 0.84rem;
+  flex-shrink: 0;
+}
+.bulk-action-count {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.bulk-action-sep {
+  color: var(--ink-3);
+  flex-shrink: 0;
+}
+
+/* ── Bulk select hint ────────────────────────────────────────── */
+.bulk-select-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  padding: 3px 2px;
+  user-select: none;
+}
+.bulk-select-hint-icon {
+  font-size: 0.9rem;
+  line-height: 1;
+}
+
+/* ── Session row — dot/checkbox leading cell ─────────────────────── */
+/*
+ * The leading cell holds both the status dot and the bulk-select
+ * checkbox, stacked on top of each other.
+ */
+.session-row-leading {
+  position: relative;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 3px;
+}
+.session-row-leading .dot {
+  position: absolute;
+  transition: opacity 0.1s;
+}
+.session-row-leading .session-row-check {
+  position: absolute !important;
+  margin: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+}
+
+/* Show checkbox + hide dot: hover, focus-within, selection mode */
+.ws-item:hover .session-row-leading .dot,
+.session-row-leading:focus-within .dot,
+.ws-item.is-selection-mode .session-row-leading .dot {
+  opacity: 0;
+}
+.ws-item:hover .session-row-leading .session-row-check,
+.session-row-leading:focus-within .session-row-check,
+.ws-item.is-selection-mode .session-row-leading .session-row-check {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch: always show checkbox, hide dot */
+@media (hover: none) {
+  .session-row-leading .dot { opacity: 0; }
+  .session-row-leading .session-row-check {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+/* Selected row — accent wash + left inset border */
+.ws-item.is-selected {
+  background: color-mix(in srgb, var(--accent) 8%, transparent) !important;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: var(--radius);
+}
+
+.session-row-link {
+  transition: none;
+}
+
+/* ── Live output panel ───────────────────────────────────────── */
+.live-event {
+  padding: 4px 12px;
+  font-size: 0.84rem;
+}
+
+.live-assistant-text {
+  background: var(--canvas);
+}
+.live-text-block {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
+  margin: 6px 0;
+  color: var(--ink);
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--canvas) 80%, transparent);
+  border-radius: var(--radius);
+}
+
+.live-tool-start {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 12px;
+  color: var(--ink-2);
+  font-size: 0.8rem;
+}
+.live-tool-name {
+  font-weight: 640;
+  font-family: var(--mono);
+  font-size: 0.79rem;
+  flex-shrink: 0;
+}
+.live-tool-arg {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 0.79rem;
+}
+
+.live-tool-end {
+  padding: 4px 12px;
+}
+.live-tool-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 4px 0;
+  width: 100%;
+  text-align: left;
+}
+.live-tool-toggle:hover {
+  color: var(--ink);
+}
+.live-tool-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  flex: 1;
+}
+.live-tool-result {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--canvas);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+  margin: 4px 0 6px;
+  color: var(--ink-2);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.live-tool-blocked {
+  color: var(--danger);
+  font-size: 0.82rem;
+  padding: 5px 12px;
+}
+
+.live-run-complete {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ok);
+  font-weight: 600;
+  padding: 10px 12px;
+  background: var(--ok-wash);
+}
+.live-run-failed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--danger);
+  font-weight: 600;
+  padding: 10px 12px;
+  background: var(--danger-wash);
+}
+
+/* User / human messages — right-aligned bubble */
+.live-human-message {
+  padding: 6px 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+/* Wrapper that holds the "You" label + bubble together */
+.live-user-message-wrap {
+  max-width: 85%;
+  display: flex;
+  flex-direction: column;
+}
+.live-user-bubble {
+  background: color-mix(in srgb, var(--accent) 14%, var(--canvas));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: var(--radius-lg, var(--radius));
+  padding: 7px 12px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  word-break: break-word;
+  white-space: pre-wrap;
+  color: var(--ink);
+}
+
+/* ── Agent message bubble ─────────────────────────────────────────────────── */
+.live-agent-message {
+  padding: 6px 12px;
+  display: flex;
+  flex-direction: column;
+}
+.live-agent-bubble {
+  background: var(--canvas);
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+}
+
+/* Sender labels — "You" (right, accent) and "Agent" (left, muted) */
+.live-message-label {
+  font-size: 0.71rem;
+  font-weight: 660;
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+  display: block;
+  user-select: none;
+  flex-shrink: 0;
+}
+.live-message-label--user  { text-align: right; color: var(--accent); }
+.live-message-label--agent { color: var(--ink-3); }
+
+/* ── Markdown body (inside agent bubbles) ─────────────────────────────────── */
+.live-markdown-body {
+  font-size: 0.84rem;
+  line-height: 1.6;
+  word-break: break-word;
+  color: var(--ink);
+}
+.live-markdown-body > :first-child { margin-top: 0 !important; }
+.live-markdown-body > :last-child  { margin-bottom: 0 !important; }
+.live-markdown-body p   { margin: 0.35em 0; }
+.live-markdown-body h1  { font-size: 1.05em; font-weight: 670; margin: 0.7em 0 0.25em; }
+.live-markdown-body h2  { font-size: 0.97em; font-weight: 660; margin: 0.6em 0 0.2em; }
+.live-markdown-body h3  { font-size: 0.91em; font-weight: 640; margin: 0.5em 0 0.15em; }
+.live-markdown-body ul,
+.live-markdown-body ol  { margin: 0.3em 0; padding-left: 1.5em; }
+.live-markdown-body li  { margin: 0.12em 0; }
+.live-markdown-body code {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--code-bg, #f1f3f7);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.live-markdown-body pre {
+  background: var(--code-bg, #f1f3f7);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.live-markdown-body pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.live-markdown-body blockquote {
+  border-left: 3px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  margin: 0.5em 0;
+  padding: 0.15em 0.75em;
+  color: var(--ink-2);
+}
+.live-markdown-body strong { font-weight: 660; }
+.live-markdown-body em    { font-style: italic; }
+.live-markdown-body a     { color: var(--link); text-decoration: underline; }
+.live-markdown-body hr    {
+  border: none;
+  border-top: 1px solid var(--line-2);
+  margin: 0.6em 0;
+}
+.live-markdown-body table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.82em;
+  margin: 0.5em 0;
+}
+.live-markdown-body th,
+.live-markdown-body td {
+  border: 1px solid var(--line);
+  padding: 4px 8px;
+  text-align: left;
+}
+.live-markdown-body th { background: var(--raised); font-weight: 640; }
+
+.live-approval-card {
+  background: var(--warn-wash);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+}
+.live-approval-desc {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: var(--ink);
+}
+.live-approval-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.live-approval-resolved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--ok);
+  font-size: 0.82rem;
+  padding: 6px 12px;
+  background: var(--ok-wash);
+}
+/* Denied, expired, or no longer waiting: an answered card, not an alert */
+.live-approval-resolved.is-muted {
+  color: var(--ink-3);
+  background: var(--panel-2);
+}
+
+/* Running cost pill */
+.live-cost-pill {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-size: 0.74rem;
+  font-weight: 640;
+  color: var(--accent);
+  pointer-events: none;
+}
+
+/* ── Composer bar ────────────────────────────────────────────── */
+.ws-composer { position: relative; }
+/* Files are being dragged over the message box: say it will take them. */
+.ws-composer.is-drop-target { outline: 2px dashed var(--accent, #4f7cff); outline-offset: -3px; }
+/* ...and the conversation above it takes the files too. */
+.ide-agent-panel.is-drop-target { outline: 2px dashed var(--accent, #4f7cff); outline-offset: -3px; }
+.ws-composer.is-drop-target::after {
+  content: 'Drop files to attach';
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--bg, #0b1020) 82%, transparent); color: var(--accent, #4f7cff);
+  font-weight: 600; pointer-events: none; z-index: 5;
+}
+.ws-composer {
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+  flex-shrink: 0;
+  background: var(--panel);
+  position: relative; /* anchor for the absolutely-positioned handle */
+}
+/* Manual-height mode: the input row (not the whole box) has the height the person dragged, so the notices above it
+   (ready, stopped, repositories) and the hints below keep their own room and never sit on top of the row. */
+.ws-composer--manual { overflow: visible; }
+/* Drag handle — sits over the top edge of the composer */
+.ws-composer-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  background: transparent;
+  z-index: 10;
+  touch-action: none;   /* prevent scroll hijack on touch */
+  outline: none;
+  transition: background 0.12s;
+}
+.ws-composer-handle:hover {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.ws-composer-handle:focus-visible {
+  background: color-mix(in srgb, var(--accent) 65%, transparent);
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.ws-composer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* In manual mode the row has an explicit height and the textarea fills it */
+.ws-composer--manual .ws-composer-row {
+  min-height: 0;
+  align-items: stretch;
+}
+/* Keep the controls on the same centre line in both sizing modes. */
+.ws-composer--manual .ws-composer-row > .btn-icon,
+.ws-composer--manual .ws-composer-actions {
+  align-self: center;
+}
+/* A message box dragged down to about one line: a single centred line, with the buttons centred on it. (Taller boxes keep
+   the buttons at the bottom, like any chat box.) */
+.ws-composer--manual .ws-composer-row--compact { align-items: center; }
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .btn-icon,
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .ws-composer-prompt,
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .ws-composer-input,
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .ws-composer-actions { align-self: center; }
+.ws-composer--manual .ws-composer-row.ws-composer-row--compact > .ws-composer-input { height: 32px; min-height: 32px; max-height: 32px; }
+.ws-composer-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.84rem;
+  min-height: 32px;
+  padding: 5px 9px;
+  resize: none;
+  overflow-y: auto;
+  line-height: 1.5;
+  max-height: min(40vh, 240px);
+}
+/* In manual mode the textarea fills the row height and scrolls */
+.ws-composer--manual .ws-composer-input {
+  flex: 1;
+  align-self: stretch;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+}
+.ws-composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+/* Equal control sizes keep the attachment, prompt and send action aligned. */
+.ws-composer-row > .btn-icon,
+.ws-composer-actions .btn { height: 32px; min-height: 32px; box-sizing: border-box; }
+.ws-composer-row > .btn-icon { width: 32px; }
+.ws-composer-actions .btn { width: 32px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+
+/* ── Inbox page ──────────────────────────────────────────────── */
+.inbox-item {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  display: grid;
+  gap: 8px;
+}
+.inbox-item-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.inbox-item-session {
+  font-size: 0.84rem;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.inbox-item-body {
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--ink);
+}
+.inbox-item-actions {
+  display: flex;
+  gap: 8px;
+}
+.inbox-item-answer-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.inbox-item-resolved {
+  opacity: 0.6;
+}
+.inbox-item-resolved-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--ok);
+}
+
+/* ── Thinking indicator ──────────────────────────────────────────────────────── */
+.live-thinking {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.live-thinking-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: var(--ink-2);
+}
+.live-thinking-dots {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+.live-thinking-dots span {
+  width: 5px;
+  height: 5px;
+  background: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  animation: live-dot-bounce 1.2s ease-in-out infinite;
+}
+.live-thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.live-thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes live-dot-bounce {
+  0%, 100% { opacity: 0.3; transform: translateY(0); }
+  50%       { opacity: 1;   transform: translateY(-3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-thinking-dots span { animation: none; opacity: 0.6; }
+}
+
+.live-thinking-elapsed {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+.live-thinking-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--ink-3);
+  font-size: 0.75rem;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.live-thinking-toggle:hover { color: var(--ink); background: var(--canvas); }
+.live-thoughts {
+  padding: 6px 10px;
+  background: var(--canvas);
+  border-left: 2px solid var(--line);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-top: 2px;
+}
+.live-thought-text {
+  font-size: 0.78rem;
+  color: var(--ink-3);
+  font-style: italic;
+  margin: 2px 0;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Plan checklist ──────────────────────────────────────────────────────────── */
+.live-plan {
+  padding: 6px 12px;
+  margin: 4px 0;
+}
+.live-plan-header {
+  font-size: 0.72rem;
+  font-weight: 660;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.live-plan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.live-plan-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--ink);
+  line-height: 1.4;
+}
+.live-plan-check {
+  flex-shrink: 0;
+  width: 14px;
+  font-size: 0.8rem;
+  margin-top: 1px;
+  color: var(--ink-3);
+}
+.live-plan-item--done    .live-plan-check { color: var(--ok); }
+.live-plan-item--failed  .live-plan-check { color: var(--danger); }
+.live-plan-item--done > span:last-child   { text-decoration: line-through; color: var(--ink-3); }
+
+/* ── Tool call (paired start+end) ────────────────────────────────────────────── */
+.live-tool-call {
+  padding: 2px 12px;
+  font-size: 0.8rem;
+}
+.live-tool-call-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  color: var(--ink-2);
+  background: none;
+  border: none;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+}
+.live-tool-call-row:hover { color: var(--ink); }
+.live-tool-status-icon {
+  flex-shrink: 0;
+  width: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.72rem;
+}
+.live-tool-status-icon .spinner { width: 10px; height: 10px; }
+.live-tool-status-ok   { color: var(--ok); }
+.live-tool-status-fail { color: var(--danger); }
+
+/* ── Status text pill ────────────────────────────────────────────────────────── */
+.live-status-text {
+  padding: 3px 12px;
+  font-size: 0.76rem;
+  color: var(--ink-3);
+  font-style: italic;
+}
+
+/* ── Pending message variants ────────────────────────────────────────────────── */
+.live-pending-message {
+  padding: 6px 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.live-pending-message-wrap {
+  max-width: 85%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.live-user-bubble--sending {
+  opacity: 0.65;
+}
+.live-pending-label {
+  font-size: 0.69rem;
+  color: var(--ink-3);
+  text-align: right;
+}
+.live-pending-error {
+  font-size: 0.75rem;
+  color: var(--danger);
+  text-align: right;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* ── Output file links inside agent markdown messages ────────────────────── */
+.output-file-link {
+  display: inline;
+  background: none;
+  border: none;
+  padding: 0 1px;
+  margin: 0;
+  font: inherit;
+  font-size: inherit;
+  color: var(--link, var(--accent));
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  cursor: pointer;
+  border-radius: 2px;
+  font-family: var(--mono);
+  font-size: 0.85em;
+  background: var(--code-bg, #f1f3f7);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.output-file-link:hover {
+  text-decoration-style: solid;
+  background: color-mix(in srgb, var(--accent) 15%, var(--code-bg, #f1f3f7));
+}
+.output-file-link:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 1px;
+}
+
+/* ── Live scroll container ───────────────────────────────────────────────────── */
+/* min-height: 0 allows the flex item to shrink below its content height,
+   which is required for the scroll-inside-flex-column pattern to work. */
+.live-scroll {
+  min-height: 0;
+}
+
+/* ── Mobile: New Session dialog as bottom sheet ──────────────────────────── */
+@media (max-width: 600px) {
+  .dialog-overlay {
+    align-items: flex-end;
+    padding: 0;
+    padding-top: 56px;
+  }
+  .dialog {
+    /* Override inline maxWidth (580px) and maxHeight ('90vh') from NewSessionDialog */
+    max-width: 100vw !important;
+    width: 100% !important;
+    max-height: calc(100vh - 56px) !important;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+    border-bottom: none;
+  }
+}
+
+/* ── Mobile: touch targets for session controls ──────────────────────────── */
+@media (max-width: 900px) {
+  .sessions-list-panel .btn-sm {
+    padding: 8px 12px;
+    font-size: 0.84rem;
+  }
+  .sessions-list-panel .ws-header {
+    min-height: 52px;
+  }
+  /* Safe-area inset for notched iPhones: add the inset on top of the existing
+     8 px bottom padding so the composer clears the home indicator. */
+  .ws-composer {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+}
+
+/* ── IDE Workspace: mobile layout overrides (≤900 px) ─────────────────────── */
+/*
+ * These overrides fix the three symptoms visible on a phone (390–590 px):
+ *
+ *  1. Dark empty rectangle on the right half, from the header down.
+ *     Root cause: localStorage saves editorPanelOpen=true, which renders
+ *     an ide-editor-area with an inline width of 460 px (dark-canvas empty
+ *     placeholder).  Fix: hide the editor area entirely on mobile.
+ *
+ *  2. Chat bubbles and tool lines clipped at ~270 px from the left.
+ *     Root cause: the ide-sidebar (default 240 px inline-style width) was
+ *     a flex flow child, consuming width and leaving only ~50 px for the
+ *     agent panel.  Fix: detach the sidebar from flow (position: absolute)
+ *     so it overlays content without consuming width.
+ *
+ *  3. Header actions in the middle instead of on the right edge.
+ *     Root cause: the grid track for sessions-detail-panel used plain 1fr
+ *     (= minmax(auto, 1fr)), which allowed the track to expand to the
+ *     IDE body's min-content size; ide-workspace then exceeded the
+ *     viewport, and the flex-row inside the header could not constrain
+ *     its title-wrap.  Fix: changed sessions-shell to minmax(0,1fr) in
+ *     layout.css, plus guard rules below.
+ *
+ * Selector specificity: all IDE rules are scoped under .ide-workspace so
+ * they beat the flat class selectors in ide.css.  !important is used only
+ * where necessary to override JSX inline styles (style={{ … }}).
+ */
+@media (max-width: 900px) {
+
+  /* Guard: ensure the sessions detail cell can never expand beyond viewport */
+  .sessions-detail-panel {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  /* ── Body: positioning context for the overlay sidebar ──────────── */
+  .ide-workspace .ide-body {
+    position: relative;
+  }
+
+  /* ── Sidebar: pull out of flex flow → overlay ───────────────────── */
+  /* Detaching from flow is the key fix for symptom #2.  The sidebar
+     still appears when a panel is active, now as a slide-over overlay. */
+  .ide-workspace .ide-sidebar {
+    position: absolute !important; /* overrides display:flex flow */
+    left: 40px;                    /* right-flush with the activity bar */
+    top: 0;
+    bottom: 0;
+    z-index: 10;
+    /* !important overrides the inline style={{ width: sidebarW }} */
+    width: min(280px, calc(100vw - 40px)) !important;
+    max-width: calc(100vw - 40px) !important;
+    box-shadow: 4px 0 16px rgba(0, 0, 0, 0.22);
+  }
+
+  /* ── Editor area: hidden on mobile (fix for symptom #1) ─────────── */
+  .ide-workspace .ide-editor-area {
+    display: none !important;
+  }
+
+  /* ── Editor toggle strip: hidden on mobile ──────────────────────── */
+  /* The 14 px toggle strip has no utility on narrow screens and
+     consumes space between the (hidden) editor area and the agent panel. */
+  .ide-workspace .ide-editor-toggle-strip {
+    display: none !important;
+  }
+
+  /* ── Agent panel: fill all remaining width ──────────────────────── */
+  /* !important overrides the inline style={{ minWidth: 280 }}.          */
+  .ide-workspace .ide-agent-panel {
+    flex: 1 1 0% !important;  /* grow:1 shrink:1 basis:0 → no intrinsic minimum */
+    min-width: 0 !important;
+    max-width: 100% !important;
+    width: 0 !important;      /* flex-basis:0 via width forces shrink below content size */
+  }
+
+  /* ── Main content area: prevent any residual overflow ───────────── */
+  .ide-workspace .ide-main {
+    overflow: hidden;
+    min-width: 0;
+  }
+  .ide-workspace .ide-main-row {
+    overflow: hidden;
+    min-width: 0;             /* allow the row itself to shrink below content width */
+  }
+
+  /* ── Header: title truncates; actions stay on the right edge ─────── */
+  /* Keep overflow:visible so the More-actions dropdown isn't clipped.
+     The guards below ensure title-wrap shrinks and actions don't wrap. */
+  .ide-workspace .ide-header-title-wrap {
+    min-width: 0;
+    flex: 1 1 0%;
+    overflow: hidden;
+  }
+  .ide-workspace .ide-header-actions {
+    flex-shrink: 0;
+  }
+
+  /* ── Live tool-call rows: long paths ellipsize ───────────────────── */
+  /* flex:1 + min-width:0 allows the arg span to shrink and clip.
+     overflow/text-overflow/white-space are already set in sessions.css
+     above; this just adds the flex sizing needed inside the flex row. */
+  .live-tool-arg {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* ── User/pending bubbles: cap at viewport width ─────────────────── */
+  .live-user-message-wrap,
+  .live-pending-message-wrap {
+    max-width: calc(100vw - 80px);
+  }
+
+  /* ── Code blocks inside agent messages: horizontal-scroll only ────── */
+  .live-markdown-body pre {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+
+} /* end @media (max-width: 900px) */
+
+/* ── IDE Workspace: all-viewport overrides ────────────────────────────────── */
+/*
+ * These rules apply at ALL viewport widths (including desktop).
+ *
+ * Root cause at non-mobile (>900 px):
+ *   ide-agent-panel has flex-shrink:0 and min-width:280px in ide.css.
+ *   When the sessions-detail panel is narrow (e.g. 1000 px total viewport),
+ *   the sidebar can consume enough width that ide-main-row has less than 280 px
+ *   for the agent panel.  Because flex-shrink:0 prevents shrinking, the agent
+ *   panel overflows ide-main-row (which has overflow:hidden), so its content
+ *   is clipped.
+ *
+ * Fix:
+ *   Higher-specificity selectors (.ide-workspace .ide-agent-panel) override
+ *   ide.css without needing !important.  Allowing the panel to shrink (and
+ *   lowering min-width) prevents overflow/clipping at intermediate viewport
+ *   sizes.  The mobile @media block above overrides these further with
+ *   !important to fully reset widths at ≤900 px.
+ */
+
+/* Allow the agent panel to shrink when the sidebar takes significant width */
+.ide-workspace .ide-agent-panel {
+  flex-shrink: 1;    /* was 0 in ide.css — let it shrink rather than overflow */
+  min-width: 160px;  /* absolute minimum for a usable chat column */
+}
+
+/* Ensure ide-main-row can always shrink (prevents min-content blowout) */
+.ide-workspace .ide-main-row {
+  min-width: 0;
+}
+
+/* Resize handle: keep it visible and hittable inside the sidebar */
+.ide-workspace .ide-sidebar .ide-resize-handle-x {
+  right: -2px; /* straddle the border so it's always on the right edge */
+}
+
+/* ── Developer-style session transcript ─────────────────────────────────────
+   Agent text flows as plain text, your messages read like a prompt, tool calls are one line with a
+   result summary under them, and the status bar and message box carry small chips and key hints. */
+.live-message-label--agent { display: none; }
+.live-agent-message { padding: 8px 14px 4px 30px; position: relative; }
+.live-agent-message::before {
+  content: '';
+  position: absolute; left: 15px; top: 16px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent);
+}
+.live-agent-bubble { background: none; border: 0; border-radius: 0; padding: 0; }
+.live-agent-bubble .live-markdown-body { font-size: 0.86rem; line-height: 1.65; }
+
+.live-human-message { justify-content: stretch; padding: 10px 12px 4px; }
+.live-user-message-wrap { max-width: 100%; width: 100%; }
+.live-message-label--user { display: none; }
+.live-user-bubble {
+  position: relative;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 12px 7px 28px;
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  border: 0;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: color-mix(in srgb, var(--accent) 9%, var(--canvas));
+}
+.live-user-bubble::before {
+  content: '>';
+  position: absolute; left: 11px; top: 7px;
+  color: var(--accent); font-weight: 700;
+}
+.live-pending-message { justify-content: stretch; }
+.live-pending-message-wrap { max-width: 100%; width: 100%; }
+
+/* Tool calls: dot, name and command on one line, then a short result line */
+.live-tool-call { padding: 3px 14px; }
+.live-tool-call-row { align-items: flex-start; gap: 10px; padding: 1px 0; }
+.live-tool-dot {
+  flex: none; width: 7px; height: 7px; margin-top: 7px; border-radius: 50%;
+  background: var(--ok);
+}
+.live-tool-dot--fail { background: var(--danger); }
+.live-tool-dot--run { background: var(--accent); animation: live-tool-pulse 1.1s ease-in-out infinite; }
+@keyframes live-tool-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .live-tool-dot--run { animation: none; } }
+.live-tool-line { display: flex; gap: 8px; min-width: 0; flex: 1; align-items: baseline; }
+.live-tool-name { color: var(--ink); }
+.live-tool-arg { color: var(--ink-3); min-width: 0; }
+.live-tool-summary {
+  margin: 0 0 2px 17px;
+  font-family: var(--mono); font-size: 0.74rem; color: var(--ink-3);
+}
+.live-tool-summary::before { content: '\23BF  '; opacity: 0.7; }
+.live-tool-call--failed .live-tool-summary { color: var(--danger); }
+.live-tool-result { margin-left: 17px; }
+
+/* Start-up notes and the working row */
+.live-status-text { font-style: normal; font-family: var(--mono); font-size: 0.74rem; padding-left: 30px; opacity: 0.8; }
+.live-thinking { padding-left: 14px; }
+.live-thinking-row { font-family: var(--mono); font-size: 0.8rem; }
+
+/* Message box: prompt glyph and key hints */
+.ws-composer-prompt {
+  align-self: center; flex: none;
+  height: 32px; display: inline-flex; align-items: center;
+  font-family: var(--mono); font-weight: 700; color: var(--accent);
+}
+.ws-composer-input { font-family: var(--mono); font-size: 0.82rem; }
+.ws-composer-hints {
+  display: flex; gap: 14px; padding: 5px 4px 0 40px;
+  font-size: 0.7rem; color: var(--ink-3);
+  flex-shrink: 0;
+}
+.ws-composer-hints kbd {
+  font-family: var(--mono); font-size: 0.68rem;
+  padding: 0 4px; margin-right: 2px;
+  border: 1px solid var(--line); border-radius: 3px; background: var(--canvas);
+}
+.ws-composer--manual .ws-composer-hints { display: none; }
+
+/* Divider in the conversation where the session moved to another engine */
+.live-engine-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 12px;
+  color: var(--ink-3);
+  font-size: 0.78rem;
+}
+.live-engine-switch-line { flex: 1; height: 1px; background: var(--line); }
+.live-engine-switch-text { display: inline-flex; align-items: center; gap: 6px; text-align: center; }
+
+/* ── Message box menus (commands, models, files, history search): one quiet list style ── */
+.ws-menu { list-style: none; margin: 0; padding: 4px 0; border-top: 1px solid var(--line); max-height: 220px; overflow-y: auto; }
+.ws-menu li { display: flex; gap: 12px; align-items: baseline; padding: 3px 12px; cursor: pointer; font-size: 0.78rem; }
+.ws-menu li[aria-selected="true"] { background: color-mix(in srgb, var(--accent) 12%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.ws-menu li.ws-menu-note { cursor: default; color: var(--ink-3); font-size: 0.7rem; padding-bottom: 2px; }
+.ws-menu-key { min-width: 150px; font-family: var(--mono); font-size: 0.78rem; }
+.ws-menu-desc { color: var(--ink-3); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-menu-line { color: var(--ink-2, inherit); font-family: var(--mono); }
+.ws-menu-tag { color: var(--ink-3); font-size: 0.7rem; flex-shrink: 0; }
+
+/* Status line under the input: state, engine, model, agent — then the key hints. Stays visible at any box height. */
+.ws-status { display: inline-flex; align-items: center; gap: 6px; font-family: var(--mono); margin-right: 6px; }
+.ws-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); display: inline-block; }
+.ws-status[data-running="yes"] .ws-status-dot { background: var(--accent); animation: ws-pulse 1.2s ease-in-out infinite; }
+@keyframes ws-pulse { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .ws-status[data-running="yes"] .ws-status-dot { animation: none; } }
+.ws-composer-hints { flex-wrap: wrap; row-gap: 2px; padding-left: 4px; }
+.ws-composer--manual .ws-composer-hints { display: flex; }
+.ws-composer--manual .ws-composer-hints > span:not(.ws-status) { display: none; }
+
+/* ── Side panel on the right of the conversation (default) ──────────────────────────
+   The activity bar, the panel and the main area are laid out right to left, so the chat stays the main workspace and
+   Files / Browser / Outputs / Agents sit beside it. "Move panel to the left" puts them back like an IDE explorer. */
+.ide-body--right { flex-direction: row-reverse; }
+.ide-body--right > .ide-activity-bar { border-right: 0; border-left: 1px solid var(--line); }
+.ide-body--right > .ide-sidebar { border-right: 0; border-left: 1px solid var(--line); }
+.ide-workspace .ide-body--right .ide-sidebar .ide-resize-handle-x { right: auto; left: -2px; }
+@media (max-width: 900px) {
+  .ide-workspace .ide-body--right .ide-sidebar { left: auto; right: 40px; box-shadow: -4px 0 16px rgba(0, 0, 0, 0.22); }
+}
+
+/* Tab strip in the side panel's header */
+.ide-panel-tabs { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px; }
+.ide-panel-tabs::-webkit-scrollbar { display: none; }
+.ide-panel-tab {
+  flex: none; display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 6px; border: 0; border-radius: var(--radius); background: transparent; cursor: pointer;
+  font: inherit; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; text-transform: none; color: var(--ink-3);
+}
+.ide-panel-tab:hover { color: var(--ink); background: color-mix(in srgb, var(--panel) 60%, transparent); }
+.ide-panel-tab.is-active { color: var(--accent); background: var(--accent-wash); }
+.ide-panel-tab-count { font-size: 0.64rem; padding: 0 5px; border-radius: 8px; background: var(--accent); color: var(--canvas, #fff); }
+
+/* ── Chat / Execution switch ───────────────────────────────────────────────────── */
+.ide-view-switch { display: flex; gap: 2px; padding: 4px 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.ide-view-tab {
+  border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 0.74rem; font-weight: 600;
+  padding: 3px 10px; border-radius: var(--radius); color: var(--ink-3);
+}
+.ide-view-tab:hover { color: var(--ink); }
+.ide-view-tab.is-active { color: var(--accent); background: var(--accent-wash); }
+
+/* ── Execution View ────────────────────────────────────────────────────────────── */
+.exe-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+.exe { display: flex; flex-direction: column; gap: 14px; padding: 12px 14px 16px; font-size: 0.8rem; }
+.exe--empty { padding: 24px 18px; }
+.exe-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.exe-tile { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--canvas); }
+.exe-tile-value { font-family: var(--mono); font-size: 1.15rem; font-weight: 700; }
+.exe-tile-label { font-size: 0.68rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.exe-tile--live .exe-tile-value { color: var(--accent); }
+.exe-tile--bad .exe-tile-value { color: var(--danger); }
+.exe-section { border: 1px solid var(--line); border-radius: var(--radius); background: var(--canvas); padding: 8px 12px 10px; min-width: 0; }
+.exe-h { margin: 0 0 6px; display: flex; align-items: center; gap: 8px; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-3); }
+.exe-h-meta { margin-left: auto; font-family: var(--mono); letter-spacing: 0; text-transform: none; }
+.exe-note { margin: 2px 0; font-size: 0.78rem; }
+.exe-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.exe-tasks { display: flex; gap: 14px; align-items: flex-start; }
+.exe-ring { width: 64px; height: 64px; flex: none; }
+.exe-ring-track { fill: none; stroke: var(--line); stroke-width: 6; }
+.exe-ring-fill { fill: none; stroke: var(--accent); stroke-width: 6; stroke-linecap: round; }
+.exe-ring-text { fill: var(--ink); font-family: var(--mono); font-size: 14px; font-weight: 700; }
+.exe-task-list { list-style: none; margin: 0; padding: 0; flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.exe-task { display: flex; gap: 8px; align-items: baseline; }
+.exe-task-mark { width: 12px; flex: none; text-align: center; color: var(--ink-3); }
+.exe-task--done .exe-task-mark { color: var(--ok, var(--accent)); }
+.exe-task--active .exe-task-mark { color: var(--accent); }
+.exe-task--done .exe-task-text { color: var(--ink-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--ink-3) 50%, transparent); }
+.exe-task-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.exe-task-state { flex: none; font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+.exe-task--active .exe-task-state { color: var(--accent); }
+.exe-bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.exe-bar-row { display: grid; grid-template-columns: minmax(60px, 110px) 1fr auto; gap: 8px; align-items: center; }
+.exe-bar-name { font-family: var(--mono); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exe-bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.exe-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.exe-bar i.is-bad { background: var(--danger); }
+.exe-bar-count { font-family: var(--mono); font-size: 0.7rem; color: var(--ink-3); }
+.exe-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; max-height: 180px; overflow-y: auto; }
+.exe-file { width: 100%; display: flex; gap: 8px; border: 0; background: transparent; padding: 2px 4px; border-radius: 3px; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.exe-file:hover:not(:disabled) { background: var(--accent-wash); }
+.exe-file-path { flex: 1; min-width: 0; font-family: var(--mono); font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.exe-file-edits { flex: none; font-family: var(--mono); font-size: 0.7rem; color: var(--ink-3); }
+.exe-filter { margin-left: auto; display: inline-flex; gap: 2px; text-transform: none; letter-spacing: 0; }
+.exe-filter button { border: 0; background: transparent; cursor: pointer; font: inherit; font-size: 0.7rem; padding: 1px 7px; border-radius: 9px; color: var(--ink-3); }
+.exe-filter button.is-active { background: var(--accent-wash); color: var(--accent); }
+.exe-timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.exe-call { display: grid; grid-template-columns: 10px minmax(48px, 120px) 1fr auto; gap: 8px; align-items: baseline; padding: 3px 0; border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.exe-call:first-child { border-top: 0; }
+.exe-call-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); align-self: center; }
+.exe-call--running .exe-call-dot { background: var(--accent); animation: ws-pulse 1.2s ease-in-out infinite; }
+.exe-call--failed .exe-call-dot { background: var(--danger); }
+.exe-call-name { font-family: var(--mono); font-size: 0.74rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exe-call-arg { font-family: var(--mono); font-size: 0.72rem; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.exe-call-time { font-family: var(--mono); font-size: 0.7rem; color: var(--ink-3); }
+@media (prefers-reduced-motion: reduce) { .exe-call--running .exe-call-dot { animation: none; } }
+
+/* Tool-mode chip and the queued-message list under the input */
+.ws-mode {
+  border: 1px solid var(--line); background: transparent; color: var(--ink-3); cursor: pointer;
+  font-family: var(--mono); font-size: 0.68rem; padding: 0 7px; border-radius: 9px; height: 18px; line-height: 16px;
+}
+.ws-mode:hover:not(:disabled) { color: var(--ink); border-color: var(--ink-3); }
+.ws-mode.is-trust { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.ws-mode.is-armed { color: var(--danger); border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.ws-queue { margin: 4px 0 0; padding-left: 18px; flex-basis: 100%; font-family: var(--mono); font-size: 0.74rem; color: var(--ink-3); }
+.ws-queue li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+
+/* Inline diff under an expanded edit call */
+.live-diff { padding: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.live-diff-line { display: block; padding: 0 8px; }
+.live-diff-line--add { background: color-mix(in srgb, #2ea043 18%, transparent); }
+.live-diff-line--del { background: color-mix(in srgb, #f85149 18%, transparent); }
+.live-diff-line--gap { color: var(--ink-3); }
+
+/* ── Sessions list: fold away (desktop) ─────────────────────────────────────────── */
+.sessions-shell { position: relative; }
+.sessions-list-toggle {
+  position: absolute; top: 50%; left: 280px; transform: translate(-50%, -50%); z-index: 20;
+  width: 18px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel); color: var(--ink-3); cursor: pointer;
+  opacity: 0.55; transition: opacity 0.12s, color 0.12s;
+}
+.sessions-list-toggle:hover, .sessions-list-toggle:focus-visible { opacity: 1; color: var(--accent); }
+.sessions-shell.list-collapsed,
+.sessions-shell.list-collapsed.with-workspace { grid-template-columns: minmax(0, 1fr); }
+.sessions-shell.list-collapsed .sessions-list-panel { display: none; }
+.sessions-shell.list-collapsed .sessions-list-toggle { left: 9px; transform: translate(0, -50%); border-radius: 0 9px 9px 0; border-left: 0; }
+@media (max-width: 900px) { .sessions-list-toggle { display: none; } }
+
+/* ── Message box, minimalist: one rounded container, quiet notices, chips under it ───────────────── */
+.ws-composer { padding: 6px 12px 8px; }
+.ws-composer-row {
+  border: 1px solid var(--line); border-radius: 10px; background: var(--canvas); padding: 4px 6px;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.ws-composer-row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-wash); }
+.ws-composer-row .ws-composer-input,
+.ws-composer-row .ws-composer-input:focus { border: 0; background: transparent; box-shadow: none; outline: none; }
+.ws-composer-actions .btn-icon { width: 30px; height: 32px; }
+.ws-slash-btn { color: var(--ink-3); }
+.ws-slash-btn:hover:not(:disabled) { color: var(--accent); }
+.ws-stop-btn { height: 32px; min-height: 32px; box-sizing: border-box; padding-top: 0; padding-bottom: 0; color: var(--danger); border-color: color-mix(in srgb, var(--danger) 55%, transparent); }
+.ws-stop-btn:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+
+/* Notices above the box: one quiet line, no full-width coloured band */
+.ws-composer .ide-idle-banner {
+  background: transparent; border: 0; border-left: 2px solid var(--warn); border-radius: 0;
+  padding: 3px 8px; margin: 0 0 6px; font-size: 0.78rem; color: var(--ink-2, var(--ink));
+}
+.ws-composer .ide-idle-banner-msg { color: var(--ink-3); }
+
+/* Model / agent dropdown chips in the row under the box */
+.ws-chip-wrap { position: relative; display: inline-flex; }
+.ws-chip {
+  display: inline-flex; align-items: center; gap: 4px; height: 18px; padding: 0 7px; border-radius: 9px;
+  border: 1px solid var(--line); background: transparent; color: var(--ink-3); cursor: pointer;
+  font-family: var(--mono); font-size: 0.68rem;
+}
+.ws-chip b { font-weight: 600; color: var(--ink); max-width: 16ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-chip:hover:not(:disabled), .ws-chip[aria-expanded="true"] { border-color: var(--ink-3); }
+.ws-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+.ws-chip-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 30; min-width: 220px; max-width: 360px; max-height: 260px;
+  border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: 0 -6px 18px rgba(0, 0, 0, 0.28);
+}
+.ws-chip-menu .ws-menu-key { min-width: 0; }
+.ws-chip-menu li[aria-selected="true"] { box-shadow: inset 2px 0 0 var(--accent); }
+.ws-slash-glyph { font-family: var(--mono); font-size: 1rem; font-weight: 600; line-height: 1; }
+
+/* Follow-up suggestions and attachment chips in the message box */
+.ws-suggest { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 2px 6px; }
+.ws-suggest-chip {
+  border: 1px solid var(--line); background: transparent; color: var(--ink-3); cursor: pointer;
+  font: inherit; font-size: 0.74rem; padding: 2px 10px; border-radius: 12px;
+}
+.ws-suggest-chip:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); }
+.ws-composer .attachment-list { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 0 0 6px; padding: 0; }
+.ws-composer .attachment-item { display: flex; align-items: center; gap: 8px; padding: 3px 6px 3px 3px; border: 1px solid var(--line); border-radius: 8px; background: var(--canvas); max-width: 240px; }
+.ws-composer .attachment-thumb { width: 28px; height: 28px; border-radius: 5px; overflow: hidden; flex: none; display: flex; align-items: center; justify-content: center; }
+.ws-composer .attachment-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.ws-composer .attachment-info { min-width: 0; display: flex; flex-direction: column; }
+.ws-composer .attachment-name { font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-composer .attachment-meta { font-size: 0.64rem; }
+.ide-workspace > .ide-status-bar { border-top: 1px solid var(--line); }
+
+/* ── Tool Activity group and plan card in the conversation ───────────────────────────────────────── */
+.live-tool-group { margin: 4px 14px 4px 30px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--canvas); overflow: hidden; }
+.live-tool-group-head {
+  width: 100%; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border: 0; background: transparent;
+  color: var(--ink-3); cursor: pointer; font: inherit; font-size: 0.78rem; text-align: left;
+}
+.live-tool-group-head:hover { color: var(--ink); }
+.live-tool-group-title { font-weight: 600; color: var(--ink); white-space: nowrap; }
+.live-tool-group-names { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 0.72rem; }
+.live-tool-group-head > .live-tool-group-time { margin-left: auto; font-family: var(--mono); font-size: 0.72rem; white-space: nowrap; }
+.live-tool-group-names + .live-tool-group-time, .live-tool-group-bad + .live-tool-group-time { margin-left: 0; }
+.live-tool-group-bad { color: var(--danger); font-size: 0.72rem; white-space: nowrap; }
+.live-tool-group-body { border-top: 1px solid var(--line); padding: 2px 0 4px; }
+.live-tool-group-body .live-tool-call { margin: 0; }
+.live-tool-group--failed { border-color: color-mix(in srgb, var(--danger) 45%, var(--line)); }
+
+.live-plan { margin: 6px 14px 6px 30px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--canvas); }
+.live-plan-head {
+  width: 100%; display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 0; background: transparent;
+  cursor: pointer; font: inherit; font-size: 0.8rem; color: var(--ink-3); text-align: left;
+}
+.live-plan-title { font-weight: 700; color: var(--ink); white-space: nowrap; }
+.live-plan-count { font-family: var(--mono); font-size: 0.72rem; white-space: nowrap; }
+.live-plan-bar { flex: 1; min-width: 40px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.live-plan-bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.live-plan-steps { list-style: none; margin: 0; padding: 2px 10px 8px; display: flex; flex-direction: column; gap: 3px; font-size: 0.8rem; }
+.live-plan-step { display: flex; gap: 8px; align-items: baseline; }
+.live-plan-mark { width: 12px; flex: none; text-align: center; color: var(--ink-3); }
+.live-plan-step--done .live-plan-mark { color: var(--ok, var(--accent)); }
+.live-plan-step--active { background: var(--accent-wash); margin: 0 -6px; padding: 1px 6px; border-radius: 4px; }
+.live-plan-step--active .live-plan-mark, .live-plan-step--active .live-plan-state { color: var(--accent); }
+.live-plan-step--done .live-plan-text { color: var(--ink-3); }
+.live-plan-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.live-plan-state { flex: none; font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+
+/* Status pill in the session header, and counts on the list's filters */
+.ide-status-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 0.69rem; font-weight: 600; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--ink-3); white-space: nowrap; }
+.ide-status-pill i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); }
+.ide-status-pill--live { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+.ide-status-pill--live i { background: var(--accent); animation: ws-pulse 1.2s ease-in-out infinite; }
+.ide-status-pill--ok { color: var(--ok, #2ea043); border-color: color-mix(in srgb, var(--ok, #2ea043) 45%, transparent); }
+.ide-status-pill--ok i { background: var(--ok, #2ea043); }
+.ide-status-pill--bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 50%, transparent); }
+.ide-status-pill--bad i { background: var(--danger); }
+@media (prefers-reduced-motion: reduce) { .ide-status-pill--live i { animation: none; } }
+.filter-count { margin-left: 5px; font-family: var(--mono); font-size: 0.66rem; padding: 0 5px; border-radius: 8px; background: color-mix(in srgb, currentColor 18%, transparent); }
+
+.ws-line-hint { font-size: 0.75rem; color: var(--ink-3); padding: 2px 10px; border-top: 1px solid var(--line); }
+.ws-memory-note { margin: 4px 0; font-size: 0.78rem; }
+
+/* Excerpt of a text or code output file inside the chat's output card */
+.run-outputs-excerpt { margin: 6px 10px 8px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--canvas); overflow: hidden; }
+.run-outputs-excerpt--loading { padding: 8px 10px; font-size: 0.76rem; }
+.run-outputs-excerpt-head { display: flex; align-items: center; gap: 4px; padding: 3px 6px 3px 10px; border-bottom: 1px solid var(--line); font-size: 0.74rem; }
+.run-outputs-excerpt-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.run-outputs-excerpt-code { margin: 0; padding: 6px 0; max-height: 220px; overflow: auto; font-family: var(--mono); font-size: 0.74rem; line-height: 1.5; }
+.run-outputs-excerpt-line { display: block; padding: 0 10px 0 0; white-space: pre; }
+.run-outputs-excerpt-line i { display: inline-block; width: 3ch; margin: 0 10px 0 8px; text-align: right; font-style: normal; color: var(--ink-3); user-select: none; }
+.run-outputs-excerpt-more { color: var(--ink-3); padding-left: 14px; }
+
+/* Plan mode: a chip next to the tools chip, and a visible cue on the message box while it is on */
+.ws-mode-plan.is-plan { color: var(--accent); border-color: var(--accent); background: var(--accent-wash); }
+.ws-composer--plan .ws-composer-row { border-style: dashed; border-color: var(--accent); }
+
+/* Session explorer: uploading many files (a folder) */
+.ide-upload-progress { display: grid; gap: 3px; margin: 2px 8px 4px; font-size: 0.76rem; color: var(--ink-2); }
+.ide-upload-bar { display: block; height: 4px; border-radius: 2px; background: var(--raised); overflow: hidden; }
+.ide-upload-bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.2s ease; }
+.ide-upload-note { margin: 2px 8px 4px; font-size: 0.76rem; }

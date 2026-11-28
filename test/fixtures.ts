@@ -1,118 +1,211 @@
-import JSZip from 'jszip';
-import { execFileSync } from 'node:child_process';
-import fs from 'node:fs';
+/**
+ * Test fixtures and helpers for P0 foundation tests.
+ */
+
+// Prevent background git operations from spawning real subprocesses.
+// Without this, every repo POST triggers a git clone that keeps the event
+// loop alive well past server close, causing the per-file kill timeout.
+process.env.PORTAL_DISABLE_GIT_SYNC = '1';
+
+import type { DatabaseSync } from 'node:sqlite';
+import { openDb, closeDb, isDbOpen } from '../server/db.ts';
+import { setConfig } from '../server/config.ts';
+import type { Config } from '../server/config.ts';
+import { startServer } from '../server/index.ts';
+import { projectDirsReady } from '../server/projects.ts';
+import type http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
 
-export const FSD_MD = `# Refunds FSD
+// ── In-memory test DB ─────────────────────────────────────────────────────────
 
-## Overview
-
-The Refund Service lets Customer Support return money to a customer after a failed delivery.
-A refund always goes back to the original Payment Method. Partial refunds are allowed.
-
-## Refund rules
-
-A refund must be requested within 30 days of the original payment.
-The refund amount cannot exceed the captured amount of the Payment Method.
-Refunds above 500 USD need approval from a Finance Manager before they are sent.
-Each refund gets a Refund Reference that support staff can quote to the customer.
-
-## API
-
-The Refund Service exposes POST /v1/refunds to create a refund and GET /v1/refunds/{id} to read its status.
-A refund moves through the statuses \`requested\`, \`approved\`, \`sent\` and \`failed\`.
-The Payment Gateway sends a webhook to POST /v1/refunds/webhook when the bank confirms the refund.
-
-## Notifications
-
-The customer receives an email when the Refund Reference is created and again when the refund is sent.
-Customer Support can see every refund for a customer on the Refund History screen.
-`;
-
-export const FSD_MD_V2 = FSD_MD.replace('within 30 days', 'within 45 days');
-
-export async function makeDocx(): Promise<Buffer> {
-  const zip = new JSZip();
-  zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
-  zip.file(
-    'word/styles.xml',
-    `<?xml version="1.0"?><w:styles xmlns:w="w"><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/></w:style></w:styles>`,
-  );
-  const p = (text: string, style?: string) =>
-    `<w:p>${style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : ''}<w:r><w:t xml:space="preserve">${text}</w:t></w:r></w:p>`;
-  const bullet = (text: string) => `<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>${text}</w:t></w:r></w:p>`;
-  const cell = (text: string) => `<w:tc><w:tcPr/>${p(text)}</w:tc>`;
-  const body = [
-    p('Refunds TSD', 'Heading1'),
-    p('The refund-service is a Spring Boot application that stores refunds in the refunds table.'),
-    p('Components', 'Heading2'),
-    bullet('RefundController handles POST /v1/refunds &amp; GET /v1/refunds/{id}.'),
-    bullet('RefundRepository writes to PostgreSQL.'),
-    `<w:tbl><w:tr>${cell('Field')}${cell('Type')}</w:tr><w:tr>${cell('amount')}${cell('decimal(12,2)')}</w:tr></w:tbl>`,
-    p('Error handling', 'Heading2'),
-    p('Calls to the Payment Gateway time out after 10 seconds and are retried three times.'),
-  ].join('');
-  zip.file('word/document.xml', `<?xml version="1.0"?><w:document xmlns:w="w"><w:body>${body}</w:body></w:document>`);
-  return zip.generateAsync({ type: 'nodebuffer' });
+/** Creates an in-memory SQLite database with all migrations applied. */
+export function createTestDb(): DatabaseSync {
+  if (isDbOpen()) closeDb();
+  return openDb(':memory:');
 }
 
-export async function makeXlsx(): Promise<Buffer> {
-  const zip = new JSZip();
-  zip.file('xl/workbook.xml', '<workbook xmlns:r="r"><sheets><sheet name="Limits" sheetId="1" r:id="rId1"/></sheets></workbook>');
-  zip.file('xl/_rels/workbook.xml.rels', '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>');
-  zip.file('xl/sharedStrings.xml', '<sst><si><t>Rule</t></si><si><t>Limit</t></si><si><t>Max refund without approval</t></si></sst>');
-  zip.file(
-    'xl/worksheets/sheet1.xml',
-    '<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>2</v></c><c r="B2"><v>500</v></c></row></sheetData></worksheet>',
-  );
-  return zip.generateAsync({ type: 'nodebuffer' });
+// ── Test config ───────────────────────────────────────────────────────────────
+
+function makeTestDataDir(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'portal-test-'));
 }
 
-export async function makePdf(): Promise<Buffer> {
-  const { PDFDocument, StandardFonts } = await import('pdf-lib');
-  const doc = await PDFDocument.create();
-  const page = doc.addPage([595, 842]);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const lines = ['1 Meeting notes', 'The team agreed that refunds are processed every hour by a batch job.', '2 Action items', 'QA will test the Finance Manager approval flow.'];
-  lines.forEach((l, i) => page.drawText(l, { x: 50, y: 780 - i * 24, size: 12, font }));
-  return Buffer.from(await doc.save());
+export function createTestConfig(overrides: Partial<Config> = {}): Config {
+  const dataDir = makeTestDataDir();
+  return {
+    root: process.cwd(),
+    port: 0,
+    host: '127.0.0.1',
+    dataDir,
+    webDir: path.join(process.cwd(), 'dist', 'web'),
+    secretKey: randomBytes(32).toString('hex'),
+    cookieSecure: 'false',
+    demoSpeed: 0,
+    maxUploadBytes: 50 * 1024 * 1024,
+    trustProxy: false,
+    awsRegion: 'us-east-1',
+    deployTarget: null,
+    ...overrides,
+  };
 }
 
-/** A local git repository with a main branch and a feature branch that adds risky code. */
-export function makeRepo(root: string): string {
-  const work = path.join(root, 'repo-src');
-  const bare = path.join(root, 'repo.git');
-  fs.mkdirSync(work, { recursive: true });
-  const g = (...args: string[]) =>
-    execFileSync('git', args, {
-      cwd: work,
-      env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
+// ── Test server ───────────────────────────────────────────────────────────────
+
+interface TestServer {
+  server: http.Server;
+  baseUrl: string;
+  port: number;
+}
+
+const activeServers: http.Server[] = [];
+const testDataDirs: string[] = [];
+
+/**
+ * Starts a fresh server on a random port with an isolated in-memory database.
+ * Returns the server and its base URL.
+ */
+export async function createTestServer(): Promise<TestServer> {
+  // Close any existing DB so we start fresh
+  if (isDbOpen()) closeDb();
+
+  const cfg = createTestConfig();
+  testDataDirs.push(cfg.dataDir);
+  fs.mkdirSync(cfg.dataDir, { recursive: true });
+
+  // Set config before opening DB so routes and config proxy work
+  setConfig(cfg);
+
+  // Open an in-memory DB (isolated per test run)
+  openDb(':memory:');
+
+  // Start server passing the config directly to skip loadConfig
+  const server = await startServer({ port: 0, host: '127.0.0.1', config: cfg });
+  activeServers.push(server);
+
+  const addr = server.address() as { port: number };
+  const port = addr.port;
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  return { server, baseUrl, port };
+}
+
+// ── Cleanup ───────────────────────────────────────────────────────────────────
+
+/** Closes all test servers and the database. */
+export async function cleanup(): Promise<void> {
+  // A project's folder is set up in the background: removing the data directory under it only produces errors.
+  await projectDirsReady().catch(() => undefined);
+  for (const server of activeServers.splice(0)) {
+    await new Promise<void>((resolve) => {
+      server.closeAllConnections?.();
+      server.close(() => resolve());
     });
-  g('init', '-q', '-b', 'main');
-  fs.mkdirSync(path.join(work, 'src'));
-  fs.writeFileSync(path.join(work, 'src', 'refunds.ts'), 'export function refund(amount: number) {\n  return amount;\n}\n');
-  fs.writeFileSync(path.join(work, 'README.md'), '# Refund service\n');
-  g('add', '-A');
-  g('commit', '-q', '-m', 'init');
-  g('checkout', '-q', '-b', 'feature/refund-api');
-  fs.writeFileSync(
-    path.join(work, 'src', 'api.ts'),
-    [
-      "const apiKey = 'sk_live_1234567890abcdef';",
-      'export async function find(db: any, id: string) {',
-      "  console.log('finding', id);",
-      '  return db.query("SELECT * FROM refunds WHERE id = \'" + id);',
-      '}',
-      'export function parse(s: string) {',
-      '  try { return JSON.parse(s); } catch (e) {}',
-      '}',
-      '// TODO: add retries',
-      ...Array.from({ length: 10 }, (_, i) => `export const limit${i} = ${i * 100};`),
-    ].join('\n') + '\n',
-  );
-  g('add', '-A');
-  g('commit', '-q', '-m', 'Add refund API');
-  g('checkout', '-q', 'main');
-  execFileSync('git', ['clone', '-q', '--bare', work, bare]);
-  return bare;
+  }
+  if (isDbOpen()) closeDb();
+  for (const dir of testDataDirs.splice(0)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch {
+      // best effort
+    }
+  }
+}
+
+// ── HTTP fetch helpers ────────────────────────────────────────────────────────
+
+interface FetchOptions {
+  method?: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+  cookie?: string;
+  /** Do not confirm the password on a 403 reauth_required (for tests of that response). */
+  noAutoConfirm?: boolean;
+}
+
+export interface FetchResult {
+  status: number;
+  body: unknown;
+  headers: Headers;
+  cookie?: string;
+}
+
+/** Fetch a JSON endpoint on the test server. */
+/** Session cookie -> the password it signed in with, so sensitive routes can be confirmed on the test's behalf. */
+const passwordBySession = new Map<string, string>();
+
+/**
+ * Fetch a JSON endpoint on the test server. Sensitive routes answer 403 reauth_required until the password is
+ * confirmed; like the page does, this confirms with the password the session signed in with and repeats the call.
+ * Pass noAutoConfirm to see the 403 itself.
+ */
+export async function fetchJson(
+  baseUrl: string,
+  urlPath: string,
+  opts: FetchOptions = {},
+): Promise<FetchResult> {
+  const r = await fetchJsonOnce(baseUrl, urlPath, opts);
+  if (r.status === 403 && (r.body as { code?: string } | null)?.code === 'reauth_required' && !opts.noAutoConfirm && opts.cookie) {
+    const sessionCookie = opts.cookie.split('; ').find((c) => c.startsWith('portal_session='));
+    const password = sessionCookie ? passwordBySession.get(sessionCookie) : undefined;
+    if (password) {
+      const c = await fetchJsonOnce(baseUrl, '/api/auth/confirm', { method: 'POST', body: { password }, cookie: sessionCookie });
+      if (c.status === 200 && c.cookie) return fetchJsonOnce(baseUrl, urlPath, { ...opts, cookie: `${opts.cookie}; ${c.cookie}` });
+    }
+  }
+  const body = opts.body as { password?: unknown } | undefined;
+  if ((urlPath === '/api/auth/login' || urlPath === '/api/auth/setup') && r.status === 200 && r.cookie && typeof body?.password === 'string') {
+    passwordBySession.set(r.cookie, body.password);
+  }
+  return r;
+}
+
+async function fetchJsonOnce(
+  baseUrl: string,
+  urlPath: string,
+  opts: FetchOptions = {},
+): Promise<FetchResult> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Requested-With': 'agent-portal',
+    // Prevent keep-alive connections so the event loop drains cleanly after
+    // cleanup() closes the server — otherwise undici's pool lingers for seconds.
+    'Connection': 'close',
+    ...opts.headers,
+  };
+  if (opts.cookie) headers['Cookie'] = opts.cookie;
+
+  const method = opts.method ?? (opts.body != null ? 'POST' : 'GET');
+
+  const res = await fetch(`${baseUrl}${urlPath}`, {
+    method,
+    headers,
+    body: opts.body != null ? JSON.stringify(opts.body) : undefined,
+  });
+
+  let body: unknown;
+  const ct = res.headers.get('content-type') ?? '';
+  if (ct.includes('application/json')) {
+    body = await res.json();
+  } else {
+    body = await res.text();
+  }
+
+  // Extract the name=value from the Set-Cookie header
+  const setCookieHeader = res.headers.get('set-cookie') ?? '';
+  const cookie = setCookieHeader ? setCookieHeader.split(';')[0] : undefined;
+
+  return { status: res.status, body, headers: res.headers, cookie };
+}
+
+/**
+ * Confirm the password for sensitive actions (credentials, users, project deletion) and return the cookie header to
+ * send with them: the session cookie plus the confirmation cookie.
+ */
+export async function withPasswordConfirmed(baseUrl: string, sessionCookie: string, password: string): Promise<string> {
+  const r = await fetchJson(baseUrl, '/api/auth/confirm', { method: 'POST', body: { password }, cookie: sessionCookie });
+  if (r.status !== 200 || !r.cookie) throw new Error(`password confirmation failed: ${r.status} ${JSON.stringify(r.body)}`);
+  return `${sessionCookie}; ${r.cookie}`;
 }

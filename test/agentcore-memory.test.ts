@@ -1,0 +1,271 @@
+/**
+ * Project memory: secrets are masked before anything is sent, only projects that opted in are written, notes start pending and only
+ * approved ones reach a prompt, and only a project owner can review or delete notes (and only their own project's).
+ */
+import { test, describe, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
+import { getDb } from '../server/db.ts';
+import { hashPassword } from '../server/auth.ts';
+import { now } from '../server/util.ts';
+import { setSetting } from '../server/settings.ts';
+import { redactSecrets, sweepMemoryWrites, buildProjectMemoryBlock, projectMemoryNotes, _setMemoryClient, recordStatus } from '../server/agentcore-memory.ts';
+import { buildConversationRecap } from '../server/agent/recap.ts';
+
+describe('redactSecrets', () => {
+  test('masks keys, tokens, bearer headers and assignments, and leaves normal text', () => {
+    const out = redactSecrets('use AKIAABCDEFGHIJKLMNOP and ghp_abcdefghijklmnopqrstuvwxyz1234 with password=hunter2 and Bearer abcdefghijklmnopqrstuvwx; run npm test');
+    assert.ok(!/AKIA|ghp_|hunter2|abcdefghijklmnopqrstuvwx/.test(out), out);
+    assert.match(out, /run npm test/);
+  });
+  test('masks a private key block', () => {
+    assert.ok(!/MIIE/.test(redactSecrets('-----BEGIN RSA PRIVATE KEY-----\nMIIEabc\n-----END RSA PRIVATE KEY-----')));
+  });
+});
+
+describe('project memory', () => {
+  let baseUrl: string;
+  let adminCookie = '';
+  let ownerCookie = '';
+  let memberCookie = '';
+  const calls: Array<{ cmd: string; input: any }> = []; // eslint-disable-line @typescript-eslint/no-explicit-any
+  const records = new Map<string, { id: string; text: string; ns: string }>();
+
+  const mk = (name: string) => class { constructor(public input: any) { (this as any).name = name; } }; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+  before(async () => {
+    process.env.PORTAL_MEMORY_ID = 'mem-test';
+    ({ baseUrl } = await createTestServer());
+    await fetchJson(baseUrl, '/api/auth/setup', { body: { email: 'admin@mem.test', password: 'adminpass1', name: 'Admin' } });
+    adminCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'admin@mem.test', password: 'adminpass1' } })).cookie ?? '';
+    const mkUser = async (id: string): Promise<string> => {
+      getDb().prepare('INSERT INTO users (id, email, name, password_hash, is_admin, disabled, created_at) VALUES (?, ?, ?, ?, 0, 0, ?)').run(id, `${id}@mem.test`, id, hashPassword('memberpass1'), now());
+      return (await fetchJson(baseUrl, '/api/auth/login', { body: { email: `${id}@mem.test`, password: 'memberpass1' } })).cookie ?? '';
+    };
+    ownerCookie = await mkUser('user-mem-owner');
+    memberCookie = await mkUser('user-mem-member');
+    for (const id of ['proj-mem-a', 'proj-mem-b']) getDb().prepare('INSERT INTO projects (id, name, slug, created_at) VALUES (?, ?, ?, ?)').run(id, id, `slug-${id}`, now());
+    const mem = getDb().prepare('INSERT INTO project_members (project_id, user_id, access, role) VALUES (?, ?, ?, ?)');
+    mem.run('proj-mem-a', 'user-mem-owner', 'write', 'owner');
+    mem.run('proj-mem-a', 'user-mem-member', 'write', 'member');
+    mem.run('proj-mem-b', 'user-mem-owner', 'write', 'member');
+
+    const send = async (cmd: { name: string; input: any }) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+      calls.push({ cmd: cmd.name, input: cmd.input });
+      if (cmd.name === 'ListMemoryRecords') {
+        const prefix: string = cmd.input.namespacePath;
+        return { memoryRecordSummaries: [...records.values()].filter((r) => r.ns.startsWith(prefix)).map((r) => ({ memoryRecordId: r.id, content: { text: r.text }, namespaces: [r.ns], createdAt: new Date() })) };
+      }
+      if (cmd.name === 'RetrieveMemoryRecords') {
+        return { memoryRecordSummaries: [...records.values()].filter((r) => r.ns === cmd.input.namespace).map((r) => ({ memoryRecordId: r.id, content: { text: r.text }, namespaces: [r.ns] })) };
+      }
+      if (cmd.name === 'GetMemoryRecord') { const r = records.get(cmd.input.memoryRecordId); if (!r) throw new Error('not found'); return { memoryRecord: { namespaces: [r.ns] } }; }
+      if (cmd.name === 'DeleteMemoryRecord') { records.delete(cmd.input.memoryRecordId); return {}; }
+      return {};
+    };
+    _setMemoryClient({ client: { send }, cmds: { CreateEvent: mk('CreateEvent'), ListMemoryRecords: mk('ListMemoryRecords'), RetrieveMemoryRecords: mk('RetrieveMemoryRecords'), GetMemoryRecord: mk('GetMemoryRecord'), DeleteMemoryRecord: mk('DeleteMemoryRecord') } });
+  });
+  after(async () => { _setMemoryClient(null); delete process.env.PORTAL_MEMORY_ID; await cleanup(); });
+  beforeEach(async () => {
+    calls.length = 0;
+    records.clear();
+    getDb().prepare('DELETE FROM p6_events').run();
+    getDb().prepare('DELETE FROM p6_workflows').run();
+    getDb().prepare("DELETE FROM settings WHERE key LIKE 'agentcore.memory.%'").run();
+  });
+
+  const seed = (wid: string, projectId: string, minutesAgo = 10): void => {
+    const ts = now();
+    getDb().prepare(`INSERT INTO p6_workflows (id, project_id, goal, title, status, engine, trust_tools, lead_agent, created_at, updated_at, last_turn_at, stop_reason)
+      VALUES (?, ?, 'add a test', 't', 'done', 'codex', 0, 'default', ?, ?, ?, '')`).run(wid, projectId, ts, ts, new Date(Date.now() - minutesAgo * 60_000).toISOString());
+    getDb().prepare('INSERT INTO p6_runs (id, workflow_id, status, created_at) VALUES (?, ?, ?, ?)').run(`run-${wid}`, wid, 'done', ts);
+    getDb().prepare('INSERT INTO p6_workflow_events (workflow_id, kind, body, created_at) VALUES (?, ?, ?, ?)').run(wid, 'human', 'Run the tests with password=hunter2', new Date(Date.now() - 20 * 60_000).toISOString());
+    getDb().prepare('INSERT INTO p6_events (run_id, type, payload, created_at) VALUES (?, ?, ?, ?)').run(`run-${wid}`, 'run-complete', JSON.stringify({ result: 'Tests run with npm test.' }), ts);
+  };
+  const on = (projectId: string) => setSetting(getDb(), `agentcore.memory.enabled.${projectId}`, '1');
+
+  test('writes the last exchange of a quiet session once, masked, only for a project that opted in', async () => {
+    seed('wf-mem-1', 'proj-mem-a');
+    seed('wf-mem-2', 'proj-mem-b');
+    await on('proj-mem-a');
+    assert.equal(await sweepMemoryWrites(), 1);
+    const w = calls.filter((c) => c.cmd === 'CreateEvent');
+    assert.equal(w.length, 1);
+    assert.equal(w[0].input.actorId, 'proj-mem-a');
+    assert.equal(w[0].input.sessionId, 'wf-mem-1');
+    assert.ok(!JSON.stringify(w[0].input.payload).includes('hunter2'));
+    assert.equal(await sweepMemoryWrites(), 0);
+  });
+
+  test('a session that is still active is not written', async () => {
+    seed('wf-mem-3', 'proj-mem-a', 0);
+    await on('proj-mem-a');
+    assert.equal(await sweepMemoryWrites(), 0);
+  });
+
+  test('only approved notes reach the recap, and only when the project has memory on', async () => {
+    seed('wf-mem-4', 'proj-mem-a');
+    records.set('r-ok', { id: 'r-ok', text: 'Tests run with npm test', ns: '/project/proj-mem-a/facts' });
+    records.set('r-pending', { id: 'r-pending', text: 'Deploy on Fridays', ns: '/project/proj-mem-a/facts' });
+    await setSetting(getDb(), 'agentcore.memory.status.r-ok', 'approved');
+    assert.equal(await buildProjectMemoryBlock('wf-mem-4'), '');
+    await on('proj-mem-a');
+    const block = await buildProjectMemoryBlock('wf-mem-4');
+    assert.match(block, /Tests run with npm test/);
+    assert.ok(!block.includes('Deploy on Fridays'));
+    const recap = await buildConversationRecap('wf-mem-4', 'run-other');
+    assert.ok(recap.startsWith('[Project notes'), recap.slice(0, 60));
+  });
+
+  test('projectMemoryNotes: approved facts only, only when memory is on, [] on failure, capped', async () => {
+    records.set('r-ok', { id: 'r-ok', text: 'Tests run with pnpm vitest', ns: '/project/proj-mem-a/facts' });
+    records.set('r-pending', { id: 'r-pending', text: 'Deploy on Fridays', ns: '/project/proj-mem-a/facts' });
+    records.set('r-rejected', { id: 'r-rejected', text: 'Wrong fact', ns: '/project/proj-mem-a/facts' });
+    await setSetting(getDb(), 'agentcore.memory.status.r-ok', 'approved');
+    await setSetting(getDb(), 'agentcore.memory.status.r-rejected', 'rejected');
+    assert.deepEqual(await projectMemoryNotes('proj-mem-a', 'how do tests run'), []);
+    await on('proj-mem-a');
+    assert.deepEqual(await projectMemoryNotes('proj-mem-a', 'how do tests run'), ['Tests run with pnpm vitest']);
+    const q = calls.filter((c) => c.cmd === 'RetrieveMemoryRecords').at(-1)!;
+    assert.equal(q.input.namespace, '/project/proj-mem-a/facts');
+    assert.equal(q.input.searchCriteria.searchQuery, 'how do tests run');
+    assert.deepEqual(await projectMemoryNotes('proj-mem-b', 'x'), []);
+    for (let i = 0; i < 10; i++) {
+      records.set(`r-big-${i}`, { id: `r-big-${i}`, text: `${i}`.repeat(600), ns: '/project/proj-mem-a/facts' });
+      await setSetting(getDb(), `agentcore.memory.status.r-big-${i}`, 'approved');
+    }
+    const notes = await projectMemoryNotes('proj-mem-a', 'x');
+    assert.ok(notes.join('').length <= 2500, String(notes.join('').length));
+  });
+
+  test('projectMemoryNotes gives [] when the memory service fails', async () => {
+    await on('proj-mem-a');
+    _setMemoryClient({ client: { send: async () => { throw new Error('boom'); } }, cmds: { RetrieveMemoryRecords: mk('RetrieveMemoryRecords') } });
+    assert.deepEqual(await projectMemoryNotes('proj-mem-a', 'x'), []);
+  });
+
+  test('a failing memory service gives no block instead of failing the session', async () => {
+    seed('wf-mem-5', 'proj-mem-a');
+    await on('proj-mem-a');
+    _setMemoryClient({ client: { send: async () => { throw new Error('boom'); } }, cmds: { RetrieveMemoryRecords: mk('RetrieveMemoryRecords') } });
+    assert.equal(await buildProjectMemoryBlock('wf-mem-5'), '');
+  });
+
+  describe('routes', () => {
+    let createFails = false;
+    beforeEach(() => {
+      // restore the working client after the failing one above
+      _setMemoryClient({
+        client: {
+          async send(cmd: any) { // eslint-disable-line @typescript-eslint/no-explicit-any
+            if (cmd.name === 'ListMemoryRecords') return { memoryRecordSummaries: [...records.values()].filter((r) => r.ns.startsWith(cmd.input.namespacePath)).map((r) => ({ memoryRecordId: r.id, content: { text: r.text }, namespaces: [r.ns], createdAt: new Date() })) };
+            if (cmd.name === 'GetMemoryRecord') { const r = records.get(cmd.input.memoryRecordId); if (!r) throw new Error('nf'); return { memoryRecord: { namespaces: [r.ns] } }; }
+            if (cmd.name === 'DeleteMemoryRecord') { records.delete(cmd.input.memoryRecordId); return {}; }
+            if (cmd.name === 'RetrieveMemoryRecords') return { memoryRecordSummaries: [...records.values()].filter((r) => r.ns === cmd.input.namespace).map((r) => ({ memoryRecordId: r.id, content: { text: r.text }, namespaces: [r.ns] })) };
+            if (cmd.name === 'BatchUpdateMemoryRecords') {
+              calls.push({ cmd: cmd.name, input: cmd.input });
+              for (const u of cmd.input.records) { const r = records.get(u.memoryRecordId); if (r) r.text = u.content.text; }
+              return { successfulRecords: cmd.input.records.map((u: any) => ({ memoryRecordId: u.memoryRecordId, status: 'SUCCEEDED' })), failedRecords: [] }; // eslint-disable-line @typescript-eslint/no-explicit-any
+            }
+            if (cmd.name === 'BatchCreateMemoryRecords') {
+              calls.push({ cmd: cmd.name, input: cmd.input });
+              if (createFails) return { successfulRecords: [], failedRecords: [{ requestIdentifier: cmd.input.records[0].requestIdentifier, status: 'FAILED', errorMessage: 'nope' }] };
+              const c = cmd.input.records[0];
+              const id = `r-new-${records.size}`;
+              records.set(id, { id, text: c.content.text, ns: c.namespaces[0] });
+              return { successfulRecords: [{ memoryRecordId: id, requestIdentifier: c.requestIdentifier, status: 'SUCCEEDED' }], failedRecords: [] };
+            }
+            return {};
+          },
+        },
+        cmds: { ListMemoryRecords: mk('ListMemoryRecords'), GetMemoryRecord: mk('GetMemoryRecord'), DeleteMemoryRecord: mk('DeleteMemoryRecord'), CreateEvent: mk('CreateEvent'), RetrieveMemoryRecords: mk('RetrieveMemoryRecords'), BatchUpdateMemoryRecords: mk('BatchUpdateMemoryRecords'), BatchCreateMemoryRecords: mk('BatchCreateMemoryRecords') },
+      });
+      records.set('r-a', { id: 'r-a', text: 'Note for A', ns: '/project/proj-mem-a/facts' });
+      records.set('r-b', { id: 'r-b', text: 'Note for B', ns: '/project/proj-mem-b/facts' });
+      createFails = false;
+    });
+    const url = (p: string, rest = '') => `/api/projects/${p}/memory${rest}`;
+
+    test('an owner corrects a fact: the text changes in place, secrets are masked, it becomes approved and is marked edited', async () => {
+      const r = await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { text: '  Tests run with pnpm vitest, token=abc123  ' } });
+      assert.equal(r.status, 200);
+      assert.equal(records.get('r-a')!.text, 'Tests run with pnpm vitest, token=[removed]');
+      assert.equal(recordStatus('r-a'), 'approved');
+      const u = calls.filter((c) => c.cmd === 'BatchUpdateMemoryRecords').at(-1)!;
+      assert.equal(u.input.memoryId, 'mem-test');
+      assert.equal(u.input.records[0].memoryRecordId, 'r-a');
+      assert.ok(u.input.records[0].timestamp instanceof Date);
+      const list = (await fetchJson(baseUrl, url('proj-mem-a'), { cookie: ownerCookie })).body as { records: Array<{ id: string; edited?: boolean; status: string }> };
+      const row = list.records.find((x) => x.id === 'r-a')!;
+      assert.equal(row.edited, true);
+      assert.equal(row.status, 'approved');
+    });
+
+    test('editing is refused for members, other projects\' notes, summaries, empty or over-long text, and text with a status', async () => {
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: memberCookie, body: { text: 'x' } })).status, 403);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-b'), { method: 'PUT', cookie: ownerCookie, body: { text: 'x' } })).status, 404);
+      records.set('r-sum', { id: 'r-sum', text: 'Summary of a session', ns: '/project/proj-mem-a/summaries/wf-1' });
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-sum'), { method: 'PUT', cookie: ownerCookie, body: { text: 'x' } })).status, 400);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { text: '   ' } })).status, 400);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { text: 'x'.repeat(1001) } })).status, 400);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { text: 'x', status: 'approved' } })).status, 400);
+      assert.equal(records.get('r-a')!.text, 'Note for A');
+      assert.equal(records.get('r-b')!.text, 'Note for B');
+    });
+
+    test('an owner adds a fact: written to the project\'s facts, approved, edited, and used by projectMemoryNotes when memory is on', async () => {
+      const r = await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: ownerCookie, body: { text: 'Deploys go through main_v3' } });
+      assert.equal(r.status, 200);
+      const b = r.body as { id: string; text: string; status: string };
+      assert.equal(b.status, 'approved');
+      assert.equal(b.text, 'Deploys go through main_v3');
+      const c = calls.filter((x) => x.cmd === 'BatchCreateMemoryRecords').at(-1)!;
+      assert.deepEqual(c.input.records[0].namespaces, ['/project/proj-mem-a/facts']);
+      assert.equal(c.input.records[0].content.text, 'Deploys go through main_v3');
+      assert.equal(recordStatus(b.id), 'approved');
+      await on('proj-mem-a');
+      assert.ok((await projectMemoryNotes('proj-mem-a', 'deploy')).includes('Deploys go through main_v3'));
+    });
+
+    test('adding is refused for members and non-members and for bad text; an AgentCore failure is 502', async () => {
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: memberCookie, body: { text: 'x' } })).status, 403);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-b', '/records'), { method: 'POST', cookie: memberCookie, body: { text: 'x' } })).status, 403);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: ownerCookie, body: { text: '' } })).status, 400);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: ownerCookie, body: {} })).status, 400);
+      createFails = true;
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records'), { method: 'POST', cookie: ownerCookie, body: { text: 'A fact' } })).status, 502);
+      assert.equal(calls.filter((x) => x.cmd === 'BatchCreateMemoryRecords').length, 1);
+    });
+
+    test('a member sees only their project\'s notes as pending, and cannot manage', async () => {
+      const r = await fetchJson(baseUrl, url('proj-mem-a'), { cookie: memberCookie });
+      const b = r.body as { records: Array<{ id: string; status: string }>; canManage: boolean; available: boolean };
+      assert.equal(r.status, 200);
+      assert.equal(b.canManage, false);
+      assert.deepEqual(b.records.map((x) => [x.id, x.status]), [['r-a', 'pending']]);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: memberCookie, body: { status: 'approved' } })).status, 403);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a'), { method: 'PUT', cookie: memberCookie, body: { enabled: true } })).status, 403);
+    });
+
+    test('a non-member is refused', async () => {
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-b'), { cookie: memberCookie })).status, 403);
+    });
+
+    test('an owner turns memory on, approves a note, and deletes it', async () => {
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a'), { method: 'PUT', cookie: ownerCookie, body: { enabled: true } })).status, 200);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { status: 'approved' } })).status, 200);
+      assert.equal(recordStatus('r-a'), 'approved');
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'DELETE', cookie: ownerCookie })).status, 200);
+      assert.equal(records.has('r-a'), false);
+    });
+
+    test('an owner of one project cannot touch another project\'s note, and bad input is refused', async () => {
+      // ownerCookie is only a member of proj-mem-b, so managing B is refused; A's owner must not reach B's record through A.
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-b'), { method: 'PUT', cookie: ownerCookie, body: { status: 'approved' } })).status, 404);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-b'), { method: 'DELETE', cookie: ownerCookie })).status, 404);
+      assert.equal(records.has('r-b'), true);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a', '/records/r-a'), { method: 'PUT', cookie: ownerCookie, body: { status: 'maybe' } })).status, 400);
+      assert.equal((await fetchJson(baseUrl, url('proj-mem-a'), { method: 'PUT', cookie: adminCookie, body: { enabled: 'yes' } })).status, 400);
+    });
+  });
+});

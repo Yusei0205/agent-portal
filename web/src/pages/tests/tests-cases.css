@@ -1,0 +1,570 @@
+/* tests-cases.css — styles for case-set generation tracker, case table, and status pills */
+
+/* ── Progress bar ─────────────────────────────────────────────────────────── */
+.gen-progress-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+  flex: 1;
+  min-width: 60px;
+}
+.gen-progress-fill {
+  height: 100%;
+  background: var(--accent, #6366f1);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+  min-width: 4px;
+}
+.gen-progress-fill.indeterminate {
+  width: 35% !important;
+  animation: gen-slide 1.5s linear infinite;
+}
+@keyframes gen-slide {
+  0%   { transform: translateX(-200%); }
+  100% { transform: translateX(500%); }
+}
+
+/* ── Phase stepper ────────────────────────────────────────────────────────── */
+.gen-phase-stepper {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  position: relative;
+}
+.gen-phase-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 1;
+  position: relative;
+  min-width: 0;
+}
+.gen-phase-step::after {
+  content: '';
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  right: calc(-50%);
+  height: 2px;
+  background: var(--line);
+  z-index: 0;
+}
+.gen-phase-step:last-child::after { display: none; }
+.gen-phase-step.done::after {
+  background: color-mix(in srgb, var(--accent, #6366f1) 50%, transparent);
+}
+.gen-phase-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--line);
+  background: var(--canvas);
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  transition: border-color 0.2s, background 0.2s;
+}
+.gen-phase-step.done .gen-phase-dot {
+  background: color-mix(in srgb, var(--accent, #6366f1) 70%, var(--canvas));
+  border-color: var(--accent, #6366f1);
+}
+.gen-phase-step.active .gen-phase-dot {
+  background: var(--accent, #6366f1);
+  border-color: var(--accent, #6366f1);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #6366f1) 20%, transparent);
+}
+.gen-phase-step.failed .gen-phase-dot {
+  background: var(--danger, #dc2626);
+  border-color: var(--danger, #dc2626);
+}
+.gen-phase-label {
+  font-size: 0.66rem;
+  color: var(--ink-3);
+  text-align: center;
+  margin-top: 3px;
+  line-height: 1.2;
+  overflow: hidden;
+  max-width: 100%;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 0 2px;
+}
+.gen-phase-step.active .gen-phase-label  { color: var(--accent, #6366f1); font-weight: 600; }
+.gen-phase-step.failed .gen-phase-label  { color: var(--danger, #dc2626); font-weight: 600; }
+
+/* ── Status pills ─────────────────────────────────────────────────────────── */
+.status-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+.status-pill-pass {
+  background: color-mix(in srgb, var(--ok, #16a34a) 15%, transparent);
+  color: color-mix(in srgb, var(--ok, #16a34a) 90%, var(--ink));
+  border-color: color-mix(in srgb, var(--ok, #16a34a) 30%, transparent);
+}
+.status-pill-fail {
+  background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
+  color: color-mix(in srgb, var(--danger, #dc2626) 90%, var(--ink));
+  border-color: color-mix(in srgb, var(--danger, #dc2626) 25%, transparent);
+}
+.status-pill-blocked {
+  background: color-mix(in srgb, var(--warn, #d97706) 12%, transparent);
+  color: color-mix(in srgb, var(--warn, #d97706) 90%, var(--ink));
+  border-color: color-mix(in srgb, var(--warn, #d97706) 30%, transparent);
+}
+.status-pill-not-run {
+  background: color-mix(in srgb, var(--ink-3) 12%, transparent);
+  color: var(--ink-3);
+  border-color: color-mix(in srgb, var(--ink-3) 25%, transparent);
+}
+
+/* ── Case table ───────────────────────────────────────────────────────────── */
+.case-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.case-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.case-table th {
+  text-align: left;
+  padding: 7px 10px;
+  border-bottom: 2px solid var(--line);
+  color: var(--ink-2);
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--canvas);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.case-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+  color: var(--ink);
+}
+.case-table tr:last-child td { border-bottom: none; }
+.case-table tr:hover td {
+  background: color-mix(in srgb, var(--accent, #6366f1) 4%, var(--canvas));
+}
+.case-table .steps-cell {
+  white-space: pre-wrap;
+  font-size: 0.78rem;
+  max-width: 220px;
+}
+
+/* ── Case set cards ───────────────────────────────────────────────────────── */
+.case-set-progress-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+  width: 100%;
+  margin-top: 4px;
+}
+.case-set-progress-fill {
+  height: 100%;
+  background: var(--accent, #6366f1);
+  border-radius: 2px;
+  transition: width 0.4s ease;
+}
+.case-set-progress-fill.indeterminate {
+  width: 35% !important;
+  animation: gen-slide 1.5s linear infinite;
+}
+
+/* ── Summary strip ────────────────────────────────────────────────────────── */
+.case-summary-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 10px;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  cursor: pointer;
+  font-size: 0.78rem;
+  transition: border-color 0.15s;
+  color: var(--ink-2);
+}
+.case-summary-chip:hover     { border-color: var(--accent, #6366f1); color: var(--ink); }
+.case-summary-chip.is-active { border-color: var(--accent, #6366f1); background: color-mix(in srgb, var(--accent, #6366f1) 8%, var(--canvas)); color: var(--accent, #6366f1); }
+
+/* ── Table layout fixes ───────────────────────────────────────────────────── */
+/* Sticky action column so edit/delete icons stay visible on horizontal scroll */
+.case-table th.col-actions,
+.case-table td.col-actions {
+  position: sticky;
+  right: 0;
+  background: var(--canvas);
+  z-index: 2;
+  box-shadow: -2px 0 4px -2px rgba(0,0,0,0.08);
+  white-space: nowrap;
+  width: 60px;
+  min-width: 60px;
+}
+.case-table th.col-actions {
+  z-index: 3; /* above body cells that also have sticky */
+}
+.case-table tr:hover td.col-actions {
+  background: color-mix(in srgb, var(--accent, #6366f1) 4%, var(--canvas));
+}
+
+/* Cell text clamping — click to expand */
+.cell-clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  cursor: pointer;
+  white-space: pre-wrap;
+  word-break: break-word;
+  min-height: 1.2em;
+}
+.cell-clamp:hover { opacity: 0.85; }
+.cell-clamp.expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+/* Category chip — truncate long names */
+.case-summary-chip-cat {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
+}
+
+/* ── Method badge ─────────────────────────────────────────────────────────── */
+.method-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.67rem;
+  font-weight: 700;
+  font-family: var(--mono, monospace);
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.method-get    { background: #3b82f6; color: #fff; }
+.method-post   { background: #22c55e; color: #fff; }
+.method-put    { background: #f97316; color: #fff; }
+.method-patch  { background: #f59e0b; color: #fff; }
+.method-delete { background: #ef4444; color: #fff; }
+.method-head   { background: #6b7280; color: #fff; }
+.method-other  { background: #8b5cf6; color: #fff; }
+
+/* ── Status code badge ────────────────────────────────────────────────────── */
+.status-code-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-family: var(--mono, monospace);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.status-code-badge.ok  { background: color-mix(in srgb, var(--ok, #16a34a) 15%, transparent); color: color-mix(in srgb, var(--ok, #16a34a) 90%, var(--ink)); }
+.status-code-badge.err { background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent); color: color-mix(in srgb, var(--danger, #dc2626) 90%, var(--ink)); }
+
+/* ── Expandable code block inside cells ──────────────────────────────────── */
+.cell-code-block {
+  font-family: var(--mono, monospace);
+  font-size: 0.72rem;
+  background: color-mix(in srgb, var(--ink) 5%, var(--canvas));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 8px;
+  margin: 4px 0 0;
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* ── Request / Response cell wrapper ─────────────────────────────────────── */
+.api-cell {
+  min-width: 0;
+}
+.api-cell-summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.api-cell-url {
+  font-size: 0.72rem;
+  font-family: var(--mono, monospace);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+  color: var(--ink-2);
+}
+.api-cell-actions {
+  display: flex;
+  gap: 2px;
+  flex-wrap: nowrap;
+  margin-top: 4px;
+}
+
+/* ── Generation trace timeline ────────────────────────────────────────────── */
+.trace-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.trace-step {
+  display: flex;
+  gap: 10px;
+  position: relative;
+  padding: 6px 0 6px 0;
+}
+/* Vertical connector line */
+.trace-step:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 20px;
+  bottom: -6px;
+  width: 2px;
+  background: var(--line);
+  z-index: 0;
+}
+.trace-step-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+  position: relative;
+  z-index: 1;
+  border: 2px solid transparent;
+}
+.trace-step-dot-ok      { background: var(--ok, #16a34a); border-color: var(--ok, #16a34a); }
+.trace-step-dot-failed  { background: var(--danger, #dc2626); border-color: var(--danger, #dc2626); }
+.trace-step-dot-retry   { background: var(--warn, #d97706); border-color: var(--warn, #d97706); }
+.trace-step-dot-skipped { background: transparent; border-color: var(--ink-3); }
+.trace-step-dot-running {
+  background: var(--accent, #6366f1);
+  border-color: var(--accent, #6366f1);
+  animation: trace-pulse 1.2s ease-in-out infinite;
+}
+@keyframes trace-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent, #6366f1) 60%, transparent); }
+  50%       { box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent, #6366f1) 0%, transparent); }
+}
+.trace-step-dot-pending { background: transparent; border-color: var(--line); }
+
+.trace-step-body {
+  flex: 1;
+  min-width: 0;
+}
+.trace-step-header {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.trace-step-label {
+  font-size: 0.83rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+.trace-step-detail {
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+.trace-step-duration {
+  font-size: 0.72rem;
+  color: var(--ink-3);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.trace-step-error {
+  font-size: 0.78rem;
+  color: var(--danger);
+  margin-top: 2px;
+}
+.trace-step-expand-btn {
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  color: var(--ink-3);
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.72rem;
+  gap: 2px;
+  text-decoration: underline dotted;
+}
+.trace-step-expand-btn:hover { color: var(--accent, #6366f1); }
+
+.trace-code-section {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.trace-code-label {
+  font-size: 0.71rem;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.trace-code-block {
+  font-family: var(--mono, monospace);
+  font-size: 0.72rem;
+  background: color-mix(in srgb, var(--ink) 5%, var(--canvas));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+/* ── Resizable / sortable column headers ─────────────────────────────────── */
+
+/* th needs relative positioning to anchor the resize handle */
+.case-table th.case-table-th {
+  position: relative;
+  padding-right: 14px; /* leave room for the 8px resize handle */
+  overflow: hidden;
+  user-select: none;
+}
+
+/* Sort button — fills the header except the resize handle area */
+.sort-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink-2);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.sort-btn:hover  { color: var(--accent, #6366f1); }
+.sort-btn.sort-active { color: var(--accent, #6366f1); }
+.sort-btn:focus-visible {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Non-sortable column label (same baseline as sort-btn) */
+.col-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-2);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+/* Sort direction arrow */
+.sort-indicator {
+  flex-shrink: 0;
+  font-size: 0.74rem;
+  line-height: 1;
+  color: var(--accent, #6366f1);
+  min-width: 10px;
+}
+
+/* Resize drag handle — right edge of each header cell */
+.col-resize-handle {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none; /* required for pointer-events API on touch screens */
+  z-index: 2;
+}
+.col-resize-handle::after {
+  content: '';
+  width: 2px;
+  height: 55%;
+  background: var(--line);
+  border-radius: 1px;
+  transition: background 0.15s;
+}
+.col-resize-handle:hover::after { background: var(--accent, #6366f1); }
+.col-resize-handle:focus { outline: none; }
+.col-resize-handle:focus-visible {
+  outline: 2px solid var(--accent, #6366f1);
+  outline-offset: -1px;
+}
+.col-resize-handle:focus-visible::after { background: var(--accent, #6366f1); }
+
+/* Wrap-text mode — override 3-line clamp with full text */
+.case-table-wrap.wrap-text .cell-clamp {
+  display: block;
+  -webkit-line-clamp: unset;
+  overflow: visible;
+}
+
+/* ── Mobile responsive (≤ 768 px) ─────────────────────────────────────── */
+@media (max-width: 768px) {
+  /* Summary chip strip: wrap chips instead of overflowing */
+  .case-summary-strip {
+    flex-wrap: wrap;
+  }
+
+  /* Phase stepper: allow step labels to be even shorter on very narrow screens */
+  .gen-phase-label {
+    font-size: 0.6rem;
+    padding: 0 1px;
+  }
+
+  /* Toolbar rows that sit above the case table: wrap */
+  .case-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* Truncate long category chip names */
+  .case-summary-chip-cat {
+    max-width: 100px;
+  }
+}

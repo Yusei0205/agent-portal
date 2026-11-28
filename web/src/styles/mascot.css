@@ -1,0 +1,371 @@
+/* Cat companion with a tip bubble, reactions and a mode menu (web/src/components/CatMascot.jsx). Theme tokens only, so it fits every theme.
+   Layout: .cat-mascot is a full-width strip fixed at the bottom (no pointer events); the cat, bubble, menu and label are placed inside it.
+   --cat-x is the cat's left edge and --cat-size its size; bubbles clamp themselves into the window around it. */
+
+.cat-mascot {
+  position: fixed;
+  left: 0;
+  right: 0;
+  height: var(--cat-size, 56px);
+  z-index: 150; /* above page content, below dialogs, the command palette and toasts */
+  pointer-events: none; /* only the sprite, the bubble, the menu and the paw take clicks */
+  --cat-bw: min(280px, calc(100vw - 32px));
+  --cat-bl: clamp(8px, calc(var(--cat-x, 0px) + var(--cat-size, 56px) / 2 - var(--cat-bw) / 2), calc(100vw - var(--cat-bw) - 8px));
+}
+
+.cat-body { position: absolute; left: 0; top: 0; width: var(--cat-size); height: var(--cat-size); pointer-events: none; will-change: transform; }
+
+.cat-bubble,
+.cat-menu,
+.cat-button,
+.cat-paw { pointer-events: auto; }
+
+.cat-bubble {
+  position: absolute;
+  bottom: calc(var(--cat-size) + 10px);
+  left: var(--cat-bl);
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: var(--cat-bw);
+  box-sizing: border-box;
+  padding: 10px 8px 10px 12px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--ink) 14%, transparent);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+/* The bubble's tail, pointing at the cat. */
+.cat-bubble::after {
+  content: '';
+  position: absolute;
+  left: clamp(14px, calc(var(--cat-x, 0px) + var(--cat-size, 56px) / 2 - var(--cat-bl) - 6px), calc(var(--cat-bw) - 26px));
+  bottom: -7px;
+  width: 12px;
+  height: 12px;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  transform: rotate(45deg);
+}
+.cat-bubble-text { flex: 1; min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.cat-bubble-text strong { color: var(--accent); font-weight: 650; }
+.cat-bubble-link { color: var(--accent); font-weight: 650; text-decoration: underline; text-underline-offset: 2px; }
+.cat-bubble-close,
+.cat-menu-toggle {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin: -2px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.cat-bubble-close:hover,
+.cat-menu-toggle:hover { color: var(--ink); background: var(--raised); }
+.cat-bubble-close:focus-visible,
+.cat-menu-toggle:focus-visible,
+.cat-button:focus-visible,
+.cat-paw:focus-visible,
+.cat-menu-item:focus-visible { outline: none; box-shadow: var(--accent-glow); }
+
+/* The mode menu (Roam / Sit / Hidden), in the bubble's place. */
+.cat-menu {
+  position: absolute;
+  bottom: calc(var(--cat-size) + 10px);
+  left: clamp(8px, calc(var(--cat-x, 0px) + var(--cat-size, 56px) / 2 - 70px), calc(100% - 148px));
+  display: flex;
+  flex-direction: column;
+  width: 140px;
+  padding: 4px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--ink) 14%, transparent);
+  font-size: 0.84rem;
+}
+.cat-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.cat-menu-item:hover { background: var(--raised); }
+.cat-menu-dot { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--ink-3); box-sizing: border-box; }
+.cat-menu-item[aria-checked="true"] .cat-menu-dot { background: var(--accent); border-color: var(--accent); }
+
+
+/* The shortcut panel (web/src/components/CatChatPanel.jsx): a non-modal floating card above the cat; a bottom sheet on phones. */
+.cat-panel {
+  --cat-pw: min(340px, calc(100vw - 32px));
+  position: absolute;
+  bottom: calc(var(--cat-size) + 10px);
+  left: clamp(8px, calc(var(--cat-x, 0px) + var(--cat-size, 56px) / 2 - var(--cat-pw) / 2), calc(100vw - var(--cat-pw) - 8px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: var(--cat-pw);
+  max-height: min(70vh, 460px);
+  box-sizing: border-box;
+  padding: 10px 12px 10px;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 10px 30px color-mix(in srgb, var(--ink) 18%, transparent);
+  font-size: 0.86rem;
+  line-height: 1.4;
+  pointer-events: auto;
+}
+.cat-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.cat-panel-title { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; color: var(--ink); }
+.cat-panel-title svg { color: var(--accent); }
+.cat-panel-close,
+.cat-panel-send {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.cat-panel-tools { display: inline-flex; gap: 2px; }
+.cat-panel-close:hover { color: var(--ink); background: var(--raised); }
+.cat-panel-close:disabled { opacity: .4; cursor: default; background: transparent; }
+.cat-panel-send { background: var(--accent); color: var(--accent-ink); }
+.cat-panel-send:disabled { background: var(--raised); color: var(--ink-3); cursor: default; }
+.cat-panel-close:focus-visible,
+.cat-panel-send:focus-visible,
+.cat-chip:focus-visible,
+.cat-panel-input:focus-visible,
+.cat-panel-roam input:focus-visible { outline: none; box-shadow: var(--accent-glow); }
+.cat-panel-log { display: flex; flex-direction: column; gap: 6px; min-height: 0; max-height: 28vh; overflow-y: auto; }
+.cat-msg p { margin: 0; padding: 7px 10px; border-radius: 12px; overflow-wrap: anywhere; }
+.cat-msg-cat p { background: var(--raised); color: var(--ink); border-bottom-left-radius: 4px; max-width: 92%; }
+.cat-msg-me { align-self: flex-end; max-width: 85%; }
+.cat-msg-me p { background: var(--accent); color: var(--accent-ink); border-bottom-right-radius: 4px; }
+.cat-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.cat-chip {
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.cat-chip:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+.cat-panel-form { display: flex; align-items: center; gap: 6px; }
+.cat-panel-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-2);
+  color: var(--ink);
+  font: inherit;
+}
+.cat-panel-input::placeholder { color: var(--ink-3); }
+.cat-panel-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 0.76rem; color: var(--ink-3); }
+.cat-panel-roam { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); cursor: pointer; }
+.cat-panel-roam input { accent-color: var(--accent); margin: 0; }
+.cat-menu-dot-tip { border-radius: 2px; }
+@media (prefers-reduced-motion: no-preference) {
+  .cat-panel { animation: cat-pop 180ms ease-out; }
+}
+
+/* The hover label: it names the click (the shortcut panel). */
+.cat-label {
+  position: absolute;
+  bottom: calc(var(--cat-size) + 4px);
+  left: clamp(8px, calc(var(--cat-x, 0px) + var(--cat-size, 56px) / 2 - 62px), calc(100% - 132px));
+  padding: 3px 10px;
+  background: var(--panel);
+  color: var(--ink-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--ink) 10%, transparent);
+  font-size: 0.74rem;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* The cat's hit area is only its sprite. */
+.cat-button {
+  display: block;
+  width: var(--cat-size);
+  height: var(--cat-size);
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  cursor: grab;
+  line-height: 0;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+.cat-button.is-dragging { cursor: grabbing; }
+
+/* Hidden mode: only a small paw in the corner brings the cat back. */
+.cat-mascot-hidden { left: auto; right: 16px; bottom: 16px; width: 24px; height: 24px; }
+.cat-paw {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--ink-3);
+  cursor: pointer;
+  opacity: 0.8;
+}
+.cat-paw svg { fill: currentColor; }
+.cat-paw:hover { opacity: 1; color: var(--accent); }
+
+/* Celebration sparkles: six small four-leaf clovers flying outward. */
+.cat-sparkles { --cat-clover: #2f8f5b; position: absolute; left: 50%; top: 35%; width: 0; height: 0; pointer-events: none; }
+[data-theme="dark"] .cat-sparkles { --cat-clover: #3fae6e; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .cat-sparkles { --cat-clover: #3fae6e; } }
+.cat-sparkles i { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .cat-bubble { animation: cat-pop 180ms ease-out; }
+  .cat-sparkles i {
+    display: block;
+    position: absolute;
+    left: -4px;
+    top: -4px;
+    width: 8px;
+    height: 8px;
+    background: var(--cat-clover);
+    /* a plus: four leaves round a gold-free centre, drawn as a clipped square */
+    clip-path: polygon(33% 0, 67% 0, 67% 33%, 100% 33%, 100% 67%, 67% 67%, 67% 100%, 33% 100%, 33% 67%, 0 67%, 0 33%, 33% 33%);
+    opacity: 0;
+    transform: rotate(var(--a)) translateY(0);
+    animation: cat-spark 900ms ease-out forwards;
+  }
+}
+@keyframes cat-spark {
+  0% { opacity: 1; transform: rotate(var(--a)) translateY(-10px); }
+  100% { opacity: 0; transform: rotate(var(--a)) translateY(-34px); }
+}
+@keyframes cat-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Phones: a smaller cat in the corner, a wider bubble. */
+@media (max-width: 600px) {
+  .cat-mascot { --cat-bw: calc(100vw - 44px); }
+  .cat-mascot-hidden { right: 10px; bottom: 10px; }
+  /* The panel becomes a full-width sheet at the bottom of the screen. */
+  .cat-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 78vh;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    border-width: 1px 0 0;
+    border-radius: 16px 16px 0 0;
+  }
+  .cat-mascot.has-panel .cat-body { opacity: 0; } /* the sheet covers the cat; it stays focusable for the way back */
+  .cat-panel-input { font-size: 16px; } /* no zoom on focus in iOS */
+}
+
+/* Never in print. */
+@media print { .cat-mascot { display: none; } }
+
+/* Pixel cat sprite (web/src/components/CatSprite.jsx): a sheet of frames stepped with steps(); the cat colours are custom properties with light and dark values. */
+.cat-sprite {
+  /* The owner's calico: brown on the cat's left half and orange on the right, a cream blaze, a cream and grey belly, pink ears,
+     nose and cheeks, a gold collar and a green four-leaf clover charm with a gold centre.
+     The cat's own colours are fixed values (a cat is not recoloured by a theme); only the effects follow the accent. */
+  --cat-outline: #3b2d28;
+  --cat-fur: #fffaf1;
+  --cat-belly: #ebe1d3;
+  --cat-accent: var(--accent);
+  --cat-eye: #2a1f1b;
+  --cat-blush: #f6aebb;
+  --cat-pink: #f08fa3;
+  --cat-orange: #e8923a;
+  --cat-brown: #8c5b3b;
+  --cat-collar: #f2b33c;
+  --cat-tag: #f2cb3c;
+  --cat-clover: #2f8f5b;
+  position: relative;
+  overflow: hidden;
+  image-rendering: pixelated;
+}
+.cat-sheet {
+  display: block;
+  height: 100%;
+  width: calc(100% * var(--cat-n));
+}
+/* Dark themes: the same cat with a slightly warmer white and brighter patches so it does not sink into the dark panel. */
+[data-theme="dark"] .cat-sprite {
+  --cat-outline: #1b1411;
+  --cat-fur: #f4ecdf;
+  --cat-belly: #d6cbbb;
+  --cat-orange: #f1a24f;
+  --cat-brown: #a8704a;
+  --cat-pink: #f29bad;
+  --cat-clover: #3fae6e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .cat-sprite {
+    --cat-outline: #1b1411;
+    --cat-fur: #f4ecdf;
+    --cat-belly: #d6cbbb;
+    --cat-orange: #f1a24f;
+    --cat-brown: #a8704a;
+    --cat-pink: #f29bad;
+    --cat-clover: #3fae6e;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cat-sheet {
+    animation: cat-frames var(--cat-dur) steps(var(--cat-n), jump-none) var(--cat-iter) forwards;
+  }
+}
+@keyframes cat-frames {
+  to { transform: translateX(calc(-100% * (var(--cat-n) - 1) / var(--cat-n))); }
+}
+
+/* Assistant replies: line breaks kept, link buttons under the text, a three-dot typing indicator */
+.cat-msg-cat p { white-space: pre-wrap; }
+.cat-msg-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.cat-typing { display: inline-flex; align-items: center; gap: 4px; height: 1em; }
+.cat-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); animation: cat-typing-dot 1.2s ease-in-out infinite; }
+.cat-typing i:nth-child(2) { animation-delay: 0.2s; }
+.cat-typing i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes cat-typing-dot { 0%, 80%, 100% { opacity: 0.3; } 40% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .cat-typing i { animation: none; opacity: 0.6; } }
+.cat-msg-provider { display: block; margin-top: 7px; color: var(--ink-3); font-size: .65rem; font-weight: 400; }
