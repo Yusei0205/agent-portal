@@ -2085,6 +2085,16 @@
         "inbox"
       ],
       "note": "UI is the Setup > Pipelines tab (smoke section 8) and the Inbox Deploy failed label (section 9)."
+    },
+    "telegram": {
+      "description": "Telegram bridge: control a local portal from a Telegram chat by long polling, with a chat allowlist and a portal API token.",
+      "sources": [
+        "server/telegram/**"
+      ],
+      "tests": [
+        "test/telegram-bridge.test.ts"
+      ],
+      "smokeIds": []
     }
   },
   "shared": [
