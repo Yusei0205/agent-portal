@@ -1,17 +1,18 @@
 # CI for main_v3 — runs on every pull request and on pushes to main_v3.
 #
 # "checks" job: type check, backend tests (affected modules only, --all for
-# shared-core changes), and the production build.  The UI smoke suite is NOT
-# run here — it requires a running server and headed Chromium, which exceeds
-# the ephemeral runner budget for every PR.  Run it locally or on a dedicated
-# self-hosted runner.
+# shared-core changes), and the production build.
+#
+# "ui-smoke" job: builds the portal, starts it and runs the UI smoke suite
+# (test/ui/smoke.ts) in headless Chromium, so a change that breaks a page is
+# caught before it merges, not only the backend and web unit tests.
 #
 # "repo-contracts" job: runs the DynamoDB repository contract tests against
 # DynamoDB Local. Uses REQUIRE_DYNAMODB=1 so skips become failures.
 # Only runs the four repository modules:
 #   api-tokens, auth, permissions, audit, delegation
 #
-# Make both jobs required checks on main_v3 (Settings › Branches) so
+# Make all three jobs required checks on main_v3 (Settings › Branches) so
 # nothing merges red.
 #
 # The deploy workflows (deploy-portal.yml, deploy-agentcore.yml) wait for this
@@ -83,6 +84,30 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  ui-smoke:
+    name: UI smoke tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install the headless browser
+        run: npx playwright install --only-shell chromium
+
+      - name: UI smoke suite (builds, starts the portal, drives every page)
+        run: npm run test:ui
+        timeout-minutes: 30
 
   repo-contracts:
     name: Repository contract tests (DynamoDB Local)

@@ -1029,8 +1029,8 @@ describe('resolveCredentialEnv — old-scope IDC credential detection', () => {
         startUrl: 'https://example.awsapps.com/start',
         region: 'us-east-1',
         tokenExpiry: new Date(Date.now() + 3_600_000).toISOString(),
-        signedInAt: now(),
-        // NO clientId — old credential format
+        // NO clientId and no signedInAt — the old credential format. (signedInAt marks an AgentCore sign-in, which
+        // legitimately has no clientId; with it this test fell through to a live Kiro profile lookup.)
       }),
       now(), now(),
     );
