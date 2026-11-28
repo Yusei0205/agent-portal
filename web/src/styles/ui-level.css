@@ -95,3 +95,8 @@
   border-radius: 0;
   box-shadow: var(--pixel-shadow-sm);
 }
+
+/* Collapsed rail: every pixel counts so all links fit without a scrollbar at 800 px. */
+.rail-collapsed .ui-level-mini {
+  margin: 2px auto;
+}

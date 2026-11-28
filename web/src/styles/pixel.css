@@ -251,6 +251,12 @@
   border: 2px solid transparent;
 }
 
+/* The 2 px border would make a collapsed link 32 px tall and push the rail into a scrollbar at 800 px:
+   4 px padding + 2 px border on each side + 16 px icon keeps it at the 28 px target. */
+[data-template="pixel"] .rail-collapsed .rail-link {
+  padding: 4px 0;
+}
+
 [data-template="pixel"] .rail-link.is-active {
   background: var(--panel);
   border-color: var(--line);
