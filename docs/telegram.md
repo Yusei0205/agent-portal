@@ -8,7 +8,21 @@ It uses Telegram's **long polling**: the portal asks Telegram for new messages, 
 out from your PC to `api.telegram.org`. You don't need a public address, port forwarding or a tunnel.
 The bridge runs only in a local portal (`npm start` / `npm run dev`), never in the Lambda deployment.
 
-## Set it up (about 5 minutes)
+## Set it up in the portal (easiest)
+
+Open **Connect > Telegram** (an admin page; in Simple mode it's under Advanced):
+
+1. Paste the bot token from **@BotFather** (`/newbot`) and press **Test bot token**.
+2. Enter your chat ID (from **@userinfobot**). Several IDs are separated by commas.
+3. Press **Create access token**. This makes a portal API token with read and write only, for you,
+   valid for a year. Pressing it again replaces (and revokes) the old one.
+4. Pick the engine for `/new` if you like, leave **On** ticked, and press **Save and restart the bot**.
+
+The page shows whether the bot is running and, if not, why. Changes apply at once without restarting the
+portal. Tokens are stored encrypted and only their last four characters are shown again. **Forget settings**
+removes them and revokes the bot's API token. Settings saved here take over from `.env`.
+
+## Or set it up in .env (about 5 minutes)
 
 1. **Create the bot.** In Telegram, open a chat with **@BotFather**, send `/newbot`, pick a name and
    a username, and copy the token it gives you (looks like `123456789:AAE…`).
@@ -59,7 +73,7 @@ When you start a session or send a message, the bot sends the agent's reply once
   recorded as `session.interrupt` with source `telegram`.
 - **Secrets stay on your PC.** The bot token and API token are read from `.env` and never sent to the
   chat. The picked project and session per chat are kept in `data/telegram-state.json`.
-- **Turning it off.** Set `TELEGRAM_ENABLED=0` (or remove `TELEGRAM_BOT_TOKEN`) and restart. If a token
+- **Turning it off.** Untick **On** under Connect > Telegram, or set `TELEGRAM_ENABLED=0` (or remove `TELEGRAM_BOT_TOKEN`) and restart. If a token
   leaks, revoke the API token in the portal and send `/revoke` to @BotFather for the bot token.
 
 ## Troubleshooting
