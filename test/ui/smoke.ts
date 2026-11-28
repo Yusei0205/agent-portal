@@ -878,7 +878,7 @@ async function main() {
           if ((await panel.getAttribute('role')) !== 'dialog') throw new Error('The panel is not a dialog');
           if ((await panel.getAttribute('aria-modal')) !== null) throw new Error('The panel must not be modal');
           const text = await panel.innerText();
-          for (const want of ["Meow! I'm your portal assistant. What would you like to do?", 'Answers use your own sign-in', 'Allow cat to roam']) {
+          for (const want of ["Meow! I'm Kyu, your Kyuubit assistant. What would you like to do?", 'Answers use your own sign-in', 'Allow Kyu to roam']) {
             if (!text.includes(want)) throw new Error(`The panel lacks "${want}"`);
           }
           for (const chip of ['Start a session', 'What needs me?', 'Auto-fix', 'Pipelines', 'Search knowledge']) {
@@ -1096,7 +1096,7 @@ async function main() {
       await test('the roam checkbox follows the mode and changes it; the menu still has Show a tip', async () => {
         await withCat({ prefs: null }, async (cp) => {
           await openPanel(cp);
-          const box = cp.getByLabel('Allow cat to roam');
+          const box = cp.getByLabel('Allow Kyu to roam');
           if (!(await box.isChecked())) throw new Error('Roam is the default and the box is not checked');
           await box.uncheck();
           if ((await cp.locator('[data-testid="cat-mascot"]').getAttribute('data-mode')) !== 'sit') throw new Error('Unchecking did not set Sit');

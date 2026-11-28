@@ -59,13 +59,15 @@
    Every nav link still meets the 28 px minimum hit-target requirement. */
 .rail-collapsed .rail {
   padding: 6px;
-  gap: 2px;
+  gap: 1px;
 }
 
 /* Centre icons when collapsed */
-.rail-collapsed .brand {
+.rail-collapsed .rail .brand {
   justify-content: center;
   padding: 2px;
+  /* Just the 24 px icon: the 38 px header height is for the expanded rail's name. */
+  min-height: 30px;
 }
 /* 6 px vertical padding + 16 px icon = 28 px hit target (minimum). */
 .rail-collapsed .rail-link {
@@ -77,7 +79,11 @@
 /* Thinner gap around the section-divider line. The rail now has eight sections (21 links for an admin),
    so every pixel counts to keep it scroll-free at 800 px. */
 .rail-collapsed .rail-section-divider {
-  margin: 1px 4px;
+  margin: 0 4px;
+}
+/* No extra space between links when collapsed: each link is already a 28 px target. */
+.rail-collapsed .rail-section-list {
+  gap: 0;
 }
 /* Nothing above the first section: its divider is just dead space. */
 .rail-collapsed .rail-section:first-child .rail-section-divider {
@@ -99,8 +105,8 @@
 }
 /* Reduce footer gap and top padding so the footer stays compact. */
 .rail-collapsed .rail-foot {
-  gap: 6px;
-  padding-top: 6px;
+  gap: 4px;
+  padding-top: 4px;
 }
 .rail-collapsed .rail-user {
   justify-content: center;
