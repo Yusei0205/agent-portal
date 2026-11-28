@@ -6,7 +6,7 @@
  *
  * Idea: pixel-art chrome, readable content.
  *   - Headings, labels, buttons, badges and tabs use the pixel faces
- *     (Pixelify Sans for titles, Silkscreen for small labels).
+ *     (Pixelify Sans for titles and small labels).
  *   - Chat, documents, tables and code keep IBM Plex Sans / JetBrains Mono.
  *   - Square corners, 3px outlines in --line, hard stepped drop shadows.
  *   - Buttons press down on click; motion moves in steps.
@@ -16,7 +16,9 @@
  */
 
 [data-template="pixel"] {
-  --pixel-label: 'Silkscreen', 'Pixelify Sans Variable', 'Pixelify Sans', monospace;
+  /* Labels use Pixelify Sans: it keeps lower case and stays legible down to
+     about 12px. (Silkscreen was all caps and blurred below 13px.) */
+  --pixel-label: 'Pixelify Sans Variable', 'Pixelify Sans', ui-monospace, monospace;
   --pixel-outline: 3px solid var(--line);
   --pixel-shadow: 4px 4px 0 var(--line);
   --pixel-shadow-sm: 3px 3px 0 var(--line);
@@ -32,8 +34,8 @@
 /* ── Canvas: faint 8px pixel grid ───────────────────────────────── */
 [data-template="pixel"][data-fx-grid="true"] .shell > .shell-right > .main {
   background-image:
-    repeating-linear-gradient(90deg, transparent 0 15px, color-mix(in srgb, var(--line-2) 45%, transparent) 15px 16px),
-    repeating-linear-gradient(0deg,  transparent 0 15px, color-mix(in srgb, var(--line-2) 45%, transparent) 15px 16px);
+    repeating-linear-gradient(90deg, transparent 0 15px, color-mix(in srgb, var(--line-2) 30%, transparent) 15px 16px),
+    repeating-linear-gradient(0deg,  transparent 0 15px, color-mix(in srgb, var(--line-2) 30%, transparent) 15px 16px);
   background-size: 16px 16px;
 }
 
@@ -58,9 +60,72 @@
 [data-template="pixel"] .btn,
 [data-template="pixel"] th {
   font-family: var(--pixel-label);
-  font-weight: 400;
-  letter-spacing: 0;
+  font-weight: 500;
+  letter-spacing: 0.02em;
   text-transform: none;
+}
+
+/* Small pixel text needs size to stay readable. */
+[data-template="pixel"] .btn,
+[data-template="pixel"] .tab-btn {
+  font-size: max(0.85rem, 1em);
+}
+
+[data-template="pixel"] .btn-sm {
+  font-size: 0.85rem;
+}
+
+[data-template="pixel"] .badge {
+  font-size: 0.8rem;
+}
+
+[data-template="pixel"] .rail-section-label,
+[data-template="pixel"] .rail-section-toggle {
+  font-size: 0.8rem;
+  color: var(--ink-2);
+}
+
+/* ── Dense lists (sessions, reviews, tickets, workspaces) ─────────
+   Secondary text on the dark canvas was too faint and too small. */
+[data-template="pixel"] .ws-item-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+[data-template="pixel"] .ws-item-sub {
+  font-size: 0.84rem;
+  color: var(--ink-2);
+}
+
+[data-template="pixel"] .ws-item-sub .muted,
+[data-template="pixel"] .ws-list-body .muted {
+  color: var(--ink-2);
+}
+
+[data-template="pixel"] .ws-section-header {
+  font-family: var(--pixel-label);
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--ink);
+  padding-top: 12px;
+}
+
+[data-template="pixel"] .ws-placeholder {
+  color: var(--ink-2);
+  font-size: 0.95rem;
+}
+
+/* List panels sit on a solid surface, not on the grid. */
+[data-template="pixel"] .sessions-list-panel {
+  background: var(--rail);
+  border-right: var(--pixel-outline);
+}
+
+[data-template="pixel"] .badge-neutral {
+  background: var(--raised);
+  color: var(--ink);
 }
 
 [data-template="pixel"] .kpi-value,

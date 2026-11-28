@@ -10,7 +10,6 @@ import '@fontsource-variable/exo-2/index.css';
 import '@fontsource/orbitron/400.css';
 import '@fontsource/orbitron/700.css';
 import '@fontsource-variable/pixelify-sans/index.css';
-import '@fontsource/silkscreen/400.css';
 import '@fontsource/ibm-plex-sans/400.css';
 import '@fontsource/ibm-plex-sans/600.css';
 
