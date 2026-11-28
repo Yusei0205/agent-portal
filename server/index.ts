@@ -200,7 +200,9 @@ export async function startServer(
   await (await import('./repositories/simulation.ts')).initSimulationRepository();
   await initThemesRepository();
   try {
-    await (await import('./themes.ts')).applyKyuubitDefaultOnce();
+    const themes = await import('./themes.ts');
+    await themes.applyKyuubitDefaultOnce();
+    await themes.applyPixelDefaultOnce();
   } catch (err) {
     console.warn(`[themes] Kyuubit default step failed: ${(err as Error)?.message ?? 'unknown error'}`);
   }

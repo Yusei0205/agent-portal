@@ -10,7 +10,7 @@
  *   - Built-in protection: cannot edit or delete aethrix-night / classic-teal
  *   - Activate: POST /api/admin/themes/:id/activate changes active theme
  *   - Public GET /api/theme returns active template; ETag 304
- *   - Fallback: GET /api/theme falls back to kyuubit when active is missing
+ *   - Fallback: GET /api/theme falls back to pixel when active is missing
  *   - Import/export round-trip
  *   - API token refused on write routes
  */
@@ -491,7 +491,7 @@ describe('Theme CRUD routes', () => {
     assert.equal(r.status, 200);
     const body = r.body as { template: { id: string }; etag: string };
     assert.ok(body.template, 'Expected template in response');
-    assert.equal(body.template.id, 'kyuubit', 'Default active should be kyuubit');
+    assert.equal(body.template.id, 'pixel', 'Default active should be pixel');
     assert.ok(typeof body.etag === 'string', 'Expected etag');
   });
 
@@ -973,7 +973,7 @@ describe('Theme export/import round-trip', () => {
 // ── Fallback when active theme is missing ─────────────────────────────────────
 
 describe('Theme fallback', () => {
-  it('GET /api/theme falls back to kyuubit when active id does not exist', async () => {
+  it('GET /api/theme falls back to pixel when active id does not exist', async () => {
     const db = createTestDb();
     // Point active to a nonexistent theme
     setSetting(db, 'theme.active', '"nonexistent-theme"');
@@ -988,8 +988,8 @@ describe('Theme fallback', () => {
     const r = await fetchJson(ts.baseUrl, '/api/theme');
     assert.equal(r.status, 200);
     const body = r.body as { template: { id: string } };
-    // Active is kyuubit by default in new DB
-    assert.equal(body.template.id, 'kyuubit');
+    // Active is pixel by default in new DB
+    assert.equal(body.template.id, 'pixel');
 
     await cleanup();
   });

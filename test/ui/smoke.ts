@@ -5038,7 +5038,7 @@ async function main() {
       console.log('\n45. Theme / template system');
       currentSectionId = '45b';
 
-      await test('Default template applied on first load (data-template=kyuubit)', async (p) => {
+      await test('Default template applied on first load (data-template=pixel)', async (p) => {
         // Clear any saved template preference so we get the true default
         await p.evaluate(() => {
           try { localStorage.removeItem('portal-template-id'); } catch {}
@@ -5049,9 +5049,9 @@ async function main() {
           document.documentElement.getAttribute('data-template'),
         );
         if (!template) throw new Error('data-template attribute not set on <html>');
-        // Default is kyuubit but allow any non-null value
-        if (template !== 'kyuubit') {
-          console.log(`  ℹ  data-template="${template}" (expected kyuubit for fresh install)`);
+        // Default is pixel but allow any non-null value
+        if (template !== 'pixel') {
+          console.log(`  ℹ  data-template="${template}" (expected pixel for fresh install)`);
         }
       }, page);
 

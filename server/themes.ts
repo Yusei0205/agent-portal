@@ -532,7 +532,7 @@ const BUILTIN_ETAGS: ReadonlyMap<string, string> = new Map(
 
 // ── Active theme helpers ──────────────────────────────────────────────────────
 
-const DEFAULT_THEME_ID = 'kyuubit';
+const DEFAULT_THEME_ID = 'pixel';
 
 export function getActiveThemeId(): string {
   try {
@@ -564,7 +564,7 @@ export async function applyKyuubitDefaultOnce(): Promise<void> {
     let active: unknown = null;
     try { active = raw ? JSON.parse(raw) : null; } catch { /* treat as unset */ }
     const pairs: Array<[string, string]> = [[KYUUBIT_MARKER, '"1"']];
-    if (active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify(DEFAULT_THEME_ID)]);
+    if (active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify('kyuubit')]);
     await repo.setKeys(pairs);
     _updateSnapshotKeys(pairs);
   } catch (err) {
@@ -572,8 +572,36 @@ export async function applyKyuubitDefaultOnce(): Promise<void> {
   }
 }
 
+const PIXEL_MARKER = 'theme.pixel_default_applied';
+
 /**
- * Resolve the active template. Falls back to the default (kyuubit) if the active id is
+ * One-time startup step, run after applyKyuubitDefaultOnce. An install still on
+ * an earlier default (kyuubit or aethrix-night) is moved to pixel; any other
+ * choice is kept. The marker is written either way, so a later deliberate pick
+ * of kyuubit is never reverted. Goes through the settings repository, so it
+ * works on SQLite and DynamoDB.
+ */
+export async function applyPixelDefaultOnce(): Promise<void> {
+  // A cosmetic default must never stop the server starting: on any error the
+  // marker stays unset and the step retries on the next start.
+  try {
+    const repo = getSettingsRepository();
+    if (!repo) return;
+    if (await repo.getKey(PIXEL_MARKER)) return;
+    const raw = await repo.getKey('theme.active');
+    let active: unknown = null;
+    try { active = raw ? JSON.parse(raw) : null; } catch { /* treat as unset */ }
+    const pairs: Array<[string, string]> = [[PIXEL_MARKER, '"1"']];
+    if (active === 'kyuubit' || active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify(DEFAULT_THEME_ID)]);
+    await repo.setKeys(pairs);
+    _updateSnapshotKeys(pairs);
+  } catch (err) {
+    console.warn(`[themes] Pixel default step skipped, will retry next start: ${(err as Error)?.message ?? 'unknown error'}`);
+  }
+}
+
+/**
+ * Resolve the active template. Falls back to the default (pixel) if the active id is
  * missing or its stored JSON is invalid.
  */
 export async function resolveActiveTemplate(): Promise<{ template: ThemeTemplate; etag: string; updatedAt: string | null }> {
@@ -614,7 +642,7 @@ export async function resolveActiveTemplate(): Promise<{ template: ThemeTemplate
   }
 
   // Fallback to the default template
-  const fallback = KYUUBIT;
+  const fallback = PIXEL;
   return {
     template: fallback,
     etag: BUILTIN_ETAGS.get(DEFAULT_THEME_ID) ?? `"builtin-${DEFAULT_THEME_ID}"`,

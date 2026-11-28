@@ -8,7 +8,7 @@
  * palette tables here — edit shared/themes/*.json instead.
  *
  * Contract:
- *   portal-template-id  — active template id  (default: kyuubit)
+ *   portal-template-id  — active template id  (default: pixel)
  *   portal-mode         — dark | light | system  (default: system)
  *   portal-theme-cached — JSON of last /api/theme payload (server format)
  */
@@ -35,7 +35,7 @@
   }
 
   /* ── Read preferences ─────────────────────────────────────────────── */
-  var templateId = 'kyuubit';
+  var templateId = 'pixel';
   var mode       = 'system';
   try {
     templateId = localStorage.getItem('portal-template-id') || templateId;
@@ -93,7 +93,7 @@
   // Fall back to bundled themes
   if (!tmpl) {
     tmpl = (BUNDLED_THEMES && BUNDLED_THEMES[templateId])
-         || (BUNDLED_THEMES && BUNDLED_THEMES['kyuubit']);
+         || (BUNDLED_THEMES && BUNDLED_THEMES['pixel']);
   }
 
   if (!tmpl) return; // nothing to apply

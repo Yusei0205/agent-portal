@@ -133,9 +133,9 @@ export function getTemplates() {
   return [...registry.values()];
 }
 
-/** Get a template by id (falls back to kyuubit). */
+/** Get a template by id (falls back to pixel). */
 export function getTemplate(id) {
-  return registry.get(id) || registry.get('kyuubit');
+  return registry.get(id) || registry.get('pixel');
 }
 
 /**

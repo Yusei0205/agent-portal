@@ -1,6 +1,6 @@
 /**
  * Kyuubit brand tests: every template carries the Kyuubit brand, the Kyuubit
- * template is valid and readable, it is the default, and the one-time default
+ * template is valid and readable, and the one-time default
  * switch for installs still on the old default is idempotent.
  */
 
@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createTestServer, cleanup, fetchJson } from './fixtures.ts';
-import { validateTemplate, applyKyuubitDefaultOnce } from '../server/themes.ts';
+import { validateTemplate, applyKyuubitDefaultOnce, applyPixelDefaultOnce } from '../server/themes.ts';
 import { getDb } from '../server/db.ts';
 import { getSetting, setSetting } from '../server/settings.ts';
 import { getSettingsRepository } from '../server/repositories/settings.ts';
@@ -88,9 +88,9 @@ describe('Kyuubit default', () => {
   before(async () => { baseUrl = (await createTestServer()).baseUrl; });
   after(cleanup);
 
-  it('a fresh server serves kyuubit', async () => {
+  it('a fresh server serves pixel (the default since the Pixel theme)', async () => {
     const r = await fetchJson(baseUrl, '/api/theme');
-    assert.equal((r.body as { template: { id: string } }).template.id, 'kyuubit');
+    assert.equal((r.body as { template: { id: string } }).template.id, 'pixel');
   });
 
   async function reset(active: string, marker: boolean): Promise<void> {
@@ -139,5 +139,40 @@ describe('Kyuubit default', () => {
     }
     assert.equal(active(), 'aethrix-night');
     assert.equal(getSetting(getDb(), MARKER), null);
+  });
+});
+
+describe('Pixel default', () => {
+  const PIXEL_MARKER = 'theme.pixel_default_applied';
+  before(async () => { await createTestServer(); });
+  after(cleanup);
+
+  async function reset(active: string, marker: boolean): Promise<void> {
+    await setSetting(getDb(), 'theme.active', JSON.stringify(active));
+    if (marker) await setSetting(getDb(), PIXEL_MARKER, '"1"');
+    else await getSettingsRepository()!.deleteKey(PIXEL_MARKER);
+  }
+  const active = () => JSON.parse(getSetting(getDb(), 'theme.active')!);
+
+  for (const old of ['kyuubit', 'aethrix-night']) {
+    it(`switches the earlier default ${old} to pixel once and sets the marker`, async () => {
+      await reset(old, false);
+      await applyPixelDefaultOnce();
+      assert.equal(active(), 'pixel');
+      assert.ok(getSetting(getDb(), PIXEL_MARKER));
+    });
+  }
+
+  it('keeps another chosen template and still sets the marker', async () => {
+    await reset('nebula', false);
+    await applyPixelDefaultOnce();
+    assert.equal(active(), 'nebula');
+    assert.ok(getSetting(getDb(), PIXEL_MARKER));
+  });
+
+  it('does not switch back when the marker is set', async () => {
+    await reset('kyuubit', true);
+    await applyPixelDefaultOnce();
+    assert.equal(active(), 'kyuubit');
   });
 });
