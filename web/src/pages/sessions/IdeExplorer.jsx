@@ -19,6 +19,28 @@ function extOf(name) {
   return dot >= 0 ? name.slice(dot).toLowerCase() : '';
 }
 
+/** How long the explorer waits for the server before showing an error instead of a spinner. */
+export const EXPLORER_TIMEOUT_MS = 15000;
+
+/**
+ * Reject when `promise` has not settled after `ms`. A request the browser never sends (all its connections to the
+ * portal busy) or a server that never answers would otherwise leave the explorer spinning with no way out.
+ *
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @returns {Promise<T>}
+ */
+export function withTimeout(promise, ms) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(
+      'The file list did not load. The portal server may be busy or unreachable. Try again, or reload the page.',
+    )), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 // ── Confirm / toast helpers are provided by the shared components ─────────────
 
 // ── Tree node ─────────────────────────────────────────────────────────────────
@@ -59,9 +81,9 @@ function TreeNode({
     if (!isDir) return;
     setLoadingChildren(true);
     try {
-      const data = await api.get(
+      const data = await withTimeout(api.get(
         `/api/workflows/${workflowId}/ide/tree?scope=${scope}&path=${encodeURIComponent(entry.path)}`,
-      );
+      ), EXPLORER_TIMEOUT_MS);
       setChildren(data.entries || []);
     } catch {
       setChildren([]);
@@ -280,9 +302,9 @@ function ScopeSection({ root, workflowId, onFileOpen, globalRefreshCount }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.get(
+      const data = await withTimeout(api.get(
         `/api/workflows/${workflowId}/ide/tree?scope=${root.scope}&path=`,
-      );
+      ), EXPLORER_TIMEOUT_MS);
       setEntries(data.entries || []);
     } catch (e) {
       setError(e.message);
@@ -571,8 +593,12 @@ function ScopeSection({ root, workflowId, onFileOpen, globalRefreshCount }) {
             <div
               className="error-note"
               style={{ margin: 6, padding: '4px 8px', fontSize: '0.8rem' }}
+              role="alert"
             >
               {error}
+              <button type="button" className="btn btn-sm btn-ghost" onClick={load} style={{ marginLeft: 4 }}>
+                Retry
+              </button>
             </div>
           )}
           {entries?.map((entry, i) => (
@@ -611,11 +637,16 @@ function ScopeSection({ root, workflowId, onFileOpen, globalRefreshCount }) {
 export function IdeExplorer({ workflowId, onFileOpen }) {
   const [roots, setRoots] = useState(null);
   const [error, setError] = useState(null);
-  const [refreshCount, setRefreshCount] = useState(0);
+  const [attempt, setAttempt] = useState(0);
+  const [refreshCount] = useState(0);
 
   useEffect(() => {
-    api.get(`/api/workflows/${workflowId}/ide/tree`)
+    let alive = true;
+    setRoots(null);
+    setError(null);
+    withTimeout(api.get(`/api/workflows/${workflowId}/ide/tree`), EXPLORER_TIMEOUT_MS)
       .then((data) => {
+        if (!alive) return;
         const r = data.roots || [];
         // Add vault roots after server-provided roots.
         // "My vault"   → personal vault entries (read-only, scope=vault)
@@ -626,18 +657,19 @@ export function IdeExplorer({ workflowId, onFileOpen }) {
           { name: 'Team vault', scope: 'vault:team',  path: '', readOnly: true },
         ]);
       })
-      .catch((e) => setError(e.message));
-  }, [workflowId]);
+      .catch((e) => { if (alive) setError(e?.message || 'Could not load the files for this session.'); });
+    return () => { alive = false; };
+  }, [workflowId, attempt]);
 
   if (error) {
     return (
       <div className="error-note" style={{ margin: 8 }} role="alert">
-        {error}
+        <div>{error}</div>
         <button
           type="button"
           className="btn btn-sm btn-ghost"
-          onClick={() => setError(null)}
-          style={{ marginLeft: 6 }}
+          onClick={() => setAttempt((n) => n + 1)}
+          style={{ marginTop: 6 }}
         >
           Retry
         </button>
