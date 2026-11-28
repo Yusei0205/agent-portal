@@ -167,6 +167,24 @@ describe('bridge against a running portal', () => {
     assert.match(sent.at(-1)!.text, /Nothing is waiting/);
   });
 
+  test('/newproject creates a project, picks it, and a session can start in it', async () => {
+    const { b, sent } = bridge();
+    await b.handleMessage(msg('/newproject'));
+    assert.match(sent.at(-1)!.text, /Give it a name/);
+    await b.handleMessage(msg('/newproject   Phone   project '));
+    assert.match(sent.at(-1)!.text, /Created the project Phone project and picked it/);
+    const projects = await portal.listProjects();
+    const created = projects.find((p) => p.name === 'Phone project');
+    assert.ok(created, 'the project exists in the portal');
+    await b.handleMessage(msg('/new demo first task'));
+    assert.match(sent.at(-1)!.text, /Started a demo session/);
+    await b.idle();
+    const sessions = await portal.listWorkflows(created!.id);
+    assert.equal(sessions.length, 1);
+    await b.handleMessage(msg('/projects'));
+    assert.match(sent.at(-1)!.text, /Phone project  \(picked\)/);
+  });
+
   test('stop asks first, and only "yes" stops the session', async () => {
     const cancelled: string[] = [];
     const running: PortalClient = {
