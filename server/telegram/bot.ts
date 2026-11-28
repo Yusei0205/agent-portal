@@ -20,6 +20,7 @@ export const BOT_COMMANDS: Array<{ command: string; description: string }> = [
   { command: 'help', description: 'What the bot can do' },
   { command: 'projects', description: 'List your projects' },
   { command: 'project', description: 'Pick a project: /project 2' },
+  { command: 'newproject', description: 'Create a project: /newproject Website' },
   { command: 'sessions', description: 'Recent sessions in the project' },
   { command: 'session', description: 'Pick a session: /session 1' },
   { command: 'new', description: 'Start a session: /new fix the login bug' },
@@ -32,6 +33,7 @@ const HELP = [
   'Kyuubit portal bot',
   '',
   '/projects then /project <number> to pick a project',
+  '/newproject <name> creates a project and picks it',
   '/sessions then /session <number> to pick a session',
   '/new <goal> starts a session (optionally /new codex <goal>)',
   'Any other text is sent as a message to the picked session',
@@ -183,6 +185,7 @@ export class TelegramBridge {
       case 'help': return HELP;
       case 'projects': return this.cmdProjects(chatId);
       case 'project': return this.cmdProject(chatId, args);
+      case 'newproject': return this.cmdNewProject(chatId, args);
       case 'sessions': return this.cmdSessions(chatId);
       case 'session': return this.cmdSession(chatId, args);
       case 'new': return this.cmdNew(chatId, args);
@@ -215,6 +218,17 @@ export class TelegramBridge {
     this.state.chats[chatId] = { projectId: found.id };
     this.save();
     return `Project: ${found.name}\nNow /sessions, or /new <goal> to start one.`;
+  }
+
+  private async cmdNewProject(chatId: string, args: string): Promise<string> {
+    const name = args.replace(/\s+/g, ' ').trim();
+    if (!name) return 'Give it a name: /newproject <name>';
+    if (name.length > 120) return 'That name is too long (120 characters at most).';
+    const project = await this.deps.portal.createProject(name);
+    this.state.chats[chatId] = { projectId: project.id };
+    this.listsFor(chatId).sessions = [];
+    this.save();
+    return `Created the project ${project.name} and picked it.\nStart a session with /new <goal>. Add repositories in the portal when you need them.`;
   }
 
   private async cmdSessions(chatId: string): Promise<string> {

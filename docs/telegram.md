@@ -37,6 +37,7 @@ The bridge runs only in a local portal (`npm start` / `npm run dev`), never in t
 | Command | What it does |
 |---|---|
 | `/projects`, `/project <n>` | List your projects, then pick one by its number (or name) |
+| `/newproject <name>` | Create a project and pick it. Add repositories to it in the portal when a session needs code |
 | `/sessions`, `/session <n>` | List recent sessions in the project, then pick one |
 | `/new <goal>` | Start a session with that goal. `/new codex <goal>` picks the engine. Without one it uses `TELEGRAM_DEFAULT_ENGINE`, else the engine, model and repositories of the project's latest session |
 | any text | Sent as a message to the picked session. Slash commands such as `/model` or `/cost` go to the session too |

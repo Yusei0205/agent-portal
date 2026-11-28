@@ -34,6 +34,7 @@ export class PortalError extends Error {
 
 export interface PortalClient {
   listProjects(): Promise<PortalProject[]>;
+  createProject(name: string): Promise<PortalProject>;
   listWorkflows(projectId: string, limit?: number): Promise<PortalWorkflow[]>;
   getWorkflow(projectId: string, workflowId: string): Promise<{ workflow: PortalWorkflow; latestRun: PortalRun | null }>;
   createWorkflow(projectId: string, body: Record<string, unknown>): Promise<PortalWorkflow>;
@@ -66,6 +67,7 @@ export function createPortalClient(baseUrl: string, token: string, fetchImpl: ty
 
   return {
     listProjects: async () => (await req<{ projects: PortalProject[] }>('GET', '/api/projects')).projects ?? [],
+    createProject: async (name) => (await req<{ project: PortalProject }>('POST', '/api/projects', { name })).project,
     listWorkflows: async (pid, limit = 10) =>
       (await req<{ workflows: PortalWorkflow[] }>('GET', `${p(pid)}/workflows?limit=${limit}`)).workflows ?? [],
     getWorkflow: async (pid, wid) => {
