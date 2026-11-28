@@ -354,7 +354,7 @@ Settings, so no AWS keys are stored at all.
 
 A local portal can be driven from a Telegram chat: pick a project, start or message a session, stop it,
 and get the agent's reply when a turn ends. It uses long polling, so no public address is needed, and
-only allowlisted chats are answered. Setup takes about five minutes: see [docs/telegram.md](docs/telegram.md).
+only allowlisted chats are answered. Set it up under **Connect > Telegram**, or in `.env`: see [docs/telegram.md](docs/telegram.md).
 
 ## How to test it (about 15 minutes, Demo mode)
 

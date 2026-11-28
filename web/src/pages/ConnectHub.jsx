@@ -8,6 +8,7 @@ import { HubContext, PageHeader } from '../components/PageHeader.jsx';
 import { navigate } from '../lib/router.js';
 import { ConnectionsPage } from './ConnectionsPage.jsx';
 import { Integrations } from './Integrations.jsx';
+import { TelegramSettings } from './TelegramSettings.jsx';
 
 export const CONNECT_TABS = [
   {
@@ -19,6 +20,11 @@ export const CONNECT_TABS = [
     id: 'tools',
     label: 'Tools & services',
     render: ({ projectId }) => <Integrations projectId={projectId} />,
+  },
+  {
+    id: 'telegram',
+    label: 'Telegram',
+    render: () => <TelegramSettings />,
   },
 ];
 
@@ -32,7 +38,7 @@ export function ConnectHub({ tab, user, projectId }) {
     <div className="page connect-hub">
       <PageHeader
         title="Connect"
-        description="What the portal signs in to: Git hosts and the tools agents can use. Agent sign-ins are under Agent setup."
+        description="What the portal signs in to: Git hosts, the tools agents can use, and the Telegram bot. Agent sign-ins are under Agent setup."
       />
       <div className="tab-bar" role="tablist" aria-label="Connect sections">
         {CONNECT_TABS.map((t) => (

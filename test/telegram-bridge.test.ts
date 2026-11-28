@@ -10,7 +10,7 @@ import { readTelegramConfig } from '../server/telegram/config.ts';
 import { TelegramBridge, parseCommand, lastReply } from '../server/telegram/bot.ts';
 import { createPortalClient, type PortalClient } from '../server/telegram/portal-client.ts';
 import { clipText, type TelegramApi, type TgMessage, type TgUpdate } from '../server/telegram/telegram-api.ts';
-import { startTelegramBridge, stopTelegramBridge } from '../server/telegram/index.ts';
+import { startTelegramBridge, stopTelegramBridge, setTelegramApiFactory } from '../server/telegram/index.ts';
 
 const BOT_TOKEN = '123456789:AAEhBOweik6ad9r_QXMENQjcrGbqCr4K-ra';
 const ME = '1111';
@@ -230,5 +230,78 @@ describe('bridge against a running portal', () => {
     const b = await startTelegramBridge({ baseUrl, dataDir: '/tmp', env: env({ TELEGRAM_PORTAL_TOKEN: token }), telegram: tg.api });
     assert.ok(b);
     await stopTelegramBridge();
+  });
+});
+
+describe('Connect > Telegram settings (saved in the portal, applied without a restart)', () => {
+  let baseUrl: string;
+  let cookie: string;
+  let userCookie: string;
+
+  before(async () => {
+    setTelegramApiFactory(() => fakeTelegram().api);
+    ({ baseUrl } = await createTestServer());
+    await fetchJson(baseUrl, '/api/auth/setup', { body: { email: 'tgadmin@example.com', password: 'adminpassword1', name: 'Admin' } });
+    cookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'tgadmin@example.com', password: 'adminpassword1' } })).cookie ?? '';
+    await fetchJson(baseUrl, '/api/users', { method: 'POST', body: { email: 'tguser@example.com', name: 'U', password: 'userpassword1', isAdmin: false }, cookie });
+    userCookie = (await fetchJson(baseUrl, '/api/auth/login', { body: { email: 'tguser@example.com', password: 'userpassword1' } })).cookie ?? '';
+  });
+  after(async () => { await stopTelegramBridge(); setTelegramApiFactory(null); await cleanup(); });
+
+  test('admins only, and never with an API token', async () => {
+    assert.equal((await fetchJson(baseUrl, '/api/telegram', { cookie: userCookie })).status, 403);
+    const tok = String(((await fetchJson(baseUrl, '/api/api-tokens', { body: { name: 'x', scopes: ['write'] }, cookie })).body as { token: string }).token);
+    assert.equal((await fetchJson(baseUrl, '/api/telegram', { headers: { Authorization: `Bearer ${tok}` } })).status, 403);
+  });
+
+  test('save, create the bot\'s access, test, turn off, forget', async () => {
+    let r = await fetchJson(baseUrl, '/api/telegram', { cookie });
+    assert.equal(r.status, 200);
+    assert.equal((r.body as { saved: boolean }).saved, false);
+
+    r = await fetchJson(baseUrl, '/api/telegram', { method: 'PUT', cookie, body: { botToken: BOT_TOKEN, allowedChatIds: '12, abc' } });
+    assert.equal(r.status, 400);
+    assert.match(String((r.body as { error: string }).error), /abc/);
+
+    r = await fetchJson(baseUrl, '/api/telegram', { method: 'PUT', cookie, body: { botToken: BOT_TOKEN, allowedChatIds: `${ME}, 2222`, defaultEngine: 'demo' } });
+    assert.equal(r.status, 200);
+    let b = r.body as Record<string, any>;
+    assert.equal(b.saved, true);
+    assert.equal(b.botTokenHint, `…${BOT_TOKEN.slice(-4)}`);
+    assert.deepEqual(b.allowedChatIds, [ME, '2222']);
+    assert.equal(b.status.running, false, 'no portal access yet');
+    assert.match(String(b.status.error), /API token/);
+
+    r = await fetchJson(baseUrl, '/api/telegram/token', { method: 'POST', cookie, body: {} });
+    assert.equal(r.status, 201);
+    b = r.body as Record<string, any>;
+    assert.equal(b.portalToken.valid, true);
+    assert.equal(b.status.running, true);
+    assert.equal(b.status.source, 'portal');
+    assert.equal(b.status.botUsername, 'kyuubit_test_bot');
+    const raw = JSON.stringify(b);
+    assert.ok(!raw.includes(BOT_TOKEN) && !/ap_[0-9a-f]{32}/.test(raw), 'secrets never go back to the browser');
+
+    // Replacing the access revokes the old token: only one "Telegram bot" token is live.
+    await fetchJson(baseUrl, '/api/telegram/token', { method: 'POST', cookie, body: {} });
+    const list = (await fetchJson(baseUrl, '/api/api-tokens', { cookie })).body as { tokens: Array<{ name: string; active: boolean }> };
+    assert.equal(list.tokens.filter((t) => t.name === 'Telegram bot' && t.active).length, 1);
+
+    r = await fetchJson(baseUrl, '/api/telegram/test', { method: 'POST', cookie, body: {} });
+    assert.deepEqual(r.body, { ok: true, botUsername: 'kyuubit_test_bot' });
+
+    r = await fetchJson(baseUrl, '/api/telegram', { method: 'PUT', cookie, body: { enabled: false } });
+    b = r.body as Record<string, any>;
+    assert.equal(b.status.running, false);
+    assert.equal(b.status.error, null);
+    r = await fetchJson(baseUrl, '/api/telegram', { method: 'PUT', cookie, body: { enabled: true } });
+    assert.equal((r.body as Record<string, any>).status.running, true, 'back on without a portal restart');
+
+    r = await fetchJson(baseUrl, '/api/telegram', { method: 'DELETE', cookie });
+    b = r.body as Record<string, any>;
+    assert.equal(b.saved, false);
+    assert.equal(b.status.running, false);
+    const after = (await fetchJson(baseUrl, '/api/api-tokens', { cookie })).body as { tokens: Array<{ name: string; active: boolean }> };
+    assert.equal(after.tokens.filter((t) => t.name === 'Telegram bot' && t.active).length, 0, 'the bot\'s access is revoked');
   });
 });
