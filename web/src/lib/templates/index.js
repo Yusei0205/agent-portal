@@ -16,6 +16,7 @@ import terminalJson     from '../../../../shared/themes/terminal.json';
 import kiroIdeJson      from '../../../../shared/themes/kiro-ide.json';
 import graphiteJson     from '../../../../shared/themes/graphite.json';
 import kyuubitJson      from '../../../../shared/themes/kyuubit.json';
+import pixelJson        from '../../../../shared/themes/pixel.json';
 
 // ── Font family name → full CSS stack ────────────────────────────────────────
 // Covers every name in the server validator allow-list.
@@ -30,6 +31,8 @@ const FONT_STACKS = {
   'Plus Jakarta Sans': "'Plus Jakarta Sans Variable','Plus Jakarta Sans',system-ui,sans-serif",
   'Orbitron':          "'Orbitron',system-ui,sans-serif",
   'Exo 2':             "'Exo 2 Variable','Exo 2',system-ui,sans-serif",
+  'Pixelify Sans':     "'Pixelify Sans Variable','Pixelify Sans',ui-monospace,monospace",
+  'IBM Plex Sans':     "'IBM Plex Sans',system-ui,sans-serif",
   'system-ui':         "ui-sans-serif,system-ui,-apple-system,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif",
   'ui-monospace':      "ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace",
   'ui-sans-serif':     "ui-sans-serif,system-ui,sans-serif",
@@ -51,6 +54,8 @@ export const BUNDLED_FONT_NAMES = new Set([
   'Plus Jakarta Sans',
   'Orbitron',
   'Exo 2',
+  'Pixelify Sans',
+  'IBM Plex Sans',
 ]);
 
 function resolveFontStack(name) {
@@ -128,9 +133,9 @@ export function getTemplates() {
   return [...registry.values()];
 }
 
-/** Get a template by id (falls back to kyuubit). */
+/** Get a template by id (falls back to pixel). */
 export function getTemplate(id) {
-  return registry.get(id) || registry.get('kyuubit');
+  return registry.get(id) || registry.get('pixel');
 }
 
 /**
@@ -154,3 +159,4 @@ registerTemplate(terminalJson);
 registerTemplate(kiroIdeJson);
 registerTemplate(graphiteJson);
 registerTemplate(kyuubitJson);
+registerTemplate(pixelJson);

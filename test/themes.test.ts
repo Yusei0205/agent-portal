@@ -10,7 +10,7 @@
  *   - Built-in protection: cannot edit or delete aethrix-night / classic-teal
  *   - Activate: POST /api/admin/themes/:id/activate changes active theme
  *   - Public GET /api/theme returns active template; ETag 304
- *   - Fallback: GET /api/theme falls back to kyuubit when active is missing
+ *   - Fallback: GET /api/theme falls back to pixel when active is missing
  *   - Import/export round-trip
  *   - API token refused on write routes
  */
@@ -30,6 +30,7 @@ import {
   AURORA_GLASS,
   CYBER_HUD,
   TWILIGHT,
+  PIXEL,
   FONT_ALLOW_LIST,
   ALLOWED_TOKEN_NAMES,
 } from '../server/themes.ts';
@@ -107,6 +108,22 @@ describe('validateTemplate — unit', () => {
     assert.ok(r1.ok, `aethrix-night: ${JSON.stringify(r1.errors)}`);
     const r2 = validateTemplate(CLASSIC_TEAL);
     assert.ok(r2.ok, `classic-teal: ${JSON.stringify(r2.errors)}`);
+  });
+
+  it('accepts the Pixel built-in template, with both modes, allowed fonts and every token', () => {
+    const result = validateTemplate(PIXEL);
+    assert.ok(result.ok, `pixel: ${JSON.stringify(result.errors)}`);
+    const fontSet = new Set(FONT_ALLOW_LIST);
+    for (const role of ['display', 'body', 'mono'] as const) {
+      assert.ok(fontSet.has(PIXEL.fonts[role]), `pixel ${role} font "${PIXEL.fonts[role]}" should be in allow-list`);
+    }
+    for (const mode of ['dark', 'light'] as const) {
+      const tokens = PIXEL.modes[mode]!;
+      for (const token of ALLOWED_TOKEN_NAMES) {
+        assert.ok(token in tokens, `pixel ${mode} mode missing token "${token}"`);
+      }
+    }
+    assert.deepEqual(PIXEL.radius, { sm: 0, md: 0, lg: 0 });
   });
 
   it('accepts the Clovi built-in template', () => {
@@ -474,7 +491,7 @@ describe('Theme CRUD routes', () => {
     assert.equal(r.status, 200);
     const body = r.body as { template: { id: string }; etag: string };
     assert.ok(body.template, 'Expected template in response');
-    assert.equal(body.template.id, 'kyuubit', 'Default active should be kyuubit');
+    assert.equal(body.template.id, 'pixel', 'Default active should be pixel');
     assert.ok(typeof body.etag === 'string', 'Expected etag');
   });
 
@@ -956,7 +973,7 @@ describe('Theme export/import round-trip', () => {
 // ── Fallback when active theme is missing ─────────────────────────────────────
 
 describe('Theme fallback', () => {
-  it('GET /api/theme falls back to kyuubit when active id does not exist', async () => {
+  it('GET /api/theme falls back to pixel when active id does not exist', async () => {
     const db = createTestDb();
     // Point active to a nonexistent theme
     setSetting(db, 'theme.active', '"nonexistent-theme"');
@@ -971,8 +988,8 @@ describe('Theme fallback', () => {
     const r = await fetchJson(ts.baseUrl, '/api/theme');
     assert.equal(r.status, 200);
     const body = r.body as { template: { id: string } };
-    // Active is kyuubit by default in new DB
-    assert.equal(body.template.id, 'kyuubit');
+    // Active is pixel by default in new DB
+    assert.equal(body.template.id, 'pixel');
 
     await cleanup();
   });

@@ -144,6 +144,7 @@ const twilightJson   = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes
 const terminalJson   = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/terminal.json'),      'utf8'));
 const kiroIdeJson    = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/kiro-ide.json'),      'utf8'));
 const kyuubitJson    = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/kyuubit.json'),       'utf8'));
+const pixelJson      = JSON.parse(fs.readFileSync(path.join(root, 'shared/themes/pixel.json'),         'utf8'));
 const bundledThemes  = {
   'aethrix-night': normaliseForInit(aethrixJson),
   'classic-teal':  normaliseForInit(classicJson),
@@ -155,6 +156,7 @@ const bundledThemes  = {
   'terminal':      normaliseForInit(terminalJson),
   'kiro-ide':      normaliseForInit(kiroIdeJson),
   'kyuubit':       normaliseForInit(kyuubitJson),
+  'pixel':         normaliseForInit(pixelJson),
 };
 
 const themeInitSrc = fs.readFileSync(path.join(root, 'web/theme-init.js'), 'utf8');

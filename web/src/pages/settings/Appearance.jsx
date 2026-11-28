@@ -34,7 +34,7 @@ import { useOverlayDismiss } from '../../lib/useOverlayDismiss.js';
 // Used to distinguish real built-ins from server-orphaned registry entries.
 const BUILTIN_IDS = new Set([
   'aethrix-night', 'classic-teal', 'clovi', 'nebula', 'aurora-glass',
-  'cyber-hud', 'twilight', 'terminal', 'kiro-ide', 'graphite', 'kyuubit',
+  'cyber-hud', 'twilight', 'terminal', 'kiro-ide', 'graphite', 'kyuubit', 'pixel',
 ]);
 import { useToast, ToastShelf } from '../../components/Toast.jsx';
 import { useConfirm, ConfirmDialog } from '../../components/ConfirmDialog.jsx';

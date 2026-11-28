@@ -9,10 +9,15 @@ import '@fontsource-variable/plus-jakarta-sans/index.css';
 import '@fontsource-variable/exo-2/index.css';
 import '@fontsource/orbitron/400.css';
 import '@fontsource/orbitron/700.css';
+import '@fontsource-variable/pixelify-sans/index.css';
+import '@fontsource/silkscreen/400.css';
+import '@fontsource/ibm-plex-sans/400.css';
+import '@fontsource/ibm-plex-sans/600.css';
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { applyTheme, fetchAndApplyTheme } from './lib/theme.js';
+import { applyUiLevel } from './lib/uiLevel.js';
 import { App } from './App.jsx';
 import { MotionRoot } from './components/MotionRoot.jsx';
 import './styles.css';
@@ -20,6 +25,7 @@ import './styles.css';
 // Apply saved template + mode before React renders (second application in case
 // theme-init.js missed something — inline styles win over CSS vars from init).
 applyTheme();
+applyUiLevel();
 
 const root = document.getElementById('root');
 if (root) {

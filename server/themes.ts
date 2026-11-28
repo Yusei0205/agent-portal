@@ -37,6 +37,7 @@ import terminalJson from '../shared/themes/terminal.json' with { type: 'json' };
 import kiroIdeJson from '../shared/themes/kiro-ide.json' with { type: 'json' };
 import graphiteJson from '../shared/themes/graphite.json' with { type: 'json' };
 import kyuubitJson from '../shared/themes/kyuubit.json' with { type: 'json' };
+import pixelJson from '../shared/themes/pixel.json' with { type: 'json' };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -108,9 +109,9 @@ const SHADOW_TOKENS = new Set(['shadow', 'glow']);
 export const FONT_ALLOW_LIST: string[] = [
   // Display
   'Space Grotesk', 'Outfit', 'DM Sans', 'Plus Jakarta Sans', 'Raleway',
-  'Exo 2', 'Orbitron', 'Nunito', 'Urbanist', 'Quicksand',
+  'Exo 2', 'Orbitron', 'Nunito', 'Urbanist', 'Quicksand', 'Pixelify Sans',
   // Body
-  'Inter', 'Source Sans 3', 'Noto Sans', 'Lato', 'Roboto', 'Geist Sans',
+  'Inter', 'Source Sans 3', 'Noto Sans', 'Lato', 'Roboto', 'Geist Sans', 'IBM Plex Sans',
   // Mono
   'JetBrains Mono', 'Fira Code', 'Source Code Pro', 'Cascadia Code',
   // System stacks
@@ -136,6 +137,8 @@ const FONT_STACKS: Record<string, string> = {
   'Orbitron':       "'Orbitron',system-ui,sans-serif",
   'Nunito':         "'Nunito Variable','Nunito',system-ui,sans-serif",
   'Urbanist':       "'Urbanist Variable','Urbanist',system-ui,sans-serif",
+  'Pixelify Sans':  "'Pixelify Sans Variable','Pixelify Sans',ui-monospace,monospace",
+  'IBM Plex Sans':  "'IBM Plex Sans',system-ui,sans-serif",
   'Inter':          "'Inter Variable','Inter',system-ui,sans-serif",
   'Geist Sans':     "'Geist Sans',system-ui,sans-serif",
   'Source Sans 3':  "'Source Sans 3 Variable','Source Sans 3',system-ui,sans-serif",
@@ -167,6 +170,8 @@ const BUNDLED_FONT_NAMES = new Set([
   'Plus Jakarta Sans',
   'Orbitron',
   'Exo 2',
+  'Pixelify Sans',
+  'IBM Plex Sans',
 ]);
 
 // ── Colour validation ─────────────────────────────────────────────────────────
@@ -502,6 +507,7 @@ export const TERMINAL: ThemeTemplate = terminalJson as unknown as ThemeTemplate;
 export const KIRO_IDE: ThemeTemplate = kiroIdeJson as unknown as ThemeTemplate;
 export const GRAPHITE: ThemeTemplate = graphiteJson as unknown as ThemeTemplate;
 export const KYUUBIT: ThemeTemplate = kyuubitJson as unknown as ThemeTemplate;
+export const PIXEL: ThemeTemplate = pixelJson as unknown as ThemeTemplate;
 export const BUILTIN_THEMES: ReadonlyMap<string, ThemeTemplate> = new Map([
   [AETHRIX_NIGHT.id, AETHRIX_NIGHT],
   [CLASSIC_TEAL.id, CLASSIC_TEAL],
@@ -514,6 +520,7 @@ export const BUILTIN_THEMES: ReadonlyMap<string, ThemeTemplate> = new Map([
   [KIRO_IDE.id, KIRO_IDE],
   [GRAPHITE.id, GRAPHITE],
   [KYUUBIT.id, KYUUBIT],
+  [PIXEL.id, PIXEL],
 ]);
 
 const BUILTIN_ETAGS: ReadonlyMap<string, string> = new Map(
@@ -525,7 +532,7 @@ const BUILTIN_ETAGS: ReadonlyMap<string, string> = new Map(
 
 // ── Active theme helpers ──────────────────────────────────────────────────────
 
-const DEFAULT_THEME_ID = 'kyuubit';
+const DEFAULT_THEME_ID = 'pixel';
 
 export function getActiveThemeId(): string {
   try {
@@ -557,7 +564,7 @@ export async function applyKyuubitDefaultOnce(): Promise<void> {
     let active: unknown = null;
     try { active = raw ? JSON.parse(raw) : null; } catch { /* treat as unset */ }
     const pairs: Array<[string, string]> = [[KYUUBIT_MARKER, '"1"']];
-    if (active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify(DEFAULT_THEME_ID)]);
+    if (active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify('kyuubit')]);
     await repo.setKeys(pairs);
     _updateSnapshotKeys(pairs);
   } catch (err) {
@@ -565,8 +572,36 @@ export async function applyKyuubitDefaultOnce(): Promise<void> {
   }
 }
 
+const PIXEL_MARKER = 'theme.pixel_default_applied';
+
 /**
- * Resolve the active template. Falls back to the default (kyuubit) if the active id is
+ * One-time startup step, run after applyKyuubitDefaultOnce. An install still on
+ * an earlier default (kyuubit or aethrix-night) is moved to pixel; any other
+ * choice is kept. The marker is written either way, so a later deliberate pick
+ * of kyuubit is never reverted. Goes through the settings repository, so it
+ * works on SQLite and DynamoDB.
+ */
+export async function applyPixelDefaultOnce(): Promise<void> {
+  // A cosmetic default must never stop the server starting: on any error the
+  // marker stays unset and the step retries on the next start.
+  try {
+    const repo = getSettingsRepository();
+    if (!repo) return;
+    if (await repo.getKey(PIXEL_MARKER)) return;
+    const raw = await repo.getKey('theme.active');
+    let active: unknown = null;
+    try { active = raw ? JSON.parse(raw) : null; } catch { /* treat as unset */ }
+    const pairs: Array<[string, string]> = [[PIXEL_MARKER, '"1"']];
+    if (active === 'kyuubit' || active === 'aethrix-night') pairs.push(['theme.active', JSON.stringify(DEFAULT_THEME_ID)]);
+    await repo.setKeys(pairs);
+    _updateSnapshotKeys(pairs);
+  } catch (err) {
+    console.warn(`[themes] Pixel default step skipped, will retry next start: ${(err as Error)?.message ?? 'unknown error'}`);
+  }
+}
+
+/**
+ * Resolve the active template. Falls back to the default (pixel) if the active id is
  * missing or its stored JSON is invalid.
  */
 export async function resolveActiveTemplate(): Promise<{ template: ThemeTemplate; etag: string; updatedAt: string | null }> {
@@ -607,7 +642,7 @@ export async function resolveActiveTemplate(): Promise<{ template: ThemeTemplate
   }
 
   // Fallback to the default template
-  const fallback = KYUUBIT;
+  const fallback = PIXEL;
   return {
     template: fallback,
     etag: BUILTIN_ETAGS.get(DEFAULT_THEME_ID) ?? `"builtin-${DEFAULT_THEME_ID}"`,

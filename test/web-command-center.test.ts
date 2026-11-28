@@ -15,6 +15,7 @@ import '@fontsource-variable/inter/index.css'; import '@fontsource-variable/exo-
 import {setActiveTemplate,setMode} from './web/src/lib/theme.js'; setActiveTemplate('kiro-ide'); setMode('dark');
 const noop = () => {}; const project = {id:'p1', name:'Alpha'};
 const view = new URLSearchParams(location.search).get('view');
+localStorage.setItem('portal-ui-level', new URLSearchParams(location.search).get('level') || 'advanced');
 createRoot(document.getElementById('root')).render(view === 'workspace'
   ? <div style={{height:'100vh'}}><IdeWorkspace id="w1" project={project}/></div>
   : view === 'launcher' ? <NewSessionDialog project={project} onClose={noop} onCreated={noop}/>
@@ -55,6 +56,16 @@ createRoot(document.getElementById('root')).render(view === 'workspace'
     assert.equal(await page.getByRole('link', { name: 'Tickets', exact: true }).isVisible(), true);
     await page.goto('http://portal.test/?view=active');
     assert.equal(await page.getByRole('button', { name: 'Project tools' }).getAttribute('aria-expanded'), 'true');
+
+    // Simple mode: advanced-only rail items (and a section holding only those) are hidden; the switch brings them back.
+    await page.goto('http://portal.test/?level=simple');
+    await page.getByRole('group', { name: 'Interface mode' }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'Project tools' }).count(), 0);
+    assert.equal(await page.getByRole('link', { name: 'Usage', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('link', { name: 'Sessions', exact: true }).count(), 1);
+    await page.getByRole('button', { name: 'Advanced', exact: true }).click();
+    assert.equal(await page.getByRole('link', { name: 'Usage', exact: true }).count(), 1);
+    assert.equal(await page.locator('html').getAttribute('data-ui-level'), 'advanced');
 
     await page.goto('http://portal.test/?view=workspace');
     const modes = page.getByRole('group', { name: 'Workspace mode' });

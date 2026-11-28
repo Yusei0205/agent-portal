@@ -16,14 +16,16 @@ import Providers from './Providers.jsx';
 import Secrets from './Secrets.jsx';
 import AppearanceTab from './Appearance.jsx';
 import { PageHeader, SectionHead } from '../../components/PageHeader.jsx';
+import { useUiLevel } from '../../components/UiLevel.jsx';
 
+// advanced: shown only in Advanced mode (the settings keep working in Simple mode).
 const TABS = [
   { id: 'provider',    label: 'Portal AI provider' },
-  { id: 'tools',       label: 'Tools' },
+  { id: 'tools',       label: 'Tools',       advanced: true },
   { id: 'budget',      label: 'Budget' },
-  { id: 'codereview',  label: 'Code review' },
-  { id: 'sessions',    label: 'Sessions' },
-  { id: 'github',      label: 'GitHub' },
+  { id: 'codereview',  label: 'Code review', advanced: true },
+  { id: 'sessions',    label: 'Sessions',    advanced: true },
+  { id: 'github',      label: 'GitHub',      advanced: true },
   { id: 'appearance',  label: 'Appearance' },
 ];
 
@@ -38,6 +40,8 @@ function timeAgo(iso) {
 
 export default function Settings({ user }) {
   const [tab, setTab] = useState('provider');
+  const uiLevel = useUiLevel();
+  const visibleTabs = uiLevel === 'advanced' ? TABS : TABS.filter((t) => !t.advanced || t.id === tab);
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -90,7 +94,7 @@ export default function Settings({ user }) {
       )}
 
       <div className="tab-bar" role="tablist" aria-label="Settings sections">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.id}
             role="tab"

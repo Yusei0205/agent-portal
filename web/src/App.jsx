@@ -42,6 +42,7 @@ import { Tickets } from './pages/Tickets.jsx';
 import Mail from './pages/Mail.jsx';
 
 import { ReauthPrompt } from './components/ReauthPrompt.jsx';
+import { AdvancedPageBar } from './components/UiLevel.jsx';
 // ── Shortcut definitions (registered once at module load) ─────────────────────
 
 registerShortcuts([
@@ -559,6 +560,8 @@ function Shell({ user, onSignOut }) {
           className={`main main-enter${isSessionsRoute ? ' full-height' : ''}`}
           tabIndex={-1}
         >
+          {/* Simple mode: an advanced page opened from a link still works, with a bar offering to switch */}
+          <AdvancedPageBar tab={route.tab} />
           {isSessionsRoute ? (
             <SessionsShell
               projectId={route.projectId}

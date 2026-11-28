@@ -540,6 +540,8 @@ async function main() {
   try {
     browser = await chromium.launch({ headless: true });
     context = await browser.newContext({ baseURL: BASE });
+    // The smoke suite walks every page from the rail, so it runs in Advanced mode (Simple hides some items).
+    await context.addInitScript(() => { try { localStorage.setItem('portal-ui-level', 'advanced'); } catch { /* storage blocked */ } });
     page    = await context.newPage();
 
     // Changes to what the portal trusts (credentials, tools, ...) ask the person for their password.
@@ -5036,7 +5038,7 @@ async function main() {
       console.log('\n45. Theme / template system');
       currentSectionId = '45b';
 
-      await test('Default template applied on first load (data-template=kyuubit)', async (p) => {
+      await test('Default template applied on first load (data-template=pixel)', async (p) => {
         // Clear any saved template preference so we get the true default
         await p.evaluate(() => {
           try { localStorage.removeItem('portal-template-id'); } catch {}
@@ -5047,9 +5049,9 @@ async function main() {
           document.documentElement.getAttribute('data-template'),
         );
         if (!template) throw new Error('data-template attribute not set on <html>');
-        // Default is kyuubit but allow any non-null value
-        if (template !== 'kyuubit') {
-          console.log(`  ℹ  data-template="${template}" (expected kyuubit for fresh install)`);
+        // Default is pixel but allow any non-null value
+        if (template !== 'pixel') {
+          console.log(`  ℹ  data-template="${template}" (expected pixel for fresh install)`);
         }
       }, page);
 
