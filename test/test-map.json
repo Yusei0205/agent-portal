@@ -1744,6 +1744,16 @@
       ],
       "smokeIds": []
     },
+    "web-shared-sse": {
+      "description": "Live updates over Server-Sent Events share one EventSource per stream, so the session page does not use up the browser's six HTTP/1.1 connections and leave requests like the file explorer's unsent.",
+      "sources": [
+        "web/src/lib/events.js"
+      ],
+      "tests": [
+        "test/web-shared-sse.test.ts"
+      ],
+      "smokeIds": []
+    },
     "loop-iteration": {
       "description": "Loop iteration logic: status parsing, stagnation (harness PR 1.7: loose matching, window of at least 2), the stop",
       "sources": [
